@@ -1,0 +1,692 @@
+-- Replace the starter items/stock_movements tables with the v2 salon schema.
+
+drop trigger if exists items_touch_updated_at on public.items;
+drop function if exists public.touch_updated_at();
+drop table if exists public.stock_movements cascade;
+drop table if exists public.items cascade;
+-- =============================================================================
+-- MAAX Salon Inventory System â€” Database Schema (Postgres / Supabase)
+-- =============================================================================
+-- Draft v2 â€” incorporates client answers to v1's open questions.
+-- See PROJECT_HANDOFF.md for rationale, remaining open items, and the
+-- workflow-by-workflow explanation of how these tables are used.
+-- =============================================================================
+
+create extension if not exists "pgcrypto";   -- gives us gen_random_uuid()
+
+-- -----------------------------------------------------------------------------
+-- ENUMS
+-- -----------------------------------------------------------------------------
+
+create type po_status as enum (
+  'draft', 'sent', 'confirmed', 'partially_received', 'received', 'cancelled'
+);
+
+create type invoice_status as enum (
+  'unpaid', 'partial', 'paid', 'disputed'
+);
+
+create type product_classification as enum (
+  'retail', 'inhouse', 'gwp', 'retail_inhouse'
+);
+
+create type inventory_txn_type as enum (
+  'goods_receipt', 'retail_use', 'count_adjustment', 'transfer', 'waste', 'gwp_use', 'initial_stock'
+);
+
+create type order_channel as enum (
+  'email', 'phone', 'portal', 'whatsapp', 'other'
+);
+
+-- -----------------------------------------------------------------------------
+-- CORE / TENANCY
+-- -----------------------------------------------------------------------------
+
+create table companies (
+  id          uuid primary key default gen_random_uuid(),
+  name        text not null,
+  created_at  timestamptz not null default now()
+);
+comment on table companies is 'Tenant/customer of the system. Single row (MAAX PTE LTD) for now.';
+
+create table company_users (
+  id          uuid primary key default gen_random_uuid(),
+  company_id  uuid not null references companies(id) on delete cascade,
+  user_id     uuid not null references auth.users(id) on delete cascade,
+  role        text not null default 'member',
+  created_at  timestamptz not null default now(),
+  unique (company_id, user_id)
+);
+comment on table company_users is 'Maps Supabase auth users to the company/companies they can access. Every RLS policy below is built on this table.';
+
+create table branches (
+  id                        uuid primary key default gen_random_uuid(),
+  company_id                uuid not null references companies(id) on delete cascade,
+  name                      text not null,
+  branch_manager_name       text,
+  branch_manager_contact    text,
+  inventory_manager_name    text,
+  inventory_manager_contact text,
+  address                   text,
+  created_at                timestamptz not null default now(),
+  unique (company_id, name)
+);
+
+create table store_locations (
+  id                 uuid primary key default gen_random_uuid(),
+  branch_id          uuid not null references branches(id) on delete cascade,
+  parent_location_id uuid references store_locations(id) on delete set null,
+  name               text not null,
+  description        text,
+  created_at         timestamptz not null default now(),
+  unique (branch_id, name)
+);
+comment on table store_locations is 'User-defined areas within a branch. parent_location_id allows nesting later; leave null for a flat list.';
+
+create table tax_rates (
+  id              uuid primary key default gen_random_uuid(),
+  company_id      uuid not null references companies(id) on delete cascade,
+  name            text not null,
+  rate_percentage numeric(5,2) not null,
+  is_default      boolean not null default false
+);
+
+-- -----------------------------------------------------------------------------
+-- PRODUCT CATALOG (brands, tags, products)
+-- -----------------------------------------------------------------------------
+
+create table brands (
+  id          uuid primary key default gen_random_uuid(),
+  company_id  uuid not null references companies(id) on delete cascade,
+  name        text not null,
+  unique (company_id, name)
+);
+
+create table tags (
+  id          uuid primary key default gen_random_uuid(),
+  company_id  uuid not null references companies(id) on delete cascade,
+  name        text not null,
+  unique (company_id, name)
+);
+comment on table tags is 'Controlled vocabulary for product categorisation: wash, treatment, colour, retexturise, styling. Seed after creating the company row â€” see bottom of file.';
+
+create table suppliers (
+  id              uuid primary key default gen_random_uuid(),
+  company_id      uuid not null references companies(id) on delete cascade,
+  supplier_name   text not null,
+  poc_name        text,
+  poc_number      text,
+  order_channel   order_channel,
+  gst_registered  boolean not null default false,
+  created_at      timestamptz not null default now()
+);
+
+create table products (
+  id                     uuid primary key default gen_random_uuid(),
+  company_id             uuid not null references companies(id) on delete cascade,
+  sku                    text not null,
+  name                   text not null,
+  description            text,
+  brand_id               uuid references brands(id),
+  unit_cost_price        numeric(12,2) not null default 0,
+  tax_rate_id            uuid references tax_rates(id),
+  rrp                    numeric(12,2),
+  picture_url            text,
+  default_classification product_classification,   -- suggested default; the AUTHORITATIVE classification is set per purchase_order_item (see below)
+  low_stock_threshold    numeric(12,2),
+  is_active              boolean not null default true,
+  created_at             timestamptz not null default now(),
+  unique (company_id, sku)
+);
+comment on table products is 'No quantity column â€” on-hand quantity is derived per store_location from inventory_transactions (bottom of file). No tags array â€” tags are structured via product_tags below.';
+
+create table product_tags (
+  product_id  uuid not null references products(id) on delete cascade,
+  tag_id      uuid not null references tags(id) on delete cascade,
+  primary key (product_id, tag_id)
+);
+
+create table supplier_products (
+  id                   uuid primary key default gen_random_uuid(),
+  supplier_id          uuid not null references suppliers(id) on delete cascade,
+  product_id           uuid not null references products(id) on delete cascade,
+  supplier_sku         text,
+  supplier_cost_price  numeric(12,2),
+  is_preferred         boolean not null default false,
+  unique (supplier_id, product_id)
+);
+
+-- -----------------------------------------------------------------------------
+-- PURCHASING
+-- -----------------------------------------------------------------------------
+
+create table purchase_orders (
+  id                     uuid primary key default gen_random_uuid(),
+  company_id             uuid not null references companies(id) on delete cascade,
+  branch_id              uuid not null references branches(id),   -- confirmed: one branch per PO
+  supplier_id            uuid not null references suppliers(id),
+  po_number              text not null,
+  status                 po_status not null default 'draft',      -- a PO represents an "unreceived order" until status = received
+  order_date             date,
+  expected_delivery_date date,
+  created_by             text,
+  notes                  text,
+  created_at             timestamptz not null default now(),
+  unique (company_id, po_number)
+);
+
+create table purchase_order_items (
+  id                 uuid primary key default gen_random_uuid(),
+  purchase_order_id  uuid not null references purchase_orders(id) on delete cascade,
+  product_id         uuid not null references products(id),
+  classification     product_classification not null,     -- confirmed: type is tagged per PO line, one line = one product
+  quantity_ordered   numeric(12,2) not null,
+  quantity_received  numeric(12,2) not null default 0,      -- maintained by trigger as goods_receipt_items come in
+  unit_price         numeric(12,2) not null,
+  tax_rate_id        uuid references tax_rates(id),
+  line_total         numeric(14,2) generated always as (quantity_ordered * unit_price) stored
+);
+
+-- -----------------------------------------------------------------------------
+-- INVOICES
+-- -----------------------------------------------------------------------------
+
+create table invoices (
+  id                       uuid primary key default gen_random_uuid(),
+  company_id               uuid not null references companies(id) on delete cascade,
+  branch_id                uuid not null references branches(id),   -- confirmed: one branch per invoice
+  supplier_id              uuid not null references suppliers(id),
+  purchase_order_id        uuid references purchase_orders(id),
+  invoice_number           text not null,
+  invoice_date             date not null,
+  total_amount             numeric(14,2),
+  total_tax_amount         numeric(14,2),
+  total_gross_amount       numeric(14,2),
+  purchase_discount_amount numeric(14,2) not null default 0,
+  status                   invoice_status not null default 'unpaid',
+  created_at               timestamptz not null default now(),
+  unique (company_id, supplier_id, invoice_number)
+);
+
+-- -----------------------------------------------------------------------------
+-- RECEIVING
+-- -----------------------------------------------------------------------------
+
+create table goods_receipts (
+  id                 uuid primary key default gen_random_uuid(),
+  company_id         uuid not null references companies(id) on delete cascade,
+  purchase_order_id  uuid references purchase_orders(id),
+  branch_id          uuid not null references branches(id),
+  invoice_id         uuid references invoices(id),
+  received_date      date not null default current_date,
+  received_by        text,
+  notes              text,
+  created_at         timestamptz not null default now()
+);
+
+create table goods_receipt_items (
+  id                       uuid primary key default gen_random_uuid(),
+  goods_receipt_id         uuid not null references goods_receipts(id) on delete cascade,
+  purchase_order_item_id   uuid references purchase_order_items(id),  -- null only for ad-hoc receipts with no PO
+  product_id               uuid not null references products(id),
+  store_location_id        uuid not null references store_locations(id),
+  quantity_received        numeric(12,2) not null,
+  unit_cost                numeric(12,2) not null,
+  purchase_discount_amount numeric(12,2) not null default 0,
+  classification           product_classification    -- auto-filled from purchase_order_item if linked; required otherwise (see trigger below)
+);
+
+create table invoice_items (
+  id                       uuid primary key default gen_random_uuid(),
+  invoice_id               uuid not null references invoices(id) on delete cascade,
+  goods_receipt_item_id    uuid references goods_receipt_items(id),   -- traceability + sync source
+  product_id               uuid not null references products(id),
+  quantity                 numeric(12,2) not null,
+  unit_price               numeric(12,2) not null,
+  tax_amount               numeric(12,2) not null default 0,
+  purchase_discount_amount numeric(12,2) not null default 0,
+  line_total               numeric(14,2) generated always as (quantity * unit_price - purchase_discount_amount + tax_amount) stored
+);
+
+-- -----------------------------------------------------------------------------
+-- INVENTORY LEDGER  (single source of truth for stock on hand)
+-- -----------------------------------------------------------------------------
+
+create table inventory_transactions (
+  id                 uuid primary key default gen_random_uuid(),
+  company_id         uuid not null references companies(id) on delete cascade,
+  product_id         uuid not null references products(id),
+  store_location_id  uuid not null references store_locations(id),
+  txn_type           inventory_txn_type not null,
+  quantity_change    numeric(12,2) not null,
+  reference_table    text,
+  reference_id       uuid,
+  txn_date           timestamptz not null default now(),
+  created_by         text,
+  notes              text
+);
+comment on table inventory_transactions is 'Append-only ledger. Never write to a quantity column directly â€” current_stock view derives on-hand quantity from this.';
+
+create index idx_inventory_txn_product_location on inventory_transactions (product_id, store_location_id);
+create index idx_inventory_txn_company_date on inventory_transactions (company_id, txn_date);
+
+-- -----------------------------------------------------------------------------
+-- RETAIL-USE REPORTING (round-trip with the external retail system)
+-- -----------------------------------------------------------------------------
+
+create table report_exports (
+  id             uuid primary key default gen_random_uuid(),
+  company_id     uuid not null references companies(id) on delete cascade,
+  branch_id      uuid references branches(id),
+  report_type    text not null,
+  period_start   date,
+  period_end     date,
+  generated_by   text,
+  generated_at   timestamptz not null default now(),
+  file_reference text
+);
+
+create table retail_use_entries (
+  id                 uuid primary key default gen_random_uuid(),
+  company_id         uuid not null references companies(id) on delete cascade,
+  branch_id          uuid not null references branches(id),
+  product_id         uuid not null references products(id),
+  store_location_id  uuid references store_locations(id),
+  quantity_used      numeric(12,2) not null,
+  entry_date         date not null,
+  external_reference text,
+  keyed_in_by        text,
+  notes              text,
+  created_at         timestamptz not null default now()
+);
+
+-- -----------------------------------------------------------------------------
+-- INVENTORY COUNTS
+-- -----------------------------------------------------------------------------
+
+create table inventory_counts (
+  id                     uuid primary key default gen_random_uuid(),
+  company_id             uuid not null references companies(id) on delete cascade,
+  branch_id              uuid not null references branches(id),
+  store_location_id      uuid references store_locations(id),     -- null = whole branch
+  filter_brand_id        uuid references brands(id),               -- optional scope: count only this brand
+  filter_classification  product_classification,                   -- optional scope: count only this type
+  filter_tag_id          uuid references tags(id),                 -- optional scope: count only products with this tag
+  additional_filters     jsonb,                                    -- reserved for any other ad-hoc product-column filter (see handoff)
+  status                 text not null default 'in_progress',
+  count_date             date not null default current_date,
+  counted_by             text,
+  created_at             timestamptz not null default now()
+);
+comment on table inventory_counts is 'Scope of a count session can be a location, a brand, a type/classification, a tag, or any combination â€” the app resolves which products fall in scope from the filter_* columns before creating inventory_count_items.';
+
+create table inventory_count_items (
+  id                 uuid primary key default gen_random_uuid(),
+  inventory_count_id uuid not null references inventory_counts(id) on delete cascade,
+  product_id         uuid not null references products(id),
+  store_location_id  uuid not null references store_locations(id),
+  expected_quantity  numeric(12,2),
+  counted_quantity   numeric(12,2),
+  variance           numeric(12,2) generated always as (counted_quantity - expected_quantity) stored,
+  notes              text
+);
+
+-- -----------------------------------------------------------------------------
+-- DERIVED VIEWS
+-- -----------------------------------------------------------------------------
+
+create view current_stock as
+select
+  product_id,
+  store_location_id,
+  sum(quantity_change) as quantity_on_hand
+from inventory_transactions
+group by product_id, store_location_id;
+
+create view low_stock_alerts as
+select
+  p.id as product_id,
+  p.sku,
+  p.name,
+  p.low_stock_threshold,
+  coalesce(sum(cs.quantity_on_hand), 0) as total_on_hand
+from products p
+left join current_stock cs on cs.product_id = p.id
+where p.low_stock_threshold is not null
+group by p.id, p.sku, p.name, p.low_stock_threshold
+having coalesce(sum(cs.quantity_on_hand), 0) <= p.low_stock_threshold;
+
+create view invoice_reconciliation as
+select
+  i.id as invoice_id,
+  i.invoice_number,
+  i.total_gross_amount as invoice_stated_total,
+  coalesce(sum(ii.line_total), 0) as line_items_total,
+  i.total_gross_amount - coalesce(sum(ii.line_total), 0) as variance
+from invoices i
+left join invoice_items ii on ii.invoice_id = i.id
+group by i.id, i.invoice_number, i.total_gross_amount;
+comment on view invoice_reconciliation is 'variance <> 0 means the invoice''s line items do not yet sum to its stated total â€” review before marking the invoice paid.';
+
+-- -----------------------------------------------------------------------------
+-- FUNCTIONS & TRIGGERS â€” receiving automation
+-- -----------------------------------------------------------------------------
+
+create or replace function fn_recompute_po_status(p_po_id uuid)
+returns void language plpgsql as $$
+declare
+  v_total_ordered  numeric;
+  v_total_received numeric;
+  v_current_status po_status;
+begin
+  select status into v_current_status from purchase_orders where id = p_po_id;
+  if v_current_status in ('draft', 'cancelled') then
+    return;  -- don't auto-transition orders that haven't been sent, or are cancelled
+  end if;
+
+  select coalesce(sum(quantity_ordered), 0), coalesce(sum(quantity_received), 0)
+    into v_total_ordered, v_total_received
+    from purchase_order_items where purchase_order_id = p_po_id;
+
+  if v_total_received <= 0 then
+    return;
+  elsif v_total_received >= v_total_ordered then
+    update purchase_orders set status = 'received' where id = p_po_id;
+  else
+    update purchase_orders set status = 'partially_received' where id = p_po_id;
+  end if;
+end;
+$$;
+
+create or replace function fn_default_receipt_item_classification()
+returns trigger language plpgsql as $$
+begin
+  if new.classification is null and new.purchase_order_item_id is not null then
+    select classification into new.classification
+    from purchase_order_items where id = new.purchase_order_item_id;
+  end if;
+
+  if new.classification is null then
+    raise exception 'classification must be provided when a goods_receipt_item has no purchase_order_item_id';
+  end if;
+
+  return new;
+end;
+$$;
+
+create trigger trg_default_receipt_item_classification
+before insert on goods_receipt_items
+for each row execute function fn_default_receipt_item_classification();
+
+create or replace function fn_after_goods_receipt_item_insert()
+returns trigger language plpgsql as $$
+declare
+  v_company_id uuid;
+  v_po_id      uuid;
+begin
+  select gr.company_id into v_company_id from goods_receipts gr where gr.id = new.goods_receipt_id;
+
+  insert into inventory_transactions (
+    company_id, product_id, store_location_id, txn_type, quantity_change,
+    reference_table, reference_id, notes
+  ) values (
+    v_company_id, new.product_id, new.store_location_id, 'goods_receipt', new.quantity_received,
+    'goods_receipt_items', new.id, 'Auto-created on receipt'
+  );
+
+  if new.purchase_order_item_id is not null then
+    update purchase_order_items
+      set quantity_received = quantity_received + new.quantity_received
+      where id = new.purchase_order_item_id
+      returning purchase_order_id into v_po_id;
+
+    perform fn_recompute_po_status(v_po_id);
+  end if;
+
+  return new;
+end;
+$$;
+comment on function fn_after_goods_receipt_item_insert is 'Automates "receive the correct ordered quantity": writes the ledger entry, tracks received qty against the PO line, and rolls the PO status forward (sent/confirmed -> partially_received -> received). Over-receipt is currently allowed, not blocked â€” flagged as an open item in the handoff.';
+
+create trigger trg_after_goods_receipt_item_insert
+after insert on goods_receipt_items
+for each row execute function fn_after_goods_receipt_item_insert();
+
+create or replace function fn_generate_invoice_items_from_receipt(
+  p_invoice_id uuid,
+  p_goods_receipt_id uuid
+) returns integer language plpgsql as $$
+declare
+  v_count integer := 0;
+begin
+  insert into invoice_items (
+    invoice_id, product_id, goods_receipt_item_id, quantity, unit_price,
+    purchase_discount_amount, tax_amount
+  )
+  select
+    p_invoice_id,
+    gri.product_id,
+    gri.id,
+    gri.quantity_received,
+    gri.unit_cost,
+    gri.purchase_discount_amount,
+    round(
+      gri.quantity_received * gri.unit_cost *
+      coalesce((select tr.rate_percentage from products p
+                left join tax_rates tr on tr.id = p.tax_rate_id
+                where p.id = gri.product_id), 0) / 100,
+      2
+    )
+  from goods_receipt_items gri
+  where gri.goods_receipt_id = p_goods_receipt_id;
+
+  get diagnostics v_count = row_count;
+  return v_count;
+end;
+$$;
+comment on function fn_generate_invoice_items_from_receipt is 'Pre-fills invoice_items from a goods receipt''s lines so the invoice can be reconciled against actual received quantities/costs instead of re-keyed from scratch. Check invoice_reconciliation afterwards â€” adjust purchase_discount_amount lines if it does not match the invoice total.';
+
+-- -----------------------------------------------------------------------------
+-- ROW LEVEL SECURITY â€” standard company-scoped isolation
+-- -----------------------------------------------------------------------------
+-- Baseline policy: any authenticated user who is a member of a company (via
+-- company_users) can read/write everything belonging to that company. There
+-- is no role-based restriction yet (e.g. only managers voiding invoices) â€”
+-- add narrower policies per table later if that's needed.
+-- -----------------------------------------------------------------------------
+
+create or replace function fn_my_company_ids()
+returns setof uuid
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select company_id from company_users where user_id = auth.uid()
+$$;
+
+-- companies / company_users: read-only for members; writes go through service role
+alter table companies enable row level security;
+create policy companies_select on companies
+  for select using (id in (select fn_my_company_ids()));
+
+alter table company_users enable row level security;
+create policy company_users_select on company_users
+  for select using (company_id in (select fn_my_company_ids()));
+
+-- tables with a direct company_id column
+alter table branches enable row level security;
+create policy branches_company_isolation on branches
+  for all using (company_id in (select fn_my_company_ids()))
+  with check (company_id in (select fn_my_company_ids()));
+
+alter table tax_rates enable row level security;
+create policy tax_rates_company_isolation on tax_rates
+  for all using (company_id in (select fn_my_company_ids()))
+  with check (company_id in (select fn_my_company_ids()));
+
+alter table brands enable row level security;
+create policy brands_company_isolation on brands
+  for all using (company_id in (select fn_my_company_ids()))
+  with check (company_id in (select fn_my_company_ids()));
+
+alter table tags enable row level security;
+create policy tags_company_isolation on tags
+  for all using (company_id in (select fn_my_company_ids()))
+  with check (company_id in (select fn_my_company_ids()));
+
+alter table suppliers enable row level security;
+create policy suppliers_company_isolation on suppliers
+  for all using (company_id in (select fn_my_company_ids()))
+  with check (company_id in (select fn_my_company_ids()));
+
+alter table products enable row level security;
+create policy products_company_isolation on products
+  for all using (company_id in (select fn_my_company_ids()))
+  with check (company_id in (select fn_my_company_ids()));
+
+alter table purchase_orders enable row level security;
+create policy purchase_orders_company_isolation on purchase_orders
+  for all using (company_id in (select fn_my_company_ids()))
+  with check (company_id in (select fn_my_company_ids()));
+
+alter table invoices enable row level security;
+create policy invoices_company_isolation on invoices
+  for all using (company_id in (select fn_my_company_ids()))
+  with check (company_id in (select fn_my_company_ids()));
+
+alter table goods_receipts enable row level security;
+create policy goods_receipts_company_isolation on goods_receipts
+  for all using (company_id in (select fn_my_company_ids()))
+  with check (company_id in (select fn_my_company_ids()));
+
+alter table inventory_transactions enable row level security;
+create policy inventory_transactions_company_isolation on inventory_transactions
+  for all using (company_id in (select fn_my_company_ids()))
+  with check (company_id in (select fn_my_company_ids()));
+
+alter table report_exports enable row level security;
+create policy report_exports_company_isolation on report_exports
+  for all using (company_id in (select fn_my_company_ids()))
+  with check (company_id in (select fn_my_company_ids()));
+
+alter table retail_use_entries enable row level security;
+create policy retail_use_entries_company_isolation on retail_use_entries
+  for all using (company_id in (select fn_my_company_ids()))
+  with check (company_id in (select fn_my_company_ids()));
+
+alter table inventory_counts enable row level security;
+create policy inventory_counts_company_isolation on inventory_counts
+  for all using (company_id in (select fn_my_company_ids()))
+  with check (company_id in (select fn_my_company_ids()));
+
+-- tables without a direct company_id â€” scoped via their parent
+alter table store_locations enable row level security;
+create policy store_locations_company_isolation on store_locations
+  for all using (branch_id in (select id from branches where company_id in (select fn_my_company_ids())))
+  with check (branch_id in (select id from branches where company_id in (select fn_my_company_ids())));
+
+alter table product_tags enable row level security;
+create policy product_tags_company_isolation on product_tags
+  for all using (product_id in (select id from products where company_id in (select fn_my_company_ids())))
+  with check (product_id in (select id from products where company_id in (select fn_my_company_ids())));
+
+alter table supplier_products enable row level security;
+create policy supplier_products_company_isolation on supplier_products
+  for all using (supplier_id in (select id from suppliers where company_id in (select fn_my_company_ids())))
+  with check (supplier_id in (select id from suppliers where company_id in (select fn_my_company_ids())));
+
+alter table purchase_order_items enable row level security;
+create policy purchase_order_items_company_isolation on purchase_order_items
+  for all using (purchase_order_id in (select id from purchase_orders where company_id in (select fn_my_company_ids())))
+  with check (purchase_order_id in (select id from purchase_orders where company_id in (select fn_my_company_ids())));
+
+alter table goods_receipt_items enable row level security;
+create policy goods_receipt_items_company_isolation on goods_receipt_items
+  for all using (goods_receipt_id in (select id from goods_receipts where company_id in (select fn_my_company_ids())))
+  with check (goods_receipt_id in (select id from goods_receipts where company_id in (select fn_my_company_ids())));
+
+alter table invoice_items enable row level security;
+create policy invoice_items_company_isolation on invoice_items
+  for all using (invoice_id in (select id from invoices where company_id in (select fn_my_company_ids())))
+  with check (invoice_id in (select id from invoices where company_id in (select fn_my_company_ids())));
+
+alter table inventory_count_items enable row level security;
+create policy inventory_count_items_company_isolation on inventory_count_items
+  for all using (inventory_count_id in (select id from inventory_counts where company_id in (select fn_my_company_ids())))
+  with check (inventory_count_id in (select id from inventory_counts where company_id in (select fn_my_company_ids())));
+
+-- views (current_stock, low_stock_alerts, invoice_reconciliation) inherit RLS
+-- from their underlying tables automatically â€” no extra policies needed.
+
+-- -----------------------------------------------------------------------------
+-- INDEXES
+-- -----------------------------------------------------------------------------
+
+create index idx_products_brand on products (brand_id);
+create index idx_product_tags_tag on product_tags (tag_id);
+create index idx_po_items_po on purchase_order_items (purchase_order_id);
+create index idx_gri_po_item on goods_receipt_items (purchase_order_item_id);
+create index idx_invoice_items_gri on invoice_items (goods_receipt_item_id);
+
+-- Views should enforce the caller's RLS, not the view owner's.
+alter view current_stock set (security_invoker = true);
+alter view low_stock_alerts set (security_invoker = true);
+alter view invoice_reconciliation set (security_invoker = true);
+
+grant usage on schema public to authenticated, service_role;
+grant select, insert, update, delete on all tables in schema public to authenticated;
+grant all on all tables in schema public to service_role;
+grant select on current_stock, low_stock_alerts, invoice_reconciliation to authenticated, service_role;
+grant execute on all functions in schema public to authenticated, service_role;
+
+-- Seed MAAX PTE LTD, branches, default locations, GST, and tags.
+insert into companies (name) values ('MAAX PTE LTD');
+
+insert into branches (company_id, name)
+select id, branch_name
+from companies, unnest(array['Min', 'Kin']) as branch_name
+where companies.name = 'MAAX PTE LTD';
+
+insert into store_locations (branch_id, name, description)
+select b.id, 'Stock room', 'Default receiving location'
+from branches b
+join companies c on c.id = b.company_id
+where c.name = 'MAAX PTE LTD';
+
+insert into tax_rates (company_id, name, rate_percentage, is_default)
+select id, 'GST 9%', 9.00, true
+from companies
+where name = 'MAAX PTE LTD';
+
+insert into tags (company_id, name)
+select id, tag_name
+from companies, unnest(array['wash', 'treatment', 'colour', 'retexturise', 'styling']) as tag_name
+where companies.name = 'MAAX PTE LTD';
+
+-- Single-tenant bootstrap: every new auth user joins MAAX PTE LTD.
+create or replace function fn_on_auth_user_created()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  insert into company_users (company_id, user_id, role)
+  select id, new.id, 'member'
+  from companies
+  where name = 'MAAX PTE LTD'
+  on conflict (company_id, user_id) do nothing;
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_on_auth_user_created on auth.users;
+create trigger trg_on_auth_user_created
+after insert on auth.users
+for each row execute function fn_on_auth_user_created();
+
+-- =============================================================================
+-- End of schema v2 apply + seed.
+-- =============================================================================
+
