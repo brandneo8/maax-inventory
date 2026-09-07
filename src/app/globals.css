@@ -22,8 +22,108 @@
   --font-mono: var(--font-geist-mono);
 }
 
+html,
 body {
+  height: 100%;
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
   background: var(--background);
   color: var(--foreground);
   font-family: var(--font-sans), ui-sans-serif, system-ui, sans-serif;
+}
+
+.app-shell {
+  position: relative;
+  display: flex;
+  flex-direction: row;
+  align-items: stretch;
+  width: 100%;
+  min-height: 100%;
+  min-height: 100vh;
+}
+
+.app-sidebar {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  flex: 0 0 15rem;
+  align-self: flex-start;
+  width: 15rem;
+  height: 100vh;
+  min-height: 100vh;
+  position: sticky;
+  top: 0;
+  background: #ffffff;
+  border-right: 1px solid var(--border);
+}
+
+.app-sidebar[data-collapsed="true"] {
+  flex-basis: 3.75rem;
+  width: 3.75rem;
+}
+
+.app-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 2.75rem 2.25rem;
+}
+
+.app-brand-logo {
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  width: 100%;
+  text-decoration: none;
+  color: inherit;
+}
+
+.app-brand-logo-collapsed {
+  justify-content: center;
+}
+
+.app-brand-logo-image {
+  position: relative;
+  display: block;
+  width: 100%;
+  height: 6.25rem;
+}
+
+.app-brand-logo-collapsed .app-brand-logo-image {
+  width: 2.75rem;
+  height: 2.25rem;
+}
+
+.salon-check {
+  appearance: none;
+  width: 1.01rem;
+  height: 1.01rem;
+  margin: 0;
+  border: 2px solid #0f172a;
+  border-radius: 0.2rem;
+  background: #ffffff;
+  cursor: pointer;
+  display: inline-grid;
+  place-content: center;
+  vertical-align: middle;
+}
+
+.salon-check:checked {
+  background: #0f172a;
+}
+
+.salon-check:checked::after {
+  content: "";
+  width: 0.21rem;
+  height: 0.41rem;
+  border: solid #ffffff;
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg) translateY(-1px);
+}
+
+.salon-check:focus-visible {
+  outline: 2px solid #0f172a;
+  outline-offset: 2px;
 }

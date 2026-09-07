@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { requireBranch, requireUser } from "@/lib/auth";
+import { requireBranch } from "@/lib/auth";
 import { nextPoNumber } from "@/lib/data/orders";
 import type { ProductClassification } from "@/lib/labels";
 
@@ -22,6 +22,9 @@ export async function createPurchaseOrder(input: {
   lines: OrderLineInput[];
 }) {
   const { supabase, companyId, user, branch } = await requireBranch();
+  if (input.branch_id && input.branch_id !== branch.id) {
+    throw new Error("The form is for a different salon. Switch branch and try again.");
+  }
   const lines = input.lines.filter((line) => line.product_id && line.quantity_ordered > 0);
 
   if (lines.length === 0) {
@@ -65,7 +68,7 @@ export async function createPurchaseOrder(input: {
 }
 
 export async function markPurchaseOrderSent(formData: FormData) {
-  const { supabase, companyId } = await requireUser();
+  const { supabase, companyId, branch } = await requireBranch();
   const id = String(formData.get("id") ?? "");
 
   const { error } = await supabase
@@ -73,6 +76,7 @@ export async function markPurchaseOrderSent(formData: FormData) {
     .update({ status: "sent" })
     .eq("id", id)
     .eq("company_id", companyId)
+    .eq("branch_id", branch.id)
     .eq("status", "draft");
 
   if (error) throw error;

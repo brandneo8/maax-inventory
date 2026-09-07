@@ -102,7 +102,7 @@ create table tags (
   name        text not null,
   unique (company_id, name)
 );
-comment on table tags is 'Controlled vocabulary for product categorisation: wash, treatment, colour, retexturise, styling. Seed after creating the company row — see bottom of file.';
+comment on table tags is 'Controlled vocabulary for product categorisation: wash, treatment, colour, retexturise, styling, Bundle.';
 
 create table suppliers (
   id              uuid primary key default gen_random_uuid(),
@@ -118,27 +118,65 @@ create table suppliers (
 create table products (
   id                     uuid primary key default gen_random_uuid(),
   company_id             uuid not null references companies(id) on delete cascade,
-  sku                    text not null,
-  name                   text not null,
+  sku                    text,
+  barcode                text,
+  order_name             text not null,
+  name                   text,
   description            text,
   brand_id               uuid references brands(id),
   unit_cost_price        numeric(12,2) not null default 0,
   tax_rate_id            uuid references tax_rates(id),
   rrp                    numeric(12,2),
+  crp                    numeric(12,2) generated always as (
+    case
+      when rrp is not null and rrp > 0 then rrp
+      else unit_cost_price * 2
+    end
+  ) stored,
   picture_url            text,
   default_classification product_classification,   -- suggested default; the AUTHORITATIVE classification is set per purchase_order_item (see below)
   low_stock_threshold    numeric(12,2),
   is_active              boolean not null default true,
   created_at             timestamptz not null default now(),
-  unique (company_id, sku)
+  size_label             text,
+  size_ml                numeric(12, 3),
+  is_set                 boolean not null default false,
+  brand_sub              text,
+  unique (company_id, sku),
+  check (sku is null or length(btrim(sku)) > 0),
+  check (barcode is null or length(btrim(barcode)) > 0)
 );
 comment on table products is 'No quantity column — on-hand quantity is derived per store_location from inventory_transactions (bottom of file). No tags array — tags are structured via product_tags below.';
+comment on column products.order_name is 'Official product title used on orders and receiving. Required.';
+comment on column products.name is 'Optional short name staff use to recognize the SKU in the app. Null when unset.';
+comment on column products.crp is 'Confirmed retail price. Uses RRP when RRP > 0, otherwise unit_cost_price × 2.';
+comment on column products.sku is 'Optional. Unique per company when present. Blank SKUs are stored as NULL.';
+comment on column products.barcode is 'Optional. Unique per company when present. Blank barcodes are stored as NULL.';
 
 create table product_tags (
   product_id  uuid not null references products(id) on delete cascade,
   tag_id      uuid not null references tags(id) on delete cascade,
   primary key (product_id, tag_id)
 );
+
+create table product_branches (
+  product_id  uuid not null references products(id) on delete cascade,
+  branch_id   uuid not null references branches(id) on delete cascade,
+  primary key (product_id, branch_id)
+);
+comment on table product_branches is 'Which branches show this product on /products. Ticked by admin on the catalog table.';
+
+create table product_components (
+  set_product_id        uuid not null references products(id) on delete cascade,
+  component_product_id  uuid not null references products(id) on delete restrict,
+  quantity              numeric(12, 3) not null default 1,
+  allocated_cost        numeric(12,2),
+  primary key (set_product_id, component_product_id),
+  check (set_product_id <> component_product_id),
+  check (quantity > 0)
+);
+comment on table product_components is 'Bill of materials for bundle SKUs. One row per component in the bundle.';
+comment on column product_components.allocated_cost is 'Share of the parent bundle unit cost for this component line. Child unit cost is allocated_cost / quantity.';
 
 create table supplier_products (
   id                   uuid primary key default gen_random_uuid(),
@@ -341,13 +379,13 @@ create view low_stock_alerts as
 select
   p.id as product_id,
   p.sku,
-  p.name,
+  coalesce(nullif(btrim(p.name), ''), p.order_name) as name,
   p.low_stock_threshold,
   coalesce(sum(cs.quantity_on_hand), 0) as total_on_hand
 from products p
 left join current_stock cs on cs.product_id = p.id
 where p.low_stock_threshold is not null
-group by p.id, p.sku, p.name, p.low_stock_threshold
+group by p.id, p.sku, p.name, p.order_name, p.low_stock_threshold
 having coalesce(sum(cs.quantity_on_hand), 0) <= p.low_stock_threshold;
 
 create view invoice_reconciliation as
@@ -416,17 +454,47 @@ create or replace function fn_after_goods_receipt_item_insert()
 returns trigger language plpgsql as $$
 declare
   v_company_id uuid;
-  v_po_id      uuid;
+  v_po_id uuid;
+  v_is_set boolean;
+  v_has_components boolean;
+  v_component record;
 begin
   select gr.company_id into v_company_id from goods_receipts gr where gr.id = new.goods_receipt_id;
 
-  insert into inventory_transactions (
-    company_id, product_id, store_location_id, txn_type, quantity_change,
-    reference_table, reference_id, notes
-  ) values (
-    v_company_id, new.product_id, new.store_location_id, 'goods_receipt', new.quantity_received,
-    'goods_receipt_items', new.id, 'Auto-created on receipt'
-  );
+  select p.is_set into v_is_set from products p where p.id = new.product_id;
+  select exists (
+    select 1 from product_components pc where pc.set_product_id = new.product_id
+  ) into v_has_components;
+
+  if coalesce(v_is_set, false) and v_has_components then
+    for v_component in
+      select pc.component_product_id, pc.quantity
+      from product_components pc
+      where pc.set_product_id = new.product_id
+    loop
+      insert into inventory_transactions (
+        company_id, product_id, store_location_id, txn_type, quantity_change,
+        reference_table, reference_id, notes
+      ) values (
+        v_company_id,
+        v_component.component_product_id,
+        new.store_location_id,
+        'goods_receipt',
+        new.quantity_received * v_component.quantity,
+        'goods_receipt_items',
+        new.id,
+        'Unpacked from bundle on receipt'
+      );
+    end loop;
+  else
+    insert into inventory_transactions (
+      company_id, product_id, store_location_id, txn_type, quantity_change,
+      reference_table, reference_id, notes
+    ) values (
+      v_company_id, new.product_id, new.store_location_id, 'goods_receipt', new.quantity_received,
+      'goods_receipt_items', new.id, 'Auto-created on receipt'
+    );
+  end if;
 
   if new.purchase_order_item_id is not null then
     update purchase_order_items
@@ -440,7 +508,7 @@ begin
   return new;
 end;
 $$;
-comment on function fn_after_goods_receipt_item_insert is 'Automates "receive the correct ordered quantity": writes the ledger entry, tracks received qty against the PO line, and rolls the PO status forward (sent/confirmed -> partially_received -> received). Over-receipt is currently allowed, not blocked — flagged as an open item in the handoff.';
+comment on function fn_after_goods_receipt_item_insert is 'Receives a PO line, then stocks either that SKU or its bundle components. Over-receipt is allowed.';
 
 create trigger trg_after_goods_receipt_item_insert
 after insert on goods_receipt_items
@@ -585,6 +653,22 @@ create policy product_tags_company_isolation on product_tags
   for all using (product_id in (select id from products where company_id in (select fn_my_company_ids())))
   with check (product_id in (select id from products where company_id in (select fn_my_company_ids())));
 
+alter table product_branches enable row level security;
+create policy product_branches_company_isolation on product_branches
+  for all using (product_id in (select id from products where company_id in (select fn_my_company_ids())))
+  with check (
+    product_id in (select id from products where company_id in (select fn_my_company_ids()))
+    and branch_id in (select id from branches where company_id in (select fn_my_company_ids()))
+  );
+
+alter table product_components enable row level security;
+create policy product_components_company_isolation on product_components
+  for all using (set_product_id in (select id from products where company_id in (select fn_my_company_ids())))
+  with check (
+    set_product_id in (select id from products where company_id in (select fn_my_company_ids()))
+    and component_product_id in (select id from products where company_id in (select fn_my_company_ids()))
+  );
+
 alter table supplier_products enable row level security;
 create policy supplier_products_company_isolation on supplier_products
   for all using (supplier_id in (select id from suppliers where company_id in (select fn_my_company_ids())))
@@ -618,7 +702,9 @@ create policy inventory_count_items_company_isolation on inventory_count_items
 -- -----------------------------------------------------------------------------
 
 create index idx_products_brand on products (brand_id);
+create unique index products_company_id_barcode_key on products (company_id, barcode) where barcode is not null;
 create index idx_product_tags_tag on product_tags (tag_id);
+create index idx_product_branches_branch on product_branches (branch_id);
 create index idx_po_items_po on purchase_order_items (purchase_order_id);
 create index idx_gri_po_item on goods_receipt_items (purchase_order_item_id);
 create index idx_invoice_items_gri on invoice_items (goods_receipt_item_id);

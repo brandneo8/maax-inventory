@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import { deleteSupplier, saveSuppliers, type SupplierDraft } from "../suppliers/actions";
 import { ORDER_CHANNELS, type OrderChannel } from "@/lib/labels";
 import { btnClass, btnSecondaryClass, fieldClass, tableClass, tdClass, thClass } from "@/lib/ui";
@@ -15,13 +16,75 @@ function emptyRow(): SupplierDraft {
   };
 }
 
-export function SuppliersTable({ suppliers }: { suppliers: SupplierDraft[] }) {
+export function SuppliersTable({
+  suppliers,
+  onChange,
+  onDirtyIdsChange,
+  taxRate = 9,
+}: {
+  suppliers: SupplierDraft[];
+  onChange?: (rows: SupplierDraft[]) => void;
+  onDirtyIdsChange?: (ids: Set<string>) => void;
+  taxRate?: number;
+}) {
+  const router = useRouter();
   const [rows, setRows] = useState<SupplierDraft[]>(suppliers.length > 0 ? suppliers : [emptyRow()]);
+  const [dirtyIds, setDirtyIds] = useState<Set<string>>(() => new Set());
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
 
+  useEffect(() => {
+    setRows(suppliers.length > 0 ? suppliers : [emptyRow()]);
+  }, [suppliers]);
+
+  function markDirty(id: string | undefined) {
+    if (!id) return;
+    setDirtyIds((current) => {
+      const next = new Set(current).add(id);
+      onDirtyIdsChange?.(next);
+      return next;
+    });
+  }
+
+  function clearDirty() {
+    const next = new Set<string>();
+    setDirtyIds(next);
+    onDirtyIdsChange?.(next);
+  }
+
+  function commit(next: SupplierDraft[]) {
+    setRows(next);
+    onChange?.(next);
+  }
+
   function updateRow(index: number, patch: Partial<SupplierDraft>) {
-    setRows((current) => current.map((row, rowIndex) => (rowIndex === index ? { ...row, ...patch } : row)));
+    const current = rows[index];
+    if (current?.id && (patch.supplier_name != null || patch.poc_name != null || patch.poc_number != null || patch.order_channel != null)) {
+      markDirty(current.id);
+    }
+    commit(rows.map((row, rowIndex) => (rowIndex === index ? { ...row, ...patch } : row)));
+  }
+
+  async function onGstChange(index: number, gstRegistered: boolean) {
+    const row = rows[index];
+    if (!row) return;
+    commit(rows.map((item, rowIndex) => (rowIndex === index ? { ...item, gst_registered: gstRegistered } : item)));
+    if (!row.id) return;
+    try {
+      setError(null);
+      const response = await fetch("/admin/supplier-gst", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: row.id, gstRegistered }),
+      });
+      const payload = (await response.json().catch(() => null)) as { ok?: boolean; error?: string } | null;
+      if (!response.ok || !payload?.ok) {
+        throw new Error(payload?.error || "Could not save GST.");
+      }
+    } catch (err) {
+      commit(rows.map((item, rowIndex) => (rowIndex === index ? { ...item, gst_registered: row.gst_registered } : item)));
+      setError(err instanceof Error ? err.message : "Could not save GST.");
+    }
   }
 
   async function onSave() {
@@ -29,6 +92,8 @@ export function SuppliersTable({ suppliers }: { suppliers: SupplierDraft[] }) {
     setError(null);
     try {
       await saveSuppliers(rows);
+      clearDirty();
+      router.refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not save suppliers.");
     } finally {
@@ -45,10 +110,17 @@ export function SuppliersTable({ suppliers }: { suppliers: SupplierDraft[] }) {
       if (row.id) {
         await deleteSupplier(row.id);
       }
-      setRows((current) => {
-        const next = current.filter((_, rowIndex) => rowIndex !== index);
-        return next.length > 0 ? next : [emptyRow()];
-      });
+      const next = rows.filter((_, rowIndex) => rowIndex !== index);
+      commit(next.length > 0 ? next : [emptyRow()]);
+      if (row.id) {
+        setDirtyIds((current) => {
+          const nextDirty = new Set(current);
+          nextDirty.delete(row.id!);
+          onDirtyIdsChange?.(nextDirty);
+          return nextDirty;
+        });
+      }
+      router.refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not delete that supplier.");
     } finally {
@@ -70,6 +142,7 @@ export function SuppliersTable({ suppliers }: { suppliers: SupplierDraft[] }) {
               <th className={thClass}>Contact number</th>
               <th className={thClass}>Channel</th>
               <th className={thClass}>GST</th>
+              <th className={thClass}>Tax rate</th>
               <th className={thClass} />
             </tr>
           </thead>
@@ -117,8 +190,12 @@ export function SuppliersTable({ suppliers }: { suppliers: SupplierDraft[] }) {
                   <input
                     type="checkbox"
                     checked={row.gst_registered}
-                    onChange={(event) => updateRow(index, { gst_registered: event.target.checked })}
+                    onChange={(event) => onGstChange(index, event.target.checked)}
+                    aria-label={`GST registered for ${row.supplier_name || "supplier"}`}
                   />
+                </td>
+                <td className={tdClass}>
+                  <span className="block min-w-20 text-sm">{row.gst_registered ? `${taxRate}%` : "0%"}</span>
                 </td>
                 <td className={tdClass}>
                   <button
@@ -136,7 +213,7 @@ export function SuppliersTable({ suppliers }: { suppliers: SupplierDraft[] }) {
         </table>
       </div>
       <div className="flex gap-2">
-        <button className={btnSecondaryClass} type="button" onClick={() => setRows((current) => [...current, emptyRow()])}>
+        <button className={btnSecondaryClass} type="button" onClick={() => commit([...rows, emptyRow()])}>
           Add row
         </button>
         <button className={btnClass} type="button" disabled={pending} onClick={onSave}>

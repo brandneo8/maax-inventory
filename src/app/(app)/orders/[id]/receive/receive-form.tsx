@@ -14,6 +14,7 @@ type Line = {
   unit_cost: number;
   store_location_id: string;
   quantity_received: number;
+  contents: { label: string; quantity: number }[];
 };
 
 export function ReceiveForm({
@@ -82,6 +83,15 @@ export function ReceiveForm({
             <div className="md:col-span-3 text-sm">
               <p className="font-medium">{line.label}</p>
               <p className="text-muted">Outstanding {line.remaining}. Over-receiving is allowed and recorded.</p>
+              {line.contents.length > 0 ? (
+                <p className="mt-1 text-muted">
+                  Receiving {line.quantity_received || 0} will add{" "}
+                  {line.contents
+                    .map((item) => `${(line.quantity_received || 0) * item.quantity}× ${item.label}`)
+                    .join(", ")}
+                  .
+                </p>
+              ) : null}
             </div>
             <label className="space-y-1 text-sm">
               <span>Location</span>

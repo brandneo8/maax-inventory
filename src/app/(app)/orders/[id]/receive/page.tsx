@@ -3,6 +3,8 @@ import { notFound } from "next/navigation";
 import { requireBranch } from "@/lib/auth";
 import { getStoreLocations } from "@/lib/data/lookups";
 import { canReceive, getPurchaseOrder } from "@/lib/data/orders";
+import { getBundleContents } from "@/lib/data/products";
+import { productLabel } from "@/lib/format";
 import { ReceiveForm } from "./receive-form";
 
 export default async function ReceiveOrderPage({
@@ -18,6 +20,11 @@ export default async function ReceiveOrderPage({
   ]);
 
   if (!order) notFound();
+
+  const bundleContents = await getBundleContents(
+    supabase,
+    order.items.map((item) => item.product_id),
+  );
 
   const branchLocations = locations.filter((location) => location.branch_id === order.branch_id);
 
@@ -53,9 +60,13 @@ export default async function ReceiveOrderPage({
             return {
               purchase_order_item_id: item.id,
               product_id: item.product_id,
-              label: product ? `${product.sku} — ${product.name}` : item.product_id,
+              label: productLabel(product, item.product_id),
               remaining: Number(item.quantity_ordered) - Number(item.quantity_received),
               unit_cost: Number(item.unit_price),
+              contents: (bundleContents.get(item.product_id) ?? []).map((component) => ({
+                label: component.label,
+                quantity: component.quantity,
+              })),
             };
           })}
         />

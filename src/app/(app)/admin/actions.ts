@@ -12,7 +12,7 @@ export async function unlockAdminEdit(formData: FormData) {
   const password = String(formData.get("password") ?? "");
 
   if (!expected || password !== expected) {
-    redirect("/admin?error=" + encodeURIComponent("That password did not unlock editing."));
+    redirect("/admin/users?error=" + encodeURIComponent("That password did not unlock editing."));
   }
 
   const cookieStore = await cookies();
@@ -23,8 +23,8 @@ export async function unlockAdminEdit(formData: FormData) {
     maxAge: 60 * 60 * 8,
   });
 
-  revalidatePath("/admin");
-  redirect("/admin");
+  revalidatePath("/admin/users");
+  redirect("/admin/users");
 }
 
 export async function saveBranchAccess(formData: FormData) {
@@ -65,6 +65,6 @@ export async function saveBranchAccess(formData: FormData) {
     }
   }
 
-  revalidatePath("/admin");
+  revalidatePath("/admin/users");
   revalidatePath("/", "layout");
 }

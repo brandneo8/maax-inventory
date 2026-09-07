@@ -1,4 +1,4 @@
-# MAAX Inventory
+# Pulse
 
 Inventory system for MAAX PTE LTD (Min and Kin). TypeScript, Next.js, Supabase, Vercel.
 
@@ -37,3 +37,11 @@ If sign-up succeeds but you cannot sign in, turn off **Confirm email** in the [S
 | `bun run build` | Production build |
 | `bun run lint` | Lint |
 | `bun run typecheck` | TypeScript check |
+| `bun run db:backup` | Dump live Supabase rows to `supabase/backups/` (gitignored) |
+| `bun run db:push` | Backup, then apply **new** migrations only. Does not wipe data |
+
+`supabase db push` is additive. It runs only migrations that are not already recorded on the remote. It does not restore seed/default rows.
+
+Never run `supabase db reset` or apply `supabase/schema.sql` to the linked project. That rebuilds the database from scratch and would replace live catalog and stock.
+
+Unsaved edits on Admin live in the browser. Click **Save products** or **Save suppliers** before a schema push, or a refresh will show what is already stored in Supabase.

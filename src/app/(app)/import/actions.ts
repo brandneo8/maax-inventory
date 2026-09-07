@@ -53,6 +53,10 @@ async function recordRetailUse(
 
 export async function createRetailUseEntry(formData: FormData) {
   const { supabase, companyId, user, branch } = await requireBranch();
+  const requestedBranchId = String(formData.get("branch_id") ?? "");
+  if (requestedBranchId && requestedBranchId !== branch.id) {
+    throw new Error("The form is for a different salon. Switch branch and try again.");
+  }
   await recordRetailUse(supabase, {
     companyId,
     userEmail: user.email ?? "",
@@ -65,11 +69,15 @@ export async function createRetailUseEntry(formData: FormData) {
     notes: String(formData.get("notes") ?? "").trim() || null,
   });
 
-  revalidatePath("/import");
+  revalidatePath("/home");
 }
 
 export async function importRetailUseCsv(formData: FormData) {
   const { supabase, companyId, user, branch } = await requireBranch();
+  const requestedBranchId = String(formData.get("branch_id") ?? "");
+  if (requestedBranchId && requestedBranchId !== branch.id) {
+    throw new Error("The form is for a different salon. Switch branch and try again.");
+  }
   const file = formData.get("file");
   if (!(file instanceof File) || file.size === 0) {
     throw new Error("Choose a CSV or Excel-exported CSV file.");
@@ -84,7 +92,9 @@ export async function importRetailUseCsv(formData: FormData) {
   if (locations.error) throw locations.error;
 
   const productBySku = new Map(
-    (products.data ?? []).map((product) => [product.sku.trim().toLowerCase(), product.id]),
+    (products.data ?? [])
+      .filter((product) => product.sku?.trim())
+      .map((product) => [product.sku!.trim().toLowerCase(), product.id]),
   );
   const locationByName = new Map(
     (locations.data ?? []).map((location) => [location.name.trim().toLowerCase(), location.id]),
@@ -127,7 +137,7 @@ export async function importRetailUseCsv(formData: FormData) {
     imported += 1;
   }
 
-  revalidatePath("/import");
+  revalidatePath("/home");
 
   if (imported === 0) {
     throw new Error(problems[0] ?? "No rows could be imported.");

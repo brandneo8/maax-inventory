@@ -1,9 +1,16 @@
+"use client";
+
+import { useEffect, useState } from "react";
+import { LogOut, PanelLeftClose, PanelLeftOpen } from "lucide-react";
 import { signOut } from "@/app/login/actions";
 import { AppSidebar } from "@/components/app-sidebar";
+import { BrandLogo } from "@/components/brand-logo";
 import { BranchSwitcher } from "@/components/branch-switcher";
 import type { BranchOption } from "@/lib/auth";
 import { btnSecondaryClass } from "@/lib/ui";
-import { ChevronDown } from "lucide-react";
+import { cn } from "@/lib/utils";
+
+const SIDEBAR_KEY = "pulse-sidebar-collapsed";
 
 export function AppShell({
   email,
@@ -18,26 +25,53 @@ export function AppShell({
   branch: BranchOption | null;
   children: React.ReactNode;
 }) {
+  const [collapsed, setCollapsed] = useState(false);
+
+  useEffect(() => {
+    setCollapsed(window.localStorage.getItem(SIDEBAR_KEY) === "1");
+  }, []);
+
+  function toggleCollapsed() {
+    setCollapsed((current) => {
+      const next = !current;
+      window.localStorage.setItem(SIDEBAR_KEY, next ? "1" : "0");
+      return next;
+    });
+  }
+
   return (
-    <div className="flex min-h-dvh">
-      <aside className="sticky top-0 flex h-dvh w-60 shrink-0 flex-col border-r border-border bg-card">
-        <div className="flex items-start justify-between gap-2 px-5 pt-4 pb-3">
-          <div>
-            <p className="text-sm font-semibold">MAAX Inventory</p>
-            <p className="text-xs text-muted">Min & Kin</p>
-          </div>
-          <ChevronDown className="mt-0.5 size-4 text-muted" aria-hidden />
+    <div className="app-shell">
+      <aside className="app-sidebar" data-collapsed={collapsed ? "true" : "false"}>
+        <div className={cn("flex flex-col gap-3 px-3 pt-4 pb-3", collapsed && "items-center px-2")}>
+          <BrandLogo collapsed={collapsed} />
+          <button
+            className={btnSecondaryClass}
+            type="button"
+            onClick={toggleCollapsed}
+            aria-expanded={!collapsed}
+            aria-controls="app-sidebar-nav"
+            aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+          >
+            {collapsed ? <PanelLeftOpen className="size-4" /> : <PanelLeftClose className="size-4" />}
+            {collapsed ? null : <span className="ml-2">Collapse</span>}
+          </button>
+          <BranchSwitcher branches={allowedBranches} selected={branch} collapsed={collapsed} />
         </div>
-        <BranchSwitcher branches={allowedBranches} selected={branch} />
-        <AppSidebar isAdmin={isAdmin} />
-        <form action={signOut} className="mt-auto space-y-2 border-t border-border p-4">
-          <p className="truncate text-xs text-muted">{email}</p>
-          <button className={`${btnSecondaryClass} w-full`} type="submit">
-            Sign out
+        <AppSidebar isAdmin={isAdmin} collapsed={collapsed} />
+        <form action={signOut} className={cn("mt-auto space-y-2 border-t border-border p-3", collapsed && "p-2")}>
+          {collapsed ? null : <p className="truncate text-xs text-muted">{email}</p>}
+          <button
+            className={cn(btnSecondaryClass, "w-full", collapsed && "px-2")}
+            type="submit"
+            aria-label="Sign out"
+            title="Sign out"
+          >
+            <LogOut className="size-4" />
+            {collapsed ? null : <span className="ml-2">Sign out</span>}
           </button>
         </form>
       </aside>
-      <main className="min-w-0 flex-1 px-6 py-8">{children}</main>
+      <main className="app-main">{children}</main>
     </div>
   );
 }

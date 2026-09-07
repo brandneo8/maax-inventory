@@ -1,5 +1,6 @@
 import type { createClient } from "@/lib/supabase/server";
 import { getCurrentStock } from "@/lib/data/stock";
+import { productDisplayName } from "@/lib/format";
 
 type Client = Awaited<ReturnType<typeof createClient>>;
 
@@ -9,7 +10,7 @@ export async function getRecentRetailUse(supabase: Client, companyId: string, br
   let query = supabase
     .from("retail_use_entries")
     .select(
-      "id, quantity_used, entry_date, external_reference, notes, products(sku, name), branches(name), store_locations(name)",
+      "id, quantity_used, entry_date, external_reference, notes, products(sku, name, order_name), branches(name), store_locations(name)",
     )
     .eq("company_id", companyId)
     .order("created_at", { ascending: false })
@@ -30,7 +31,7 @@ export async function getRetailExportRows(supabase: Client, companyId: string, b
     await Promise.all([
       supabase
         .from("products")
-        .select("id, sku, name, default_classification, brands(name)")
+        .select("id, sku, name, order_name, default_classification, brands(name)")
         .eq("company_id", companyId)
         .eq("is_active", true),
       supabase
@@ -73,7 +74,7 @@ export async function getRetailExportRows(supabase: Client, companyId: string, b
         store_location_id: null,
         quantity_on_hand: 0,
         sku: product.sku,
-        name: product.name,
+        name: productDisplayName(product),
         location_name: null,
         branch_id: branchId ?? null,
         branch_name: null,
@@ -81,10 +82,10 @@ export async function getRetailExportRows(supabase: Client, companyId: string, b
     ];
 
     return rows
-      .filter((row) => !branchId || row.branch_id === branchId || !row.branch_id)
+      .filter((row) => !branchId || row.branch_id === branchId)
       .map((row) => ({
         sku: product.sku,
-        name: product.name,
+        name: productDisplayName(product),
         brand: brand?.name ?? "",
         classification: product.default_classification ?? "",
         branch: row.branch_name ?? "",

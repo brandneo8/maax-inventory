@@ -74,17 +74,13 @@ export async function requireUser() {
     membership = { company_id: company.id, role };
   }
 
-  const { data: branchRows } = await supabase
-    .from("branch_users")
-    .select("branch_id, branches!inner(id, name, company_id)")
-    .eq("user_id", user.id)
-    .eq("branches.company_id", membership.company_id);
-
-  const allowedBranches: BranchOption[] = (branchRows ?? []).flatMap((row) => {
-    const branch = Array.isArray(row.branches) ? row.branches[0] : row.branches;
-    if (!branch) return [];
-    return [{ id: branch.id, name: branch.name, displayName: salonName(branch.name) }];
-  });
+  const isAdmin = membership.role === "admin";
+  const allowedBranches = await loadAllowedBranches(
+    supabase,
+    user.id,
+    membership.company_id,
+    isAdmin,
+  );
 
   const cookieStore = await cookies();
   const requestedId = cookieStore.get(BRANCH_COOKIE)?.value;
@@ -95,16 +91,56 @@ export async function requireUser() {
     user,
     companyId: membership.company_id,
     role: membership.role,
-    isAdmin: membership.role === "admin",
+    isAdmin,
     allowedBranches,
     branch,
   };
 }
 
+function sortSalonBranches(branches: BranchOption[]) {
+  const rank = (name: string) => (name === "Min" ? 0 : name === "Kin" ? 1 : 2);
+  return [...branches].sort((a, b) => rank(a.name) - rank(b.name) || a.name.localeCompare(b.name));
+}
+
+async function loadAllowedBranches(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  userId: string,
+  companyId: string,
+  isAdmin: boolean,
+) {
+  if (isAdmin) {
+    const { data, error } = await supabase.from("branches").select("id, name").eq("company_id", companyId);
+    if (error) throw error;
+    return sortSalonBranches(
+      (data ?? []).map((branch) => ({
+        id: branch.id,
+        name: branch.name,
+        displayName: salonName(branch.name),
+      })),
+    );
+  }
+
+  const { data: branchRows, error } = await supabase
+    .from("branch_users")
+    .select("branch_id, branches!inner(id, name, company_id)")
+    .eq("user_id", userId)
+    .eq("branches.company_id", companyId);
+
+  if (error) throw error;
+
+  return sortSalonBranches(
+    (branchRows ?? []).flatMap((row) => {
+      const branch = Array.isArray(row.branches) ? row.branches[0] : row.branches;
+      if (!branch) return [];
+      return [{ id: branch.id, name: branch.name, displayName: salonName(branch.name) }];
+    }),
+  );
+}
+
 export async function requireBranch() {
   const ctx = await requireUser();
   if (!ctx.branch) {
-    redirect(ctx.isAdmin ? "/admin" : "/import");
+    redirect(ctx.isAdmin ? "/admin" : "/home");
   }
   return { ...ctx, branch: ctx.branch };
 }
@@ -112,7 +148,7 @@ export async function requireBranch() {
 export async function requireAdmin() {
   const ctx = await requireUser();
   if (!ctx.isAdmin) {
-    redirect("/import");
+    redirect("/home");
   }
   return ctx;
 }

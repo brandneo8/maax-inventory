@@ -1,0 +1,16 @@
+---
+description: Keep live Supabase catalog and stock data when applying schema changes
+alwaysApply: true
+---
+
+# Supabase data stays on the remote
+
+The linked project `tfetufbblqvjutzonyte` is the live MAAX database. Product, supplier, stock, and user rows must survive every schema change.
+
+- Apply schema with `bun run db:push` only. That dumps data, then runs `supabase db push`.
+- New migrations must be additive: `add column if not exists`, `create table if not exists`, `create or replace function`.
+- Never run `supabase db reset`, `db reset --linked`, or apply `supabase/schema.sql` to remote. `schema.sql` is a reference copy, not a deploy script.
+- Never `drop table`, `truncate`, or `delete from` live catalog/stock tables in a migration.
+- The early file `20260905140000_maax_salon_schema.sql` already ran once. Do not repair migration history in a way that replays it.
+- Unsaved Admin table edits live in the browser. After a push, refresh reloads what is already in Supabase — click Save products / Save suppliers first.
+- Bundle contents live in `product_components`. Never drop, truncate, or recreate that table in a migration. Schema pushes must keep existing kit BOMs.

@@ -47,7 +47,7 @@ export async function getPurchaseOrder(
   const { data: items, error: itemsError } = await supabase
     .from("purchase_order_items")
     .select(
-      "id, product_id, classification, quantity_ordered, quantity_received, unit_price, line_total, products(sku, name)",
+      "id, product_id, classification, quantity_ordered, quantity_received, unit_price, line_total, products(sku, name, order_name)",
     )
     .eq("purchase_order_id", id)
     .order("id");

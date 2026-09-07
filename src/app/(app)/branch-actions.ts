@@ -4,6 +4,20 @@ import { cookies } from "next/headers";
 import { revalidatePath } from "next/cache";
 import { BRANCH_COOKIE, requireUser } from "@/lib/auth";
 
+const BRANCH_PATHS = [
+  "/",
+  "/home",
+  "/orders",
+  "/invoices",
+  "/counts",
+  "/reports",
+  "/products",
+  "/admin",
+  "/admin/users",
+  "/admin/products",
+  "/admin/suppliers",
+];
+
 export async function selectBranch(branchId: string) {
   const { allowedBranches } = await requireUser();
   if (!allowedBranches.some((branch) => branch.id === branchId)) {
@@ -18,5 +32,8 @@ export async function selectBranch(branchId: string) {
     maxAge: 60 * 60 * 24 * 180,
   });
 
+  for (const path of BRANCH_PATHS) {
+    revalidatePath(path);
+  }
   revalidatePath("/", "layout");
 }

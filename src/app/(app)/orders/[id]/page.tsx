@@ -1,8 +1,9 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { requireBranch } from "@/lib/auth";
+import { getUninvoicedReceiptsForOrder } from "@/lib/data/invoices";
 import { canMarkSent, canReceive, getPurchaseOrder } from "@/lib/data/orders";
-import { formatDate, formatMoney, formatQty } from "@/lib/format";
+import { formatDate, formatMoney, formatQty, productLabel } from "@/lib/format";
 import { classificationLabel, poStatusLabel } from "@/lib/labels";
 import { btnClass, btnSecondaryClass, tableClass, tdClass, thClass } from "@/lib/ui";
 import { markPurchaseOrderSent } from "../actions";
@@ -14,7 +15,10 @@ export default async function OrderDetailPage({
 }) {
   const { id } = await params;
   const { supabase, companyId, branch } = await requireBranch();
-  const order = await getPurchaseOrder(supabase, companyId, id, branch.id).catch(() => null);
+  const [order, uninvoicedReceipts] = await Promise.all([
+    getPurchaseOrder(supabase, companyId, id, branch.id).catch(() => null),
+    getUninvoicedReceiptsForOrder(supabase, companyId, id).catch(() => []),
+  ]);
 
   if (!order) notFound();
 
@@ -46,6 +50,11 @@ export default async function OrderDetailPage({
             {canReceive(order.status) ? (
               <Link className={btnSecondaryClass} href={`/orders/${order.id}/receive`}>
                 Receive stock
+              </Link>
+            ) : null}
+            {uninvoicedReceipts.length > 0 ? (
+              <Link className={btnSecondaryClass} href="/invoices/new">
+                Create invoice
               </Link>
             ) : null}
           </div>
@@ -85,7 +94,7 @@ export default async function OrderDetailPage({
               return (
                 <tr key={item.id}>
                   <td className={tdClass}>
-                    {product ? `${product.sku} — ${product.name}` : item.product_id}
+                    {productLabel(product, item.product_id)}
                   </td>
                   <td className={tdClass}>{classificationLabel(item.classification)}</td>
                   <td className={tdClass}>{formatQty(item.quantity_ordered)}</td>

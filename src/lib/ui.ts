@@ -10,3 +10,7 @@ export const btnSecondaryClass =
 export const tableClass = "min-w-full text-left text-sm";
 export const thClass = "border-b border-border px-3 py-2 font-medium text-muted";
 export const tdClass = "border-b border-border px-3 py-2";
+
+export function workingIn(displayName: string) {
+  return `Working in ${displayName}.`;
+}

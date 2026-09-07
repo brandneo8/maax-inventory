@@ -1,6 +1,6 @@
 {
-  "name": "maax-inventory",
-  "description": "Inventory tracking app.",
+  "name": "pulse",
+  "description": "Pulse inventory tracking app.",
   "version": "0.1.0",
   "private": true,
   "scripts": {
@@ -9,7 +9,9 @@
     "start": "next start",
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
-    "format": "prettier --write ."
+    "format": "prettier --write .",
+    "db:backup": "bun scripts/db-backup.mjs",
+    "db:push": "bun scripts/db-push.mjs"
   },
   "dependencies": {
     "@supabase/ssr": "^0.12.6",

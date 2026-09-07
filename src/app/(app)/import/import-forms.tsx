@@ -8,10 +8,12 @@ type Option = { id: string; label: string };
 
 export function ImportForms({
   branchId,
+  branchName,
   products,
   locations,
 }: {
   branchId: string;
+  branchName: string;
   products: Option[];
   locations: Option[];
 }) {
@@ -51,13 +53,15 @@ export function ImportForms({
   return (
     <div className="grid gap-6 lg:grid-cols-2">
       <form action={onManual} className="space-y-3 rounded-xl border border-border bg-card p-4">
+        <input type="hidden" name="branch_id" value={branchId} />
         <h2 className="text-sm font-semibold">Key in a line</h2>
+        <p className="text-xs text-muted">Saves to {branchName}.</p>
         {error ? (
           <p className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">{error}</p>
         ) : null}
         <label className="block space-y-1 text-sm">
           <span>Location</span>
-          <select className={fieldClass} name="store_location_id" required defaultValue={locations[0]?.id}>
+          <select key={branchId} className={fieldClass} name="store_location_id" required defaultValue={locations[0]?.id}>
             {locations.map((location) => (
               <option key={location.id} value={location.id}>
                 {location.label}
@@ -100,10 +104,11 @@ export function ImportForms({
       </form>
 
       <form action={onCsv} className="space-y-3 rounded-xl border border-border bg-card p-4">
+        <input type="hidden" name="branch_id" value={branchId} />
         <h2 className="text-sm font-semibold">Upload CSV / Excel export</h2>
         <p className="text-sm text-muted">
           Headers: <code>sku, quantity_used, entry_date, location, external_reference, notes</code>.
-          Rows are imported into the salon you are currently viewing. Save Excel as CSV first.
+          Rows are imported into {branchName}. Save Excel as CSV first.
         </p>
         {csvError ? (
           <p className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">{csvError}</p>

@@ -1,2 +1,4 @@
 # Dashboard → Project Settings → General → Reference ID
+# This is the live MAAX database. Apply schema with `bun run db:push` only.
+# Never `supabase db reset` against this linked project.
 project_id = "tfetufbblqvjutzonyte"

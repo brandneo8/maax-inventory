@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { requireBranch } from "@/lib/auth";
 import { getProducts, getSuppliers } from "@/lib/data/lookups";
+import { productLabel } from "@/lib/format";
 import { OrderForm } from "./order-form";
 
 export default async function NewOrderPage() {
@@ -18,7 +19,8 @@ export default async function NewOrderPage() {
         </Link>
         <h1 className="mt-2 text-2xl font-semibold tracking-tight">New purchase order</h1>
         <p className="mt-1 text-sm text-muted">
-          Classification is set on each line. Stock is not added until the order is received.
+          Working in {branch.displayName}. Classification is set on each line. Stock is not added
+          until the order is received.
         </p>
       </div>
 
@@ -36,6 +38,7 @@ export default async function NewOrderPage() {
         </p>
       ) : (
         <OrderForm
+          key={branch.id}
           branchId={branch.id}
           suppliers={suppliers.map((supplier) => ({
             id: supplier.id,
@@ -43,7 +46,7 @@ export default async function NewOrderPage() {
           }))}
           products={products.map((product) => ({
             id: product.id,
-            label: `${product.sku} — ${product.name}`,
+            label: productLabel(product),
             defaultClassification: product.default_classification,
             unitCost: Number(product.unit_cost_price),
           }))}

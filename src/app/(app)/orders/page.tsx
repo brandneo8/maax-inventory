@@ -15,7 +15,8 @@ export default async function OrdersPage() {
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Purchase orders</h1>
           <p className="mt-1 text-sm text-muted">
-            Draft an order, mark it sent, then receive stock into a branch location.
+            Working in {branch.displayName}. Draft an order, mark it sent, then receive stock into
+            this salon.
           </p>
         </div>
         <Link className={btnClass} href="/orders/new">

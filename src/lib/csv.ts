@@ -52,3 +52,18 @@ export function toCsv(rows: Record<string, string | number | null | undefined>[]
     "\n",
   );
 }
+
+export function downloadCsv(
+  fileName: string,
+  rows: Record<string, string | number | null | undefined>[],
+) {
+  const blob = new Blob([`\uFEFF${toCsv(rows)}`], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = fileName;
+  document.body.append(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}

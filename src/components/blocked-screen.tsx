@@ -1,12 +1,13 @@
 import Link from "next/link";
 import { signOut } from "@/app/login/actions";
+import { BrandLogo } from "@/components/brand-logo";
 import { btnClass, btnSecondaryClass } from "@/lib/ui";
 
 export function BlockedScreen({ email, isAdmin }: { email: string; isAdmin: boolean }) {
   return (
     <main className="mx-auto flex min-h-full w-full max-w-md flex-col justify-center px-6 py-16">
-      <p className="text-sm font-medium tracking-wide text-muted uppercase">MAAX Inventory</p>
-      <h1 className="mt-2 text-2xl font-semibold tracking-tight">No branch access</h1>
+      <BrandLogo href="/" />
+      <h1 className="mt-6 text-2xl font-semibold tracking-tight">No branch access</h1>
       <p className="mt-2 text-sm text-muted">
         You are signed in as {email || "this account"}, but you have not been given access to Min
         Salon or Kin Salon yet. Ask an admin to grant a branch.

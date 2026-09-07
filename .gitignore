@@ -39,6 +39,7 @@ yarn-error.log*
 
 # Supabase CLI artifacts
 supabase/.temp/
+supabase/backups/*.sql
 
 # typescript
 *.tsbuildinfo

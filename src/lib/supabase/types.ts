@@ -682,6 +682,72 @@ export type Database = {
           },
         ]
       }
+      product_components: {
+        Row: {
+          allocated_cost: number | null
+          component_product_id: string
+          quantity: number
+          set_product_id: string
+        }
+        Insert: {
+          allocated_cost?: number | null
+          component_product_id: string
+          quantity?: number
+          set_product_id: string
+        }
+        Update: {
+          allocated_cost?: number | null
+          component_product_id?: string
+          quantity?: number
+          set_product_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "product_components_component_product_id_fkey"
+            columns: ["component_product_id"]
+            isOneToOne: false
+            referencedRelation: "products"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "product_components_set_product_id_fkey"
+            columns: ["set_product_id"]
+            isOneToOne: false
+            referencedRelation: "products"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      product_branches: {
+        Row: {
+          branch_id: string
+          product_id: string
+        }
+        Insert: {
+          branch_id: string
+          product_id: string
+        }
+        Update: {
+          branch_id?: string
+          product_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "product_branches_branch_id_fkey"
+            columns: ["branch_id"]
+            isOneToOne: false
+            referencedRelation: "branches"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "product_branches_product_id_fkey"
+            columns: ["product_id"]
+            isOneToOne: false
+            referencedRelation: "products"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       product_tags: {
         Row: {
           product_id: string
@@ -721,25 +787,34 @@ export type Database = {
       }
       products: {
         Row: {
+          barcode: string | null
           brand_id: string | null
+          brand_sub: string | null
           company_id: string
           created_at: string
+          crp: number
           default_classification:
             | Database["public"]["Enums"]["product_classification"]
             | null
           description: string | null
           id: string
           is_active: boolean
+          is_set: boolean
           low_stock_threshold: number | null
-          name: string
+          name: string | null
+          order_name: string
           picture_url: string | null
           rrp: number | null
-          sku: string
+          size_label: string | null
+          size_ml: number | null
+          sku: string | null
           tax_rate_id: string | null
           unit_cost_price: number
         }
         Insert: {
+          barcode?: string | null
           brand_id?: string | null
+          brand_sub?: string | null
           company_id: string
           created_at?: string
           default_classification?:
@@ -748,16 +823,22 @@ export type Database = {
           description?: string | null
           id?: string
           is_active?: boolean
+          is_set?: boolean
           low_stock_threshold?: number | null
-          name: string
+          name?: string | null
+          order_name: string
           picture_url?: string | null
           rrp?: number | null
-          sku: string
+          size_label?: string | null
+          size_ml?: number | null
+          sku?: string | null
           tax_rate_id?: string | null
           unit_cost_price?: number
         }
         Update: {
+          barcode?: string | null
           brand_id?: string | null
+          brand_sub?: string | null
           company_id?: string
           created_at?: string
           default_classification?:
@@ -766,11 +847,15 @@ export type Database = {
           description?: string | null
           id?: string
           is_active?: boolean
+          is_set?: boolean
           low_stock_threshold?: number | null
-          name?: string
+          name?: string | null
+          order_name?: string
           picture_url?: string | null
           rrp?: number | null
-          sku?: string
+          size_label?: string | null
+          size_ml?: number | null
+          sku?: string | null
           tax_rate_id?: string | null
           unit_cost_price?: number
         }
@@ -1329,7 +1414,7 @@ export type Database = {
         | "partially_received"
         | "received"
         | "cancelled"
-      product_classification: "retail" | "inhouse" | "gwp" | "retail_inhouse"
+      product_classification: "retail" | "inhouse" | "gwp" | "retail_inhouse" | "bundle"
     }
     CompositeTypes: {
       [_ in never]: never
@@ -1476,7 +1561,7 @@ export const Constants = {
         "received",
         "cancelled",
       ],
-      product_classification: ["retail", "inhouse", "gwp", "retail_inhouse"],
+      product_classification: ["retail", "inhouse", "gwp", "retail_inhouse", "bundle"],
     },
   },
 } as const
