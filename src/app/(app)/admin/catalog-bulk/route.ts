@@ -43,10 +43,11 @@ export async function POST(request: Request) {
 
     if (body?.kind === "type") {
       const requested = typeof body.classification === "string" ? body.classification : "";
-      const classification =
-        requested && CLASSIFICATION_VALUES.has(requested as ProductClassification)
-          ? requested
-          : null;
+      const classification: ProductClassification | null = CLASSIFICATION_VALUES.has(
+        requested as ProductClassification,
+      )
+        ? (requested as ProductClassification)
+        : null;
       for (const ids of chunkIds(productIds)) {
         const { error } = await supabase
           .from("products")
