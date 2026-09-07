@@ -115,16 +115,22 @@ export type Database = {
       }
       companies: {
         Row: {
+          catalog_saved_at: string | null
+          catalog_saved_by_email: string | null
           created_at: string
           id: string
           name: string
         }
         Insert: {
+          catalog_saved_at?: string | null
+          catalog_saved_by_email?: string | null
           created_at?: string
           id?: string
           name: string
         }
         Update: {
+          catalog_saved_at?: string | null
+          catalog_saved_by_email?: string | null
           created_at?: string
           id?: string
           name?: string

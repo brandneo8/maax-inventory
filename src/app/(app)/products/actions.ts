@@ -6,6 +6,7 @@ import { catalogSize, normalizeOptionalText, parseMoney } from "@/lib/catalog-im
 import { persistProductComponents, syncBundleTag } from "@/lib/data/product-components";
 import type { ProductClassification } from "@/lib/labels";
 import { parseSize } from "@/lib/product-size";
+import { createAdminClient } from "@/lib/supabase/admin";
 import type { createClient } from "@/lib/supabase/server";
 
 type Client = Awaited<ReturnType<typeof createClient>>;
@@ -19,6 +20,18 @@ function revalidateCatalog() {
   revalidatePath("/reports");
   revalidatePath("/counts");
   revalidatePath("/");
+}
+
+async function stampCatalogSaved(companyId: string, email: string | undefined) {
+  const admin = createAdminClient();
+  const { error } = await admin
+    .from("companies")
+    .update({
+      catalog_saved_at: new Date().toISOString(),
+      catalog_saved_by_email: email?.trim() || null,
+    })
+    .eq("id", companyId);
+  if (error) throw new Error(error.message);
 }
 
 export async function createProduct(formData: FormData) {
@@ -219,7 +232,7 @@ async function syncProductTags(supabase: Client, companyId: string, productId: s
 }
 
 export async function saveProducts(drafts: ProductDraft[]) {
-  const { supabase, companyId } = await requireAdmin();
+  const { supabase, companyId, user } = await requireAdmin();
   const rows = drafts.filter((draft) => draft.orderName.trim());
   if (rows.length === 0) {
     throw new Error("Add at least one product order name before saving.");
@@ -292,6 +305,7 @@ export async function saveProducts(drafts: ProductDraft[]) {
     saved.push({ clientKey: draft.clientKey ?? null, id: productId });
   }
 
+  await stampCatalogSaved(companyId, user.email);
   revalidateCatalog();
   return { saved };
 }

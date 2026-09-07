@@ -23,6 +23,27 @@ export function formatSku(sku: string | null | undefined) {
   return sku?.trim() || "—";
 }
 
+export function formatCatalogSavedLabel(
+  savedAt: string | null | undefined,
+  email: string | null | undefined,
+) {
+  if (!savedAt) return "Last edited: not yet saved from Edit catalog";
+  const date = new Date(savedAt);
+  if (Number.isNaN(date.getTime())) return "Last edited: not yet saved from Edit catalog";
+  const formatted = new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Asia/Singapore",
+    day: "2-digit",
+    month: "2-digit",
+    year: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  })
+    .format(date)
+    .replace(",", "");
+  return `Last edited by ${email?.trim() || "unknown"} on ${formatted}`;
+}
+
 export function productDisplayName(
   product:
     | {

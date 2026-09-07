@@ -37,9 +37,11 @@ create type order_channel as enum (
 -- -----------------------------------------------------------------------------
 
 create table companies (
-  id          uuid primary key default gen_random_uuid(),
-  name        text not null,
-  created_at  timestamptz not null default now()
+  id                       uuid primary key default gen_random_uuid(),
+  name                     text not null,
+  created_at               timestamptz not null default now(),
+  catalog_saved_at         timestamptz,
+  catalog_saved_by_email   text
 );
 comment on table companies is 'Tenant/customer of the system. Single row (MAAX PTE LTD) for now.';
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import {
   deleteProduct,
@@ -9,13 +9,14 @@ import {
 } from "./actions";
 import { catalogTax, confirmedRetailPrice, grossMarginPercent, allocatedBundleTotal, autoAllocateBundleCosts, bundleCostRemainder, bundleCostsComplete, inheritedUnitCost, roundMoney } from "@/lib/catalog-pricing";
 import { downloadCsv } from "@/lib/csv";
-import { formatMoney, formatPercent, formatQty, productDisplayName, productLabel } from "@/lib/format";
+import { formatCatalogSavedLabel, formatMoney, formatPercent, formatQty, productDisplayName, productLabel } from "@/lib/format";
 import { SalonChipField } from "@/components/salon-chip-field";
 import { BrandSubFilter, NO_BRAND_SUB } from "@/components/brand-sub-filter";
 import { CLASSIFICATIONS, classificationLabel, salonChipLabel, type ProductClassification } from "@/lib/labels";
 import { parseSize, sizesMatch } from "@/lib/product-size";
 import { btnClass, btnSecondaryClass, fieldClass, tableClass, tdClass, thClass } from "@/lib/ui";
 import { cn } from "@/lib/utils";
+import { BulkEditModal, type BulkEditFields } from "./bulk-edit-modal";
 
 export type BundleDraft = { productId: string; quantity: number; label: string; allocatedCost: string };
 
@@ -51,9 +52,9 @@ type TableDraft = ProductDraft & {
   componentLabels: BundleDraft[];
 };
 
-const SELECT_COL_REM = 4;
+const SELECT_COL_REM = 9;
 const SALON_TAGS_REM = 11;
-const wCheck = "w-16 min-w-16";
+const wCheck = "w-36 min-w-36";
 const wSalons = "w-44 min-w-44";
 const wField = "min-w-28";
 const wName = "w-72 min-w-72";
@@ -119,8 +120,53 @@ const PAGE_SIZES = [50, 100, 500, 1000] as const;
 
 const UNGROUPED = "Ungrouped";
 
-function rowGroupKey(row: TableDraft) {
-  return row.brandSub.trim() || UNGROUPED;
+type GroupBy = "none" | "brandSub" | "brand" | "salon" | "tags" | "type" | "supplier";
+
+const GROUP_BY_OPTIONS: { value: GroupBy; label: string }[] = [
+  { value: "none", label: "None" },
+  { value: "brandSub", label: "Brand_sub" },
+  { value: "brand", label: "Brand" },
+  { value: "salon", label: "Salon" },
+  { value: "tags", label: "Tags" },
+  { value: "type", label: "Type" },
+  { value: "supplier", label: "Suppliers" },
+];
+
+function salonGroupLabel(row: TableDraft, branches: { id: string; name: string }[]) {
+  const labels = row.branchIds
+    .map((id) => {
+      const branch = branches.find((item) => item.id === id);
+      return branch ? salonChipLabel(branch.name) : "";
+    })
+    .filter(Boolean)
+    .sort((left, right) => left.localeCompare(right, undefined, { sensitivity: "base" }));
+  return labels.join(", ") || "No salon";
+}
+
+function rowGroupKey(
+  row: TableDraft,
+  groupBy: GroupBy,
+  branches: { id: string; name: string }[],
+) {
+  if (groupBy === "none") return UNGROUPED;
+  if (groupBy === "brandSub") return row.brandSub.trim() || UNGROUPED;
+  if (groupBy === "brand") return row.brand.trim() || UNGROUPED;
+  if (groupBy === "salon") return salonGroupLabel(row, branches);
+  if (groupBy === "tags") {
+    const names = row.tagNames
+      .map((name) => name.trim())
+      .filter(Boolean)
+      .sort((left, right) => left.localeCompare(right, undefined, { sensitivity: "base" }));
+    return names.length > 0 ? names.join(", ") : "No tag";
+  }
+  if (groupBy === "type") return row.classification ? classificationLabel(row.classification) : "No type";
+  const supplier = row.supplierName.trim();
+  return supplier || "No supplier";
+}
+
+function groupSortPrefix(key: string) {
+  if (key === UNGROUPED || key.startsWith("No ")) return `0:${key}`;
+  return `1:${key}`;
 }
 
 function brandSubListId(brand: string) {
@@ -163,16 +209,13 @@ function inheritChildCosts(rows: TableDraft[], contents: BundleDraft[], dirtyIds
   });
 }
 
-function keepLocalBundle(local: TableDraft | undefined, incoming: TableDraft): TableDraft {
-  if (!local) return incoming;
-  if (incoming.componentLabels.length > 0) return incoming;
-  if (local.componentLabels.length === 0) return incoming;
-  return {
-    ...incoming,
-    isSet: incoming.isSet || local.isSet,
-    components: local.components,
-    componentLabels: local.componentLabels,
-  };
+function dash(value: string | number | null | undefined) {
+  if (value == null || value === "") return "—";
+  return String(value);
+}
+
+function ViewValue({ children }: { children: ReactNode }) {
+  return <span className="block text-sm">{children}</span>;
 }
 
 function withParentContents(row: TableDraft, contents: BundleDraft[]): TableDraft {
@@ -295,6 +338,11 @@ function overrideCaughtUp(product: ProductRow, override: Partial<TableDraft>) {
   }
   if (override.tagIds && !sameIdList(product.tagIds, override.tagIds)) return false;
   if (override.branchIds && !sameIdList(product.branchIds, override.branchIds)) return false;
+  if (override.brand != null && product.brand !== override.brand) return false;
+  if (override.brandSub != null && product.brandSub !== override.brandSub) return false;
+  if (override.size != null && (product.sizeLabel ?? "") !== override.size) return false;
+  if (override.supplierIds && !sameIdList(product.supplierIds, override.supplierIds)) return false;
+  if (override.threshold != null && moneyInput(product.threshold) !== override.threshold) return false;
   return true;
 }
 
@@ -328,22 +376,52 @@ async function postCatalogBundle(payload: {
   }
 }
 
-async function postCatalogBulk(payload: {
-  kind: "type" | "tags" | "salons";
-  productIds: string[];
-  classification?: ProductClassification | "";
-  tagIds?: string[];
-  branchIds?: string[];
-}) {
+async function postCatalogBulk(payload: { productIds: string[]; fields: BulkEditFields }) {
   const response = await fetch("/admin/catalog-bulk", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
+    body: JSON.stringify({ kind: "edit", ...payload }),
   });
   const data = (await response.json().catch(() => null)) as { error?: string } | null;
   if (!response.ok) {
     throw new Error(data?.error || "Could not update products.");
   }
+}
+
+function bulkFieldsToPatch(
+  fields: BulkEditFields,
+  tags: { id: string; name: string }[],
+  suppliers: { id: string; name: string; gstRegistered: boolean }[],
+): Partial<TableDraft> {
+  const patch: Partial<TableDraft> = {};
+  if (fields.classification !== undefined) patch.classification = fields.classification;
+  if (fields.branchIds !== undefined) patch.branchIds = fields.branchIds;
+  if (fields.tagIds !== undefined) {
+    const tag = tags.find((item) => item.id === fields.tagIds?.[0]);
+    patch.tagIds = tag ? [tag.id] : [];
+    patch.tagNames = tag ? [tag.name] : [];
+  }
+  if (fields.brand !== undefined) patch.brand = fields.brand.trim();
+  if (fields.brandSub !== undefined) patch.brandSub = fields.brandSub.trim();
+  if (fields.size !== undefined) {
+    const raw = fields.size.trim();
+    if (!raw) {
+      patch.size = "";
+      patch.sizeMl = null;
+    } else {
+      const parsed = parseSize(raw);
+      patch.size = parsed?.label ?? raw;
+      patch.sizeMl = parsed?.ml ?? null;
+    }
+  }
+  if (fields.supplierId !== undefined) {
+    const supplier = suppliers.find((item) => item.id === fields.supplierId);
+    patch.supplierIds = supplier ? [supplier.id] : [];
+    patch.supplierName = supplier?.name ?? "";
+    patch.gstRegistered = supplier?.gstRegistered ?? false;
+  }
+  if (fields.threshold !== undefined) patch.threshold = fields.threshold.trim();
+  return patch;
 }
 
 export function ProductsTable({
@@ -352,19 +430,24 @@ export function ProductsTable({
   branches,
   suppliers,
   gstRate = 9,
+  catalogSavedAt = null,
+  catalogSavedByEmail = null,
 }: {
   products: ProductRow[];
   tags: { id: string; name: string }[];
   branches: { id: string; name: string }[];
   suppliers: { id: string; name: string; gstRegistered: boolean }[];
   gstRate?: number;
+  catalogSavedAt?: string | null;
+  catalogSavedByEmail?: string | null;
 }) {
   const router = useRouter();
   const [rows, setRows] = useState(() =>
-    (products.length > 0 ? products.map(toDraft) : [emptyRow(branches.map((branch) => branch.id))]).map(
-      withBulkOverride,
-    ),
+    products.length > 0 ? products.map((product) => withBulkOverride(toDraft(product))) : [],
   );
+  const [editing, setEditing] = useState(false);
+  const [bulkOpen, setBulkOpen] = useState(false);
+  const [snapshotAt, setSnapshotAt] = useState(() => new Date());
   const [overlayTick, setOverlayTick] = useState(0);
   const [recentBulkIds, setRecentBulkIds] = useState<Set<string>>(() => new Set());
   const [selected, setSelected] = useState<string[]>([]);
@@ -372,16 +455,13 @@ export function ProductsTable({
   const [brandFilter, setBrandFilter] = useState("");
   const [brandSubFilter, setBrandSubFilter] = useState<string[]>([]);
   const [customBrandSubs, setCustomBrandSubs] = useState<{ brand: string; name: string }[]>([]);
-  const [groupByBrandSub, setGroupByBrandSub] = useState(true);
+  const [groupBy, setGroupBy] = useState<GroupBy>("brandSub");
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(() => new Set());
   const [salonFilter, setSalonFilter] = useState("");
   const [sizeFilter, setSizeFilter] = useState("");
   const [supplierFilter, setSupplierFilter] = useState("");
   const [typeFilter, setTypeFilter] = useState("");
   const [tagFilter, setTagFilter] = useState("");
-  const [classification, setClassification] = useState<ProductClassification | "">("");
-  const [bulkTagId, setBulkTagId] = useState("");
-  const [bulkBranchIds, setBulkBranchIds] = useState<string[]>([]);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
@@ -394,6 +474,10 @@ export function ProductsTable({
   const [headHeight, setHeadHeight] = useState(41);
   const skipProductSync = useRef(false);
   const dirtyIdsRef = useRef(new Set<string>());
+  const editingRef = useRef(editing);
+  const dirtyRef = useRef(dirty);
+  editingRef.current = editing;
+  dirtyRef.current = dirty;
 
   useEffect(() => {
     pruneCaughtUpOverrides(products);
@@ -402,13 +486,18 @@ export function ProductsTable({
       return;
     }
     setRows((current) => {
+      if (!editing) {
+        dirtyIdsRef.current.clear();
+        setDirty(new Set());
+        return products.map((product) => withBulkOverride(toDraft(product)));
+      }
       const currentById = new Map(
         current.filter((row) => row.id).map((row) => [row.id as string, row]),
       );
       const saved = products.map((product) => {
         const local = currentById.get(product.id);
         const incoming = toDraft(product);
-        const base = local && dirtyIdsRef.current.has(product.id) ? local : keepLocalBundle(local, incoming);
+        const base = local && dirtyIdsRef.current.has(product.id) ? local : incoming;
         return withBulkOverride(base);
       });
       const savedKeys = new Set(saved.map(productFingerprint));
@@ -424,13 +513,34 @@ export function ProductsTable({
       setDirty(new Set(next.flatMap((row, index) => (row.id && dirtyIdsRef.current.has(row.id) ? [index] : []))));
       return next;
     });
-  }, [branches, products]);
+  }, [branches, editing, products]);
 
   useEffect(() => {
     if (recentBulkIds.size === 0) return;
     const timer = window.setTimeout(() => setRecentBulkIds(new Set()), 2400);
     return () => window.clearTimeout(timer);
   }, [recentBulkIds]);
+
+  useEffect(() => {
+    function canReload() {
+      return !(editingRef.current && (dirtyIdsRef.current.size > 0 || dirtyRef.current.size > 0));
+    }
+    function reloadIfSafe() {
+      if (!canReload()) return;
+      setSnapshotAt(new Date());
+      router.refresh();
+    }
+    function onVisibility() {
+      if (document.visibilityState !== "visible") return;
+      reloadIfSafe();
+    }
+    document.addEventListener("visibilitychange", onVisibility);
+    window.addEventListener("focus", reloadIfSafe);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisibility);
+      window.removeEventListener("focus", reloadIfSafe);
+    };
+  }, [router]);
 
   const brandOptions = useMemo(
     () => [...new Set(rows.map((row) => row.brand.trim()).filter(Boolean))].sort((left, right) => left.localeCompare(right)),
@@ -551,43 +661,55 @@ export function ProductsTable({
       });
   }, [overlayTick, rowMatchesFilters, rows]);
 
+  const groupKeyFor = useCallback(
+    (row: TableDraft) => rowGroupKey(row, groupBy, branches),
+    [branches, groupBy],
+  );
+
   const grouped = useMemo(() => {
     const byName = (left: { row: TableDraft }, right: { row: TableDraft }) =>
       left.row.orderName.localeCompare(right.row.orderName, undefined, { sensitivity: "base" });
-    const ungrouped = filtered.filter((item) => !item.row.brandSub.trim());
-    const assigned = filtered.filter((item) => item.row.brandSub.trim());
-    ungrouped.sort((left, right) => {
+    const items = [...filtered];
+    if (groupBy === "brandSub") {
+      const present = new Set(
+        filtered
+          .filter((item) => item.row.brandSub.trim())
+          .map((item) => item.row.brandSub.trim().toLowerCase()),
+      );
+      const extras = customBrandSubs
+        .filter((item) => {
+          if (brandFilter && item.brand !== brandFilter) return false;
+          if (present.has(item.name.toLowerCase())) return false;
+          if (brandSubFilter.length === 0) return true;
+          return brandSubFilter.some(
+            (name) => name !== NO_BRAND_SUB && name.toLowerCase() === item.name.toLowerCase(),
+          );
+        })
+        .map((item) => ({
+          row: {
+            ...emptyRow(branches.map((branch) => branch.id)),
+            brand: item.brand,
+            brandSub: item.name,
+          },
+          index: -1,
+        }));
+      items.push(...extras);
+    }
+    items.sort((left, right) => {
+      if (groupBy !== "none") {
+        const cmp = groupSortPrefix(groupKeyFor(left.row)).localeCompare(
+          groupSortPrefix(groupKeyFor(right.row)),
+          undefined,
+          { sensitivity: "base" },
+        );
+        if (cmp !== 0) return cmp;
+      }
       if (!left.row.id && right.row.id) return -1;
       if (left.row.id && !right.row.id) return 1;
       return byName(left, right);
     });
-    if (!groupByBrandSub) return [...ungrouped, ...assigned];
-    const present = new Set(assigned.map((item) => item.row.brandSub.trim().toLowerCase()));
-    const extras = customBrandSubs
-      .filter((item) => {
-        if (brandFilter && item.brand !== brandFilter) return false;
-        if (present.has(item.name.toLowerCase())) return false;
-        if (brandSubFilter.length === 0) return true;
-        return brandSubFilter.some(
-          (name) => name !== NO_BRAND_SUB && name.toLowerCase() === item.name.toLowerCase(),
-        );
-      })
-      .map((item) => ({
-        row: {
-          ...emptyRow(branches.map((branch) => branch.id)),
-          brand: item.brand,
-          brandSub: item.name,
-        },
-        index: -1,
-      }));
-    const withExtras = [...assigned, ...extras];
-    withExtras.sort((left, right) => {
-      const cmp = left.row.brandSub.trim().localeCompare(right.row.brandSub.trim(), undefined, { sensitivity: "base" });
-      if (cmp !== 0) return cmp;
-      return byName(left, right);
-    });
-    return [...ungrouped, ...withExtras];
-  }, [brandFilter, brandSubFilter, branches, customBrandSubs, filtered, groupByBrandSub]);
+    return items;
+  }, [brandFilter, brandSubFilter, branches, customBrandSubs, filtered, groupBy, groupKeyFor]);
 
   const listedProductCount = grouped.filter((item) => item.index >= 0).length;
   const exportRows = useMemo(
@@ -600,7 +722,7 @@ export function ProductsTable({
     const seen = new Set<string>();
     const next: typeof grouped = [];
     for (const item of grouped) {
-      const key = rowGroupKey(item.row);
+      const key = groupKeyFor(item.row);
       if (!collapsedGroups.has(key)) {
         next.push(item);
         continue;
@@ -610,7 +732,7 @@ export function ProductsTable({
       next.push(item);
     }
     return next;
-  }, [collapsedGroups, grouped]);
+  }, [collapsedGroups, groupKeyFor, grouped]);
 
   const pageCount = Math.max(1, Math.ceil(displayGrouped.length / pageSize));
   const currentPage = Math.min(page, pageCount - 1);
@@ -659,8 +781,8 @@ export function ProductsTable({
   }
 
   const allGroupKeys = useMemo(
-    () => [...new Set(grouped.map((item) => rowGroupKey(item.row)))],
-    [grouped],
+    () => [...new Set(grouped.map((item) => groupKeyFor(item.row)))],
+    [groupKeyFor, grouped],
   );
   const allGroupsCollapsed = allGroupKeys.length > 0 && allGroupKeys.every((key) => collapsedGroups.has(key));
 
@@ -697,7 +819,7 @@ export function ProductsTable({
           : [...current, { brand: brandFilter, name: trimmed }],
       );
     }
-    setGroupByBrandSub(true);
+    setGroupBy("brandSub");
     setBrandSubFilter((current) => {
       if (current.length === 0) return current;
       if (current.some((item) => item.toLowerCase() === trimmed.toLowerCase())) return current;
@@ -709,11 +831,11 @@ export function ProductsTable({
     const counts = new Map<string, number>();
     for (const item of grouped) {
       if (item.index < 0) continue;
-      const key = rowGroupKey(item.row);
+      const key = groupKeyFor(item.row);
       counts.set(key, (counts.get(key) ?? 0) + 1);
     }
     return counts;
-  }, [grouped]);
+  }, [groupKeyFor, grouped]);
 
   const selectableIds = useMemo(
     () => grouped.map((item) => item.row.id).filter((id): id is string => Boolean(id)),
@@ -721,12 +843,6 @@ export function ProductsTable({
   );
   const allSelected = selectableIds.length > 0 && selectableIds.every((id) => selected.includes(id));
   const selectedCount = selected.length;
-  const selectedLabel =
-    selectedCount === 0
-      ? "No products selected"
-      : selectedCount === 1
-        ? "1 product selected"
-        : `${selectedCount} products selected`;
 
   function updateRow(index: number, patch: Partial<TableDraft>) {
     setRows((current) => {
@@ -790,7 +906,7 @@ export function ProductsTable({
 
   function groupProductIds(groupKey: string) {
     return grouped
-      .filter((item) => rowGroupKey(item.row) === groupKey)
+      .filter((item) => groupKeyFor(item.row) === groupKey)
       .map((item) => item.row.id)
       .filter((id): id is string => Boolean(id));
   }
@@ -809,24 +925,149 @@ export function ProductsTable({
     setSelected(allSelected ? [] : [...new Set(selectableIds)]);
   }
 
+  const hasUnsaved = dirty.size > 0 || dirtyIdsRef.current.size > 0;
+
   function applyToSelected(productIds: string[], patch: Partial<TableDraft>) {
     const ids = new Set(productIds);
     for (const id of ids) {
       bulkOverrides.set(id, { ...bulkOverrides.get(id), ...patch });
-      dirtyIdsRef.current.add(id);
     }
     setRows((current) =>
       current.map((row) => (row.id && ids.has(row.id) ? { ...row, ...patch } : row)),
     );
-    setDirty((currentDirty) => {
-      const merged = new Set(currentDirty);
-      rows.forEach((row, index) => {
-        if (row.id && ids.has(row.id)) merged.add(index);
-      });
-      return merged;
-    });
     setRecentBulkIds(new Set(ids));
     setOverlayTick((tick) => tick + 1);
+  }
+
+  async function applyBulk(fields: BulkEditFields) {
+    if (selectedCount === 0) {
+      throw new Error("Select at least one product.");
+    }
+    const productIds = [...selected];
+    const patch = bulkFieldsToPatch(fields, tags, suppliers);
+    applyToSelected(productIds, patch);
+    setPending(true);
+    setError(null);
+    setMessage(null);
+    try {
+      await postCatalogBulk({ productIds, fields });
+      applyToSelected(productIds, patch);
+      setBulkOpen(false);
+      setSnapshotAt(new Date());
+      router.refresh();
+      setMessage(`Updated ${productIds.length} product${productIds.length === 1 ? "" : "s"}.`);
+    } catch (err) {
+      for (const id of productIds) bulkOverrides.delete(id);
+      router.refresh();
+      setError(err instanceof Error ? err.message : "Could not update products.");
+      throw err;
+    } finally {
+      setPending(false);
+    }
+  }
+
+  async function enterEdit() {
+    dirtyIdsRef.current.clear();
+    setDirty(new Set());
+    setError(null);
+    setMessage(null);
+    setSnapshotAt(new Date());
+    await router.refresh();
+    setEditing(true);
+  }
+
+  function leaveEdit() {
+    dirtyIdsRef.current.clear();
+    setDirty(new Set());
+    setBundleIndex(null);
+    setBulkOpen(false);
+    setError(null);
+    setMessage(null);
+    setEditing(false);
+    setSnapshotAt(new Date());
+    router.refresh();
+  }
+
+  function persistableDrafts() {
+    return rows.filter((row, index) => {
+      if (!row.orderName.trim()) return false;
+      if (!row.id) return dirty.has(index);
+      return dirty.has(index) || dirtyIdsRef.current.has(row.id);
+    });
+  }
+
+  async function onSave() {
+    const drafts = persistableDrafts();
+    if (drafts.length === 0) {
+      setError("Nothing to save. Edit a product or add an order name on a new row.");
+      return false;
+    }
+    const incomplete = drafts.find(
+      (row) =>
+        row.isSet &&
+        row.componentLabels.length > 1 &&
+        !bundleCostsComplete(
+          Number(row.unitCost) || 0,
+          row.componentLabels.map((item) => parsedAllocatedCost(item.allocatedCost)),
+        ),
+    );
+    if (incomplete) {
+      setError(
+        `Enter a cost breakdown for ${productDisplayName(incomplete) || incomplete.orderName || "the mixed bundle"} that adds up to its unit cost.`,
+      );
+      return false;
+    }
+    setPending(true);
+    setError(null);
+    setMessage(null);
+    try {
+      const result = await saveProducts(
+        drafts.map((row) => ({
+          ...row,
+          components: row.componentLabels.length > 0 ? contentsPayload(row.componentLabels) : row.components,
+        })),
+      );
+      const leftover = [...(result.saved ?? [])];
+      dirtyIdsRef.current.clear();
+      setRows((current) =>
+        current
+          .map((row) => {
+            if (row.id) return row;
+            const byKey = leftover.findIndex((item) => item.clientKey && item.clientKey === row.clientKey);
+            if (byKey >= 0) {
+              const id = leftover[byKey].id;
+              leftover.splice(byKey, 1);
+              return { ...row, id };
+            }
+            return row;
+          })
+          .filter((row) => row.id || row.orderName.trim() || row.name.trim()),
+      );
+      setDirty(new Set());
+      setSnapshotAt(new Date());
+      await router.refresh();
+      setMessage(`Saved ${drafts.filter((row) => row.orderName.trim()).length} product${drafts.length === 1 ? "" : "s"}.`);
+      return true;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not save products.");
+      return false;
+    } finally {
+      setPending(false);
+    }
+  }
+
+  async function finishEdit() {
+    if (persistableDrafts().length > 0) {
+      const saved = await onSave();
+      if (!saved) return;
+    }
+    leaveEdit();
+  }
+
+  function reloadCatalog() {
+    if (editing && hasUnsaved) return;
+    setSnapshotAt(new Date());
+    router.refresh();
   }
 
   function setRowTag(index: number, tagId: string) {
@@ -864,141 +1105,6 @@ export function ProductsTable({
     setDirty((current) => new Set(current).add(index));
   }
 
-  async function applyType() {
-    if (selectedCount === 0) {
-      setError("Select at least one product.");
-      return;
-    }
-    const productIds = [...selected];
-    applyToSelected(productIds, { classification });
-    setPending(true);
-    setError(null);
-    setMessage(null);
-    try {
-      await postCatalogBulk({ kind: "type", productIds, classification });
-      applyToSelected(productIds, { classification });
-      setMessage(`Updated default type on ${productIds.length} product${productIds.length === 1 ? "" : "s"}.`);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not update default type.");
-    } finally {
-      setPending(false);
-    }
-  }
-
-  async function applyBranches() {
-    if (selectedCount === 0) {
-      setError("Select at least one product.");
-      return;
-    }
-    const productIds = [...selected];
-    const nextBranchIds = [...bulkBranchIds];
-    applyToSelected(productIds, { branchIds: nextBranchIds });
-    setPending(true);
-    setError(null);
-    setMessage(null);
-    try {
-      await postCatalogBulk({ kind: "salons", productIds, branchIds: nextBranchIds });
-      applyToSelected(productIds, { branchIds: nextBranchIds });
-      setMessage(
-        nextBranchIds.length === 0
-          ? `Removed ${productIds.length} product${productIds.length === 1 ? "" : "s"} from both salon lists.`
-          : `Updated salon lists for ${productIds.length} product${productIds.length === 1 ? "" : "s"}.`,
-      );
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not update salon lists.");
-    } finally {
-      setPending(false);
-    }
-  }
-
-  async function applyTags() {
-    if (selectedCount === 0) {
-      setError("Select at least one product.");
-      return;
-    }
-    const productIds = [...selected];
-    const nextTag = tags.find((tag) => tag.id === bulkTagId);
-    const tagIds = nextTag ? [nextTag.id] : [];
-    const tagNames = nextTag ? [nextTag.name] : [];
-    applyToSelected(productIds, { tagIds, tagNames });
-    setPending(true);
-    setError(null);
-    setMessage(null);
-    try {
-      await postCatalogBulk({ kind: "tags", productIds, tagIds });
-      applyToSelected(productIds, { tagIds, tagNames });
-      setMessage(
-        bulkTagId
-          ? `Set tag on ${productIds.length} product${productIds.length === 1 ? "" : "s"}.`
-          : `Cleared tags on ${productIds.length} product${productIds.length === 1 ? "" : "s"}.`,
-      );
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not update tags.");
-    } finally {
-      setPending(false);
-    }
-  }
-
-  async function onSave() {
-    const drafts = rows.filter((row, index) => {
-      if (!row.orderName.trim()) return false;
-      if (!row.id) return dirty.has(index);
-      return dirty.has(index) || dirtyIdsRef.current.has(row.id);
-    });
-    if (drafts.length === 0) {
-      setError("Nothing to save. Edit a product or add an order name on a new row.");
-      return;
-    }
-    const incomplete = drafts.find(
-      (row) =>
-        row.isSet &&
-        row.componentLabels.length > 1 &&
-        !bundleCostsComplete(
-          Number(row.unitCost) || 0,
-          row.componentLabels.map((item) => parsedAllocatedCost(item.allocatedCost)),
-        ),
-    );
-    if (incomplete) {
-      setError(
-        `Enter a cost breakdown for ${productDisplayName(incomplete) || incomplete.orderName || "the mixed bundle"} that adds up to its unit cost.`,
-      );
-      return;
-    }
-    setPending(true);
-    setError(null);
-    setMessage(null);
-    try {
-      const result = await saveProducts(
-        drafts.map((row) => ({
-          ...row,
-          components: row.componentLabels.length > 0 ? contentsPayload(row.componentLabels) : row.components,
-        })),
-      );
-      const leftover = [...(result.saved ?? [])];
-      dirtyIdsRef.current.clear();
-      setRows((current) =>
-        current
-          .map((row) => {
-            if (row.id) return row;
-            const byKey = leftover.findIndex((item) => item.clientKey && item.clientKey === row.clientKey);
-            if (byKey >= 0) {
-              const id = leftover[byKey].id;
-              leftover.splice(byKey, 1);
-              return { ...row, id };
-            }
-            return row;
-          })
-          .filter((row) => row.id || row.orderName.trim() || row.name.trim()),
-      );
-      setDirty(new Set());
-      setMessage(`Saved ${drafts.filter((row) => row.orderName.trim()).length} product${drafts.length === 1 ? "" : "s"}.`);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not save products.");
-    } finally {
-      setPending(false);
-    }
-  }
-
   async function onDelete(index: number) {
     const row = rows[index];
     if (!row) return;
@@ -1013,8 +1119,12 @@ export function ProductsTable({
       }
       setRows((current) => {
         const next = current.filter((_, rowIndex) => rowIndex !== index);
-        return next.length > 0 ? next : [emptyRow(branches.map((branch) => branch.id))];
+        if (editing) {
+          return next.length > 0 ? next : [emptyRow(branches.map((branch) => branch.id))];
+        }
+        return next;
       });
+      setSnapshotAt(new Date());
       router.refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not delete that product.");
@@ -1027,83 +1137,33 @@ export function ProductsTable({
 
   return (
     <div className="space-y-3">
-      <div className="relative z-40 space-y-3 rounded-xl border border-border bg-card p-4">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <p className="text-sm font-medium">{selectedLabel}</p>
-          <button className={btnSecondaryClass} type="button" onClick={toggleAll}>
-            {allSelected ? "Clear selection" : "Select all"}
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p className="text-sm text-muted">
+          {editing
+            ? `Editing catalog. Snapshot from ${snapshotAt.toLocaleString()}. Click Done to save if this is your session.`
+            : "Viewing catalog. Open Edit catalog to change products."}
+        </p>
+        <div className="flex flex-wrap items-center gap-3">
+          <p
+            className="text-sm text-muted"
+            title="Set when someone clicks Done after saving catalog edits. This tab also reloads when you come back to it."
+          >
+            {formatCatalogSavedLabel(catalogSavedAt, catalogSavedByEmail)}
+          </p>
+          <button
+            className={btnSecondaryClass}
+            type="button"
+            disabled={exportRows.length === 0}
+            onClick={downloadFilteredCsv}
+            title="Download the filtered product list as CSV"
+          >
+            Download CSV
           </button>
-        </div>
-
-        <div className="grid gap-3 lg:grid-cols-3">
-          <div className="space-y-2">
-            <p className="text-sm font-medium">Salon lists</p>
-            <SalonChipField
-              branches={branches}
-              selectedIds={bulkBranchIds}
-              onChange={setBulkBranchIds}
-              disabled={pending}
-              ariaLabel="Set salons for selected products"
-            />
-            <button className={btnClass} disabled={pending || selectedCount === 0} type="button" onClick={applyBranches}>
-              Apply salons
-            </button>
-            <p className="text-xs text-muted">
-              Add min and/or kin so selected SKUs appear on that salon&apos;s Products page. Apply with no
-              chips to remove them from both lists.
-            </p>
-          </div>
-
-          <div className="space-y-2">
-            <p className="text-sm font-medium">Default type</p>
-            <div className="flex flex-wrap items-end gap-2">
-              <label className="min-w-48 flex-1 space-y-1 text-sm">
-                <span className="text-muted">Set classification</span>
-                <select
-                  className={fieldClass}
-                  value={classification}
-                  onChange={(event) => setClassification(event.target.value as ProductClassification | "")}
-                >
-                  <option value="">None</option>
-                  {CLASSIFICATIONS.map((item) => (
-                    <option key={item.value} value={item.value}>
-                      {item.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <button className={btnClass} disabled={pending || selectedCount === 0} type="button" onClick={applyType}>
-                Apply type
-              </button>
-            </div>
-          </div>
-
-          <div className="space-y-2">
-            <p className="text-sm font-medium">Tags</p>
-            <div className="flex flex-wrap items-end gap-2">
-              <label className="min-w-48 flex-1 space-y-1 text-sm">
-                <span className="text-muted">Set tag</span>
-                <select className={fieldClass} value={bulkTagId} onChange={(event) => setBulkTagId(event.target.value)}>
-                  <option value="">None</option>
-                  {tags.map((tag) => (
-                    <option key={tag.id} value={tag.id}>
-                      {tag.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <button className={btnSecondaryClass} disabled={pending || selectedCount === 0} type="button" onClick={applyTags}>
-                Apply tag
-              </button>
-            </div>
-            <p className="text-xs text-muted">
-              Sets one tag on the selected rows. Choose None to clear the tag.
-            </p>
-          </div>
         </div>
       </div>
 
-      <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
+      <div className="grid grid-cols-1 items-start gap-3 lg:grid-cols-[minmax(0,1fr)_auto]">
+      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
         <label className="space-y-1 text-sm">
           <span>Find product</span>
           <input
@@ -1167,29 +1227,6 @@ export function ProductsTable({
             <option value="none">No salon</option>
           </select>
         </label>
-        <div className="flex flex-wrap items-end gap-2 pb-2 text-sm">
-          <label className="flex items-center gap-2">
-            <input
-              type="checkbox"
-              checked={groupByBrandSub}
-              onChange={(event) => {
-                setGroupByBrandSub(event.target.checked);
-                if (!event.target.checked) setCollapsedGroups(new Set());
-                setPage(0);
-              }}
-            />
-            <span>Group by Brand_sub</span>
-          </label>
-          {groupByBrandSub ? (
-            <button
-              className={btnSecondaryClass}
-              type="button"
-              onClick={allGroupsCollapsed ? expandAllGroups : collapseAllGroups}
-            >
-              {allGroupsCollapsed ? "Expand all groups" : "Collapse all groups"}
-            </button>
-          ) : null}
-        </div>
         <label className="space-y-1 text-sm">
           <span>Size</span>
           <select
@@ -1266,27 +1303,61 @@ export function ProductsTable({
           </select>
         </label>
       </div>
+      <div className="flex items-end gap-3 self-start rounded-xl border border-sky-300 bg-sky-200 px-4 py-3">
+        <label className="min-w-40 space-y-1 text-sm">
+          <span className="font-medium text-sky-950">Group by</span>
+          <select
+            className={cn(fieldClass, "border-sky-400 bg-sky-100")}
+            value={groupBy}
+            onChange={(event) => {
+              setGroupBy(event.target.value as GroupBy);
+              setCollapsedGroups(new Set());
+              setPage(0);
+            }}
+          >
+            {GROUP_BY_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        {groupBy !== "none" ? (
+          <button
+            className="inline-flex items-center justify-center rounded-lg border border-sky-300 bg-sky-600 px-3 py-2 text-sm font-medium text-white hover:bg-sky-700 disabled:opacity-50"
+            type="button"
+            onClick={allGroupsCollapsed ? expandAllGroups : collapseAllGroups}
+          >
+            {allGroupsCollapsed ? "Expand all groups" : "Collapse all groups"}
+          </button>
+        ) : null}
+      </div>
+      </div>
       <div className="flex flex-wrap items-center justify-between gap-2">
         <p className="text-sm text-muted">
           {listedProductCount} product{listedProductCount === 1 ? "" : "s"}
           {displayGrouped.length > pageSize
             ? ` · showing ${currentPage * pageSize + 1}–${Math.min(displayGrouped.length, currentPage * pageSize + pageSize)}`
             : ""}
-          {groupByBrandSub ? ` · grouped by Brand_sub` : ""}
+          {groupBy !== "none"
+            ? ` · grouped by ${GROUP_BY_OPTIONS.find((option) => option.value === groupBy)?.label}`
+            : ""}
         </p>
         <div className="flex flex-wrap gap-2">
-          <button
-            className={btnSecondaryClass}
-            type="button"
-            disabled={exportRows.length === 0}
-            onClick={downloadFilteredCsv}
-            title="Download the filtered product list as CSV"
-          >
-            Download CSV
-          </button>
-          <button className={btnSecondaryClass} type="button" onClick={addRow}>
-            Add product
-          </button>
+          {editing ? (
+            <button className={btnSecondaryClass} type="button" onClick={addRow}>
+              Add product
+            </button>
+          ) : null}
+          {editing ? (
+            <button className={btnClass} type="button" disabled={pending} onClick={() => void finishEdit()}>
+              {pending ? "Saving…" : "Done"}
+            </button>
+          ) : (
+            <button className={btnClass} type="button" disabled={pending} onClick={() => void enterEdit()}>
+              Edit catalog
+            </button>
+          )}
         </div>
       </div>
 
@@ -1312,12 +1383,32 @@ export function ProductsTable({
           <thead ref={headRef}>
             <tr>
               <th className={cn(thClass, wCheck, stickyCheckHead)}>
-                <input
-                  type="checkbox"
-                  checked={allSelected}
-                  onChange={toggleAll}
-                  aria-label="Select all products"
-                />
+                <div className="flex items-center gap-1.5 whitespace-nowrap">
+                  <input
+                    type="checkbox"
+                    checked={allSelected}
+                    onChange={toggleAll}
+                    aria-label="Select all products"
+                  />
+                  <button
+                    className={cn(
+                      "whitespace-nowrap text-sm font-medium underline",
+                      editing ? "text-blue-600" : "text-slate-900",
+                    )}
+                    type="button"
+                    disabled={!editing || pending || selectedCount === 0}
+                    title={
+                      !editing
+                        ? "Edit catalog to bulk edit"
+                        : selectedCount === 0
+                          ? "Select products first"
+                          : "Bulk edit selected products"
+                    }
+                    onClick={() => setBulkOpen(true)}
+                  >
+                    Bulk edit
+                  </button>
+                </div>
               </th>
               <th
                 className={cn(thClass, wSalons, stickySalonsHead)}
@@ -1385,17 +1476,35 @@ export function ProductsTable({
                 const crp = confirmedRetailPrice(unitCost, row.rrp === "" ? null : Number(row.rrp));
                 const margin = grossMarginPercent(crp, unitCost);
                 const marginWithTax = grossMarginPercent(crp, pricing.unitCostWithTax);
-                const groupKey = rowGroupKey(row);
+                const groupKey = groupKeyFor(row);
                 const previous = visible[visibleIndex - 1];
-                const previousKey = previous ? rowGroupKey(previous.row) : null;
-                const showGroup =
-                  previousKey !== groupKey && (groupByBrandSub || groupKey === UNGROUPED);
+                const previousKey = previous ? groupKeyFor(previous.row) : null;
+                const showGroup = groupBy !== "none" && previousKey !== groupKey;
                 const groupIds = showGroup ? groupProductIds(groupKey) : [];
                 const groupSelectedCount = groupIds.filter((id) => selected.includes(id)).length;
                 const groupCollapsed = collapsedGroups.has(groupKey);
                 const justUpdated = Boolean(row.id && recentBulkIds.has(row.id));
                 const updatedCell = justUpdated ? "ring-2 ring-emerald-400 ring-inset" : "";
                 const inBundles = row.id ? usedInBundles.get(row.id) ?? [] : [];
+                const salonLabels = row.branchIds
+                  .map((id) => {
+                    const branch = branches.find((item) => item.id === id);
+                    return branch ? salonChipLabel(branch.name) : "";
+                  })
+                  .filter(Boolean)
+                  .join(", ");
+                const contentsLabel = row.isSet
+                  ? row.componentLabels.length === 0
+                    ? "Choose products"
+                    : row.componentLabels.length === 1
+                      ? "1 item"
+                      : bundleCostsComplete(
+                            Number(row.unitCost) || 0,
+                            row.componentLabels.map((item) => parsedAllocatedCost(item.allocatedCost)),
+                          )
+                        ? `${row.componentLabels.length} items`
+                        : `${row.componentLabels.length} items · set cost split`
+                  : "—";
                 return (
                   <Fragment key={index < 0 ? `empty-group-${row.brand}-${row.brandSub}` : row.id ?? `new-${index}`}>
                     {showGroup ? (
@@ -1463,137 +1572,191 @@ export function ProductsTable({
                       className={cn(tdClass, wSalons, stickySalons, rowBg(isSelected), updatedCell)}
                       style={{ left: `${SELECT_COL_REM}rem` }}
                     >
-                      <SalonChipField
-                        compact
-                        branches={branches}
-                        selectedIds={row.branchIds}
-                        onChange={(ids) => setRowBranches(index, ids)}
-                        disabled={pending}
-                        ariaLabel={`Salons for ${productDisplayName(row) || row.orderName || "product"}`}
-                      />
+                      {editing ? (
+                        <SalonChipField
+                          compact
+                          branches={branches}
+                          selectedIds={row.branchIds}
+                          onChange={(ids) => setRowBranches(index, ids)}
+                          disabled={pending}
+                          ariaLabel={`Salons for ${productDisplayName(row) || row.orderName || "product"}`}
+                        />
+                      ) : (
+                        <ViewValue>{dash(salonLabels)}</ViewValue>
+                      )}
                     </td>
                     <td className={cn(tdClass, wName, stickyName, rowBg(isSelected))} style={{ left: nameLeft }}>
-                      <input
-                        className={cn(fieldClass, wName)}
-                        value={row.orderName}
-                        autoFocus={!row.id && visibleIndex === 0 && currentPage === 0}
-                        placeholder={!row.id ? "Order name" : undefined}
-                        onChange={(event) => updateRow(index, { orderName: event.target.value })}
-                      />
+                      {editing ? (
+                        <input
+                          className={cn(fieldClass, wName)}
+                          value={row.orderName}
+                          autoFocus={!row.id && visibleIndex === 0 && currentPage === 0}
+                          placeholder={!row.id ? "Order name" : undefined}
+                          onChange={(event) => updateRow(index, { orderName: event.target.value })}
+                        />
+                      ) : (
+                        <ViewValue>{dash(row.orderName)}</ViewValue>
+                      )}
                     </td>
                     <td className={cn(tdClass, wFriendly)}>
-                      <input
-                        className={cn(fieldClass, wFriendly)}
-                        value={row.name}
-                        placeholder="Optional"
-                        onChange={(event) => updateRow(index, { name: event.target.value })}
-                        aria-label={`Recognizable name for ${row.orderName || "product"}`}
-                      />
+                      {editing ? (
+                        <input
+                          className={cn(fieldClass, wFriendly)}
+                          value={row.name}
+                          placeholder="Optional"
+                          onChange={(event) => updateRow(index, { name: event.target.value })}
+                          aria-label={`Recognizable name for ${row.orderName || "product"}`}
+                        />
+                      ) : (
+                        <ViewValue>{dash(row.name)}</ViewValue>
+                      )}
                     </td>
                     <td className={cn(tdClass, wField)}>
-                      <input
-                        className={cn(fieldClass, wField)}
-                        value={row.sku}
-                        onChange={(event) => updateRow(index, { sku: event.target.value })}
-                      />
+                      {editing ? (
+                        <input
+                          className={cn(fieldClass, wField)}
+                          value={row.sku}
+                          onChange={(event) => updateRow(index, { sku: event.target.value })}
+                        />
+                      ) : (
+                        <ViewValue>{dash(row.sku)}</ViewValue>
+                      )}
                     </td>
                     <td className={cn(tdClass, wField)}>
-                      <input
-                        className={cn(fieldClass, wField)}
-                        value={row.barcode}
-                        onChange={(event) => updateRow(index, { barcode: event.target.value })}
-                      />
+                      {editing ? (
+                        <input
+                          className={cn(fieldClass, wField)}
+                          value={row.barcode}
+                          onChange={(event) => updateRow(index, { barcode: event.target.value })}
+                        />
+                      ) : (
+                        <ViewValue>{dash(row.barcode)}</ViewValue>
+                      )}
                     </td>
                     <td className={cn(tdClass, wField)}>
-                      <input
-                        className={cn(fieldClass, wField)}
-                        value={row.brand}
-                        onChange={(event) => updateRow(index, { brand: event.target.value })}
-                      />
+                      {editing ? (
+                        <input
+                          className={cn(fieldClass, wField)}
+                          value={row.brand}
+                          onChange={(event) => updateRow(index, { brand: event.target.value })}
+                        />
+                      ) : (
+                        <ViewValue>{dash(row.brand)}</ViewValue>
+                      )}
                     </td>
                     <td className={cn(tdClass, wField)}>
-                      <input
-                        className={cn(fieldClass, wField)}
-                        value={row.brandSub}
-                        list={row.brand.trim() ? brandSubListId(row.brand) : undefined}
-                        onChange={(event) => updateRow(index, { brandSub: event.target.value })}
-                      />
+                      {editing ? (
+                        <input
+                          className={cn(fieldClass, wField)}
+                          value={row.brandSub}
+                          list={row.brand.trim() ? brandSubListId(row.brand) : undefined}
+                          onChange={(event) => updateRow(index, { brandSub: event.target.value })}
+                        />
+                      ) : (
+                        <ViewValue>{dash(row.brandSub)}</ViewValue>
+                      )}
                     </td>
                     <td className={cn(tdClass, wField)}>
-                      <input
-                        className={cn(fieldClass, wField)}
-                        value={row.size}
-                        onChange={(event) => updateRow(index, { size: event.target.value })}
-                      />
+                      {editing ? (
+                        <input
+                          className={cn(fieldClass, wField)}
+                          value={row.size}
+                          onChange={(event) => updateRow(index, { size: event.target.value })}
+                        />
+                      ) : (
+                        <ViewValue>{dash(row.size)}</ViewValue>
+                      )}
                     </td>
                     <td className={cn(tdClass, wType)}>
-                      <select
-                        key={`type-${row.id ?? index}-${row.classification || "none"}`}
-                        className={cn(fieldClass, wType, updatedCell)}
-                        value={row.classification || ""}
-                        onChange={(event) =>
-                          updateRow(index, { classification: event.target.value as ProductClassification | "" })
-                        }
-                      >
-                        <option value="">None</option>
-                        {CLASSIFICATIONS.map((item) => (
-                          <option key={item.value} value={item.value}>
-                            {item.label}
-                          </option>
-                        ))}
-                      </select>
-                    </td>
-                    <td className={cn(tdClass, wContents)}>
-                      {tags.length === 0 ? (
-                        <span className="text-sm text-muted">—</span>
-                      ) : (
+                      {editing ? (
                         <select
-                          key={`tag-${row.id ?? index}-${row.tagIds[0] ?? "none"}`}
-                          className={cn(fieldClass, wContents, updatedCell)}
-                          value={row.tagIds[0] ?? ""}
-                          onChange={(event) => setRowTag(index, event.target.value)}
-                          aria-label={`Tag for ${productDisplayName(row) || row.orderName || "product"}`}
+                          key={`type-${row.id ?? index}-${row.classification || "none"}`}
+                          className={cn(fieldClass, wType, updatedCell)}
+                          value={row.classification || ""}
+                          onChange={(event) =>
+                            updateRow(index, { classification: event.target.value as ProductClassification | "" })
+                          }
                         >
                           <option value="">None</option>
-                          {tags.map((tag) => (
-                            <option key={tag.id} value={tag.id}>
-                              {tag.name}
+                          {CLASSIFICATIONS.map((item) => (
+                            <option key={item.value} value={item.value}>
+                              {item.label}
                             </option>
                           ))}
                         </select>
+                      ) : (
+                        <ViewValue>
+                          {row.classification ? classificationLabel(row.classification) : "—"}
+                        </ViewValue>
+                      )}
+                    </td>
+                    <td className={cn(tdClass, wContents)}>
+                      {editing ? (
+                        tags.length === 0 ? (
+                          <span className="text-sm text-muted">—</span>
+                        ) : (
+                          <select
+                            key={`tag-${row.id ?? index}-${row.tagIds[0] ?? "none"}`}
+                            className={cn(fieldClass, wContents, updatedCell)}
+                            value={row.tagIds[0] ?? ""}
+                            onChange={(event) => setRowTag(index, event.target.value)}
+                            aria-label={`Tag for ${productDisplayName(row) || row.orderName || "product"}`}
+                          >
+                            <option value="">None</option>
+                            {tags.map((tag) => (
+                              <option key={tag.id} value={tag.id}>
+                                {tag.name}
+                              </option>
+                            ))}
+                          </select>
+                        )
+                      ) : (
+                        <ViewValue>{dash(row.tagNames.filter(Boolean).join(", "))}</ViewValue>
                       )}
                     </td>
                     <td className={cn(tdClass, wSupplier)}>
-                      {suppliers.length === 0 && !row.supplierIds[0] ? (
-                        <span className="text-sm text-muted">—</span>
+                      {editing ? (
+                        suppliers.length === 0 && !row.supplierIds[0] ? (
+                          <span className="text-sm text-muted">—</span>
+                        ) : (
+                          <select
+                            className={cn(fieldClass, wSupplier)}
+                            value={row.supplierIds[0] ?? ""}
+                            onChange={(event) => setRowSupplier(index, event.target.value)}
+                            aria-label={`Supplier for ${productDisplayName(row) || row.orderName || "product"}`}
+                          >
+                            <option value="">None</option>
+                            {row.supplierIds[0] && !suppliers.some((supplier) => supplier.id === row.supplierIds[0]) ? (
+                              <option value={row.supplierIds[0]}>{row.supplierName || "Unknown supplier"}</option>
+                            ) : null}
+                            {suppliers.map((supplier) => (
+                              <option key={supplier.id} value={supplier.id}>
+                                {supplier.name}
+                              </option>
+                            ))}
+                          </select>
+                        )
                       ) : (
-                        <select
-                          className={cn(fieldClass, wSupplier)}
-                          value={row.supplierIds[0] ?? ""}
-                          onChange={(event) => setRowSupplier(index, event.target.value)}
-                          aria-label={`Supplier for ${productDisplayName(row) || row.orderName || "product"}`}
-                        >
-                          <option value="">None</option>
-                          {row.supplierIds[0] && !suppliers.some((supplier) => supplier.id === row.supplierIds[0]) ? (
-                            <option value={row.supplierIds[0]}>{row.supplierName || "Unknown supplier"}</option>
-                          ) : null}
-                          {suppliers.map((supplier) => (
-                            <option key={supplier.id} value={supplier.id}>
-                              {supplier.name}
-                            </option>
-                          ))}
-                        </select>
+                        <ViewValue>
+                          {dash(
+                            suppliers.find((item) => item.id === row.supplierIds[0])?.name ?? row.supplierName,
+                          )}
+                        </ViewValue>
                       )}
                     </td>
                     <td className={cn(tdClass, wField)}>
-                      <input
-                        className={cn(fieldClass, wField)}
-                        type="number"
-                        min="0"
-                        step="0.01"
-                        value={row.unitCost}
-                        onChange={(event) => updateRow(index, { unitCost: event.target.value })}
-                      />
+                      {editing ? (
+                        <input
+                          className={cn(fieldClass, wField)}
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          value={row.unitCost}
+                          onChange={(event) => updateRow(index, { unitCost: event.target.value })}
+                        />
+                      ) : (
+                        <ViewValue>{formatMoney(unitCost)}</ViewValue>
+                      )}
                     </td>
                     <td className={cn(tdClass, wField)}>
                       <span className="block min-w-28 text-sm">
@@ -1604,14 +1767,18 @@ export function ProductsTable({
                       <span className="block min-w-28 text-sm">{formatMoney(pricing.unitCostWithTax)}</span>
                     </td>
                     <td className={cn(tdClass, wField)}>
-                      <input
-                        className={cn(fieldClass, wField)}
-                        type="number"
-                        min="0"
-                        step="0.01"
-                        value={row.rrp}
-                        onChange={(event) => updateRow(index, { rrp: event.target.value })}
-                      />
+                      {editing ? (
+                        <input
+                          className={cn(fieldClass, wField)}
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          value={row.rrp}
+                          onChange={(event) => updateRow(index, { rrp: event.target.value })}
+                        />
+                      ) : (
+                        <ViewValue>{row.rrp === "" ? "—" : formatMoney(Number(row.rrp))}</ViewValue>
+                      )}
                     </td>
                     <td className={cn(tdClass, wField)}>
                       <span className="block min-w-28 text-sm">{formatMoney(crp)}</span>
@@ -1623,47 +1790,48 @@ export function ProductsTable({
                       <span className="block min-w-28 text-sm">{formatPercent(marginWithTax)}</span>
                     </td>
                     <td className={cn(tdClass, wField)}>
-                      <input
-                        className={cn(fieldClass, wField)}
-                        type="number"
-                        min="0"
-                        step="0.01"
-                        value={row.threshold}
-                        onChange={(event) => updateRow(index, { threshold: event.target.value })}
-                      />
+                      {editing ? (
+                        <input
+                          className={cn(fieldClass, wField)}
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          value={row.threshold}
+                          onChange={(event) => updateRow(index, { threshold: event.target.value })}
+                        />
+                      ) : (
+                        <ViewValue>{row.threshold === "" ? "—" : dash(row.threshold)}</ViewValue>
+                      )}
                     </td>
                     <td className={cn(tdClass, wCheck)}>
-                      <input
-                        type="checkbox"
-                        checked={row.isSet}
-                        onChange={(event) => updateRow(index, { isSet: event.target.checked })}
-                        aria-label={`Mark ${productDisplayName(row) || row.orderName || "product"} as a bundle`}
-                        title="Bundle of other products, not a salon assignment"
-                      />
+                      {editing ? (
+                        <input
+                          type="checkbox"
+                          checked={row.isSet}
+                          onChange={(event) => updateRow(index, { isSet: event.target.checked })}
+                          aria-label={`Mark ${productDisplayName(row) || row.orderName || "product"} as a bundle`}
+                          title="Bundle of other products, not a salon assignment"
+                        />
+                      ) : (
+                        <ViewValue>{row.isSet ? "Yes" : "No"}</ViewValue>
+                      )}
                     </td>
                     <td className={cn(tdClass, wContents)}>
-                      <button
-                        className={cn(btnSecondaryClass, "min-w-56 whitespace-nowrap")}
-                        type="button"
-                        disabled={!row.isSet}
-                        onClick={() => {
-                          setBundleQuery("");
-                          setBundleIndex(index);
-                        }}
-                      >
-                        {row.isSet
-                          ? row.componentLabels.length === 0
-                            ? "Choose products"
-                            : row.componentLabels.length === 1
-                              ? "1 item"
-                              : bundleCostsComplete(
-                                    Number(row.unitCost) || 0,
-                                    row.componentLabels.map((item) => parsedAllocatedCost(item.allocatedCost)),
-                                  )
-                                ? `${row.componentLabels.length} items`
-                                : `${row.componentLabels.length} items · set cost split`
-                          : "—"}
-                      </button>
+                      {editing ? (
+                        <button
+                          className={cn(btnSecondaryClass, "min-w-56 whitespace-nowrap")}
+                          type="button"
+                          disabled={!row.isSet}
+                          onClick={() => {
+                            setBundleQuery("");
+                            setBundleIndex(index);
+                          }}
+                        >
+                          {contentsLabel}
+                        </button>
+                      ) : (
+                        <ViewValue>{contentsLabel === "Choose products" ? "—" : contentsLabel}</ViewValue>
+                      )}
                     </td>
                     <td className={cn(tdClass, wContents)}>
                       {inBundles.length > 0 ? (
@@ -1675,14 +1843,16 @@ export function ProductsTable({
                       )}
                     </td>
                     <td className={cn(tdClass, wField)}>
-                      <button
-                        className="text-sm text-muted underline"
-                        type="button"
-                        disabled={pending}
-                        onClick={() => onDelete(index)}
-                      >
-                        Delete
-                      </button>
+                      {editing ? (
+                        <button
+                          className="text-sm text-muted underline"
+                          type="button"
+                          disabled={pending}
+                          onClick={() => onDelete(index)}
+                        >
+                          Delete
+                        </button>
+                      ) : null}
                     </td>
                   </tr>
                   )}
@@ -1695,25 +1865,6 @@ export function ProductsTable({
       </div>
 
       <div className="flex flex-wrap items-center gap-2">
-        <button
-          className={btnSecondaryClass}
-          type="button"
-          disabled={exportRows.length === 0}
-          onClick={downloadFilteredCsv}
-          title="Download the filtered product list as CSV"
-        >
-          Download CSV
-        </button>
-        <button
-          className={btnSecondaryClass}
-          type="button"
-          onClick={addRow}
-        >
-          Add product
-        </button>
-        <button className={btnClass} type="button" disabled={pending} onClick={onSave}>
-          {pending ? "Saving…" : "Save products"}
-        </button>
         <label className="flex items-center gap-2 text-sm">
           <span className="text-muted">Rows</span>
           <select
@@ -1755,6 +1906,21 @@ export function ProductsTable({
           </>
         ) : null}
       </div>
+
+      {editing ? (
+        <BulkEditModal
+          open={bulkOpen}
+          pending={pending}
+          selectedCount={selectedCount}
+          tags={tags}
+          branches={branches}
+          suppliers={suppliers}
+          brandOptions={brandOptions}
+          brandSubsByBrand={brandSubsByBrand}
+          onClose={() => setBulkOpen(false)}
+          onApply={applyBulk}
+        />
+      ) : null}
 
       {editingBundle && bundleIndex != null ? (
         <BundlePicker
