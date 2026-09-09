@@ -74,6 +74,7 @@ create table store_locations (
   parent_location_id uuid references store_locations(id) on delete set null,
   name               text not null,
   description        text,
+  sort_order         integer not null default 0,
   created_at         timestamptz not null default now(),
   unique (branch_id, name)
 );
@@ -364,6 +365,39 @@ create table inventory_count_items (
   variance           numeric(12,2) generated always as (counted_quantity - expected_quantity) stored,
   notes              text
 );
+
+create table inventory_count_entries (
+  id                       uuid primary key default gen_random_uuid(),
+  inventory_count_id       uuid not null references inventory_counts(id) on delete cascade,
+  inventory_count_item_id  uuid not null references inventory_count_items(id) on delete cascade,
+  quantity_delta           numeric(12,2) not null,
+  created_at               timestamptz not null default now(),
+  created_by               text
+);
+comment on table inventory_count_entries is 'Additive count scans. counted_quantity on inventory_count_items is the running total of these deltas.';
+
+create or replace function fn_fill_uncounted_count_items(p_count_id uuid, p_mode text)
+returns void
+language plpgsql
+security invoker
+set search_path = public
+as $$
+begin
+  if p_mode = 'zero' then
+    update inventory_count_items
+    set counted_quantity = 0
+    where inventory_count_id = p_count_id
+      and counted_quantity is null;
+  elsif p_mode = 'keep' then
+    update inventory_count_items
+    set counted_quantity = coalesce(expected_quantity, 0)
+    where inventory_count_id = p_count_id
+      and counted_quantity is null;
+  else
+    raise exception 'Unknown fill mode';
+  end if;
+end;
+$$;
 
 -- -----------------------------------------------------------------------------
 -- DERIVED VIEWS
@@ -696,6 +730,11 @@ create policy inventory_count_items_company_isolation on inventory_count_items
   for all using (inventory_count_id in (select id from inventory_counts where company_id in (select fn_my_company_ids())))
   with check (inventory_count_id in (select id from inventory_counts where company_id in (select fn_my_company_ids())));
 
+alter table inventory_count_entries enable row level security;
+create policy inventory_count_entries_company_isolation on inventory_count_entries
+  for all using (inventory_count_id in (select id from inventory_counts where company_id in (select fn_my_company_ids())))
+  with check (inventory_count_id in (select id from inventory_counts where company_id in (select fn_my_company_ids())));
+
 -- views (current_stock, low_stock_alerts, invoice_reconciliation) inherit RLS
 -- from their underlying tables automatically — no extra policies needed.
 
@@ -710,6 +749,7 @@ create index idx_product_branches_branch on product_branches (branch_id);
 create index idx_po_items_po on purchase_order_items (purchase_order_id);
 create index idx_gri_po_item on goods_receipt_items (purchase_order_item_id);
 create index idx_invoice_items_gri on invoice_items (goods_receipt_item_id);
+create index idx_inventory_count_entries_count_created on inventory_count_entries (inventory_count_id, created_at desc);
 
 -- -----------------------------------------------------------------------------
 -- SEED DATA — run once you have a company row

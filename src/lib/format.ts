@@ -3,6 +3,17 @@ const sgd = new Intl.NumberFormat("en-SG", {
   currency: "SGD",
 });
 
+const SINGAPORE_DATE = new Intl.DateTimeFormat("en-CA", {
+  timeZone: "Asia/Singapore",
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+});
+
+export function singaporeToday() {
+  return SINGAPORE_DATE.format(new Date());
+}
+
 export function formatMoney(value: number | string | null | undefined) {
   const amount = Number(value ?? 0);
   return Number.isFinite(amount) ? sgd.format(amount) : "—";
@@ -76,11 +87,26 @@ export function productLabel(
 
 export function formatDate(value: string | null | undefined) {
   if (!value) return "—";
-  const date = new Date(value);
+  const iso = /^\d{4}-\d{2}-\d{2}$/.test(value) ? `${value}T12:00:00+08:00` : value;
+  const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return value;
   return date.toLocaleDateString("en-SG", {
+    timeZone: "Asia/Singapore",
     day: "numeric",
     month: "short",
     year: "numeric",
+  });
+}
+
+export function formatDateTime(value: string | null | undefined) {
+  if (!value) return "—";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString("en-SG", {
+    day: "numeric",
+    month: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
   });
 }

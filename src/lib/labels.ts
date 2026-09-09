@@ -59,3 +59,10 @@ export function salonChipLabel(name: string) {
   const normalized = name.trim().toLowerCase().replace(/\s+salon$/, "");
   return normalized || name.trim().toLowerCase();
 }
+
+export function countStatusLabel(status: string) {
+  if (status === "in_progress") return "Draft";
+  if (status === "completed") return "Confirmed";
+  if (status === "voided") return "Voided";
+  return status.replaceAll("_", " ");
+}

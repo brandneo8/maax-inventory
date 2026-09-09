@@ -1,9 +1,10 @@
 import Link from "next/link";
 import { requireBranch } from "@/lib/auth";
 import { getInventoryCounts } from "@/lib/data/counts";
-import { formatDate } from "@/lib/format";
-import { classificationLabel } from "@/lib/labels";
+import { formatDate, formatQty } from "@/lib/format";
+import { classificationLabel, countStatusLabel } from "@/lib/labels";
 import { btnClass, tableClass, tdClass, thClass } from "@/lib/ui";
+import { CountRecordAction } from "./delete-count-button";
 
 export default async function CountsPage() {
   const { supabase, companyId, branch } = await requireBranch();
@@ -16,7 +17,7 @@ export default async function CountsPage() {
           <h1 className="text-2xl font-semibold tracking-tight">Inventory counts</h1>
           <p className="mt-1 text-sm text-muted">
             Working in {branch.displayName}. Scope a session by location, brand, type, or tag.
-            Completing it writes ledger adjustments for this salon only.
+            Completing it writes ledger adjustments for this salon only. Open a draft to keep counting later.
           </p>
         </div>
         <Link className={btnClass} href="/counts/new">
@@ -30,14 +31,17 @@ export default async function CountsPage() {
             <tr>
               <th className={thClass}>Date</th>
               <th className={thClass}>Scope</th>
+              <th className={thClass}>Counted qty</th>
+              <th className={thClass}>Unique SKUs</th>
               <th className={thClass}>Counted by</th>
               <th className={thClass}>Status</th>
+              <th className={thClass} />
             </tr>
           </thead>
           <tbody>
             {counts.length === 0 ? (
               <tr>
-                <td className={tdClass} colSpan={4}>
+                <td className={tdClass} colSpan={7}>
                   No counts yet.
                 </td>
               </tr>
@@ -65,8 +69,17 @@ export default async function CountsPage() {
                       </Link>
                     </td>
                     <td className={tdClass}>{scope}</td>
+                    <td className={tdClass}>{formatQty(count.countedQuantity)}</td>
+                    <td className={tdClass}>{count.uniqueSkus}</td>
                     <td className={tdClass}>{count.counted_by ?? "—"}</td>
-                    <td className={tdClass}>{count.status.replace("_", " ")}</td>
+                    <td className={tdClass}>{countStatusLabel(count.status)}</td>
+                    <td className={tdClass}>
+                      {count.status === "in_progress" ? (
+                        <CountRecordAction countId={count.id} kind="delete" compact />
+                      ) : count.status === "completed" ? (
+                        <CountRecordAction countId={count.id} kind="void" compact />
+                      ) : null}
+                    </td>
                   </tr>
                 );
               })

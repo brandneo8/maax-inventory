@@ -1,8 +1,9 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { unstable_rethrow } from "next/navigation";
 import { createInventoryCount } from "../actions";
+import { formatDate } from "@/lib/format";
 import { CLASSIFICATIONS } from "@/lib/labels";
 import { btnClass, fieldClass } from "@/lib/ui";
 
@@ -12,12 +13,17 @@ export function CountForm({
   locations,
   brands,
   tags,
+  today,
+  latestPostedDate,
 }: {
   locations: Option[];
   brands: Option[];
   tags: Option[];
+  today: string;
+  latestPostedDate: string | null;
 }) {
-  const today = useMemo(() => new Date().toISOString().slice(0, 10), []);
+  const maxDate = latestPostedDate && latestPostedDate >= today ? latestPostedDate : undefined;
+  const defaultDate = maxDate && today > maxDate ? maxDate : today;
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
 
@@ -42,7 +48,24 @@ export function CountForm({
       <div className="grid gap-3 rounded-xl border border-border bg-card p-4 md:grid-cols-2">
         <label className="space-y-1 text-sm">
           <span>Count date</span>
-          <input className={fieldClass} type="date" name="count_date" defaultValue={today} />
+          <input
+            className={fieldClass}
+            type="date"
+            name="count_date"
+            defaultValue={defaultDate}
+            min={today}
+            max={maxDate}
+            required
+          />
+          <span className="block text-xs text-muted">
+            Today is {formatDate(today)} (Singapore). Dates before today are not allowed
+            {maxDate
+              ? `, and you cannot choose a date after the latest confirmed count (${formatDate(maxDate)}).`
+              : ". Future dates can be scheduled, then confirmed on that day."}
+            {latestPostedDate
+              ? ` Confirming another count on ${formatDate(latestPostedDate)} replaces the previous confirmed count for that day.`
+              : " Confirming another count on the same day replaces the previous confirmed count for that day."}
+          </span>
         </label>
         <label className="space-y-1 text-sm">
           <span>Location</span>

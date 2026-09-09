@@ -319,6 +319,48 @@ export type Database = {
           },
         ]
       }
+      inventory_count_entries: {
+        Row: {
+          created_at: string
+          created_by: string | null
+          id: string
+          inventory_count_id: string
+          inventory_count_item_id: string
+          quantity_delta: number
+        }
+        Insert: {
+          created_at?: string
+          created_by?: string | null
+          id?: string
+          inventory_count_id: string
+          inventory_count_item_id: string
+          quantity_delta: number
+        }
+        Update: {
+          created_at?: string
+          created_by?: string | null
+          id?: string
+          inventory_count_id?: string
+          inventory_count_item_id?: string
+          quantity_delta?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "inventory_count_entries_inventory_count_id_fkey"
+            columns: ["inventory_count_id"]
+            isOneToOne: false
+            referencedRelation: "inventory_counts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "inventory_count_entries_inventory_count_item_id_fkey"
+            columns: ["inventory_count_item_id"]
+            isOneToOne: false
+            referencedRelation: "inventory_count_items"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       inventory_count_items: {
         Row: {
           counted_quantity: number | null
@@ -1155,6 +1197,7 @@ export type Database = {
           id: string
           name: string
           parent_location_id: string | null
+          sort_order: number
         }
         Insert: {
           branch_id: string
@@ -1163,6 +1206,7 @@ export type Database = {
           id?: string
           name: string
           parent_location_id?: string | null
+          sort_order?: number
         }
         Update: {
           branch_id?: string
@@ -1171,6 +1215,7 @@ export type Database = {
           id?: string
           name?: string
           parent_location_id?: string | null
+          sort_order?: number
         }
         Relationships: [
           {
@@ -1391,6 +1436,10 @@ export type Database = {
       }
     }
     Functions: {
+      fn_fill_uncounted_count_items: {
+        Args: { p_count_id: string; p_mode: string }
+        Returns: undefined
+      }
       fn_generate_invoice_items_from_receipt: {
         Args: { p_goods_receipt_id: string; p_invoice_id: string }
         Returns: number

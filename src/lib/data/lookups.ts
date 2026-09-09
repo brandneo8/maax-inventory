@@ -2,6 +2,14 @@ import type { createClient } from "@/lib/supabase/server";
 
 type Client = Awaited<ReturnType<typeof createClient>>;
 
+function throwQuery(error: unknown, fallback: string): never {
+  if (error && typeof error === "object" && "message" in error) {
+    const message = String((error as { message?: unknown }).message ?? "").trim();
+    if (message) throw new Error(message);
+  }
+  throw new Error(fallback);
+}
+
 export async function getBranches(supabase: Client, companyId: string) {
   const { data, error } = await supabase
     .from("branches")
@@ -9,18 +17,19 @@ export async function getBranches(supabase: Client, companyId: string) {
     .eq("company_id", companyId)
     .order("name");
 
-  if (error) throw error;
+  if (error) throwQuery(error, "Could not load salons.");
   return data ?? [];
 }
 
 export async function getStoreLocations(supabase: Client, companyId: string) {
   const { data, error } = await supabase
     .from("store_locations")
-    .select("id, name, branch_id, branches!inner(company_id)")
+    .select("id, name, branch_id, sort_order, branches!inner(company_id)")
     .eq("branches.company_id", companyId)
+    .order("sort_order")
     .order("name");
 
-  if (error) throw error;
+  if (error) throwQuery(error, "Could not load data.");
   return (data ?? []).map(({ branches: _branches, ...location }) => location);
 }
 
@@ -31,7 +40,7 @@ export async function getBrands(supabase: Client, companyId: string) {
     .eq("company_id", companyId)
     .order("name");
 
-  if (error) throw error;
+  if (error) throwQuery(error, "Could not load data.");
   return data ?? [];
 }
 
@@ -42,7 +51,7 @@ export async function getTags(supabase: Client, companyId: string) {
     .eq("company_id", companyId)
     .order("name");
 
-  if (error) throw error;
+  if (error) throwQuery(error, "Could not load data.");
   return data ?? [];
 }
 
@@ -53,7 +62,7 @@ export async function getTaxRates(supabase: Client, companyId: string) {
     .eq("company_id", companyId)
     .order("name");
 
-  if (error) throw error;
+  if (error) throwQuery(error, "Could not load data.");
   return data ?? [];
 }
 
@@ -64,7 +73,7 @@ export async function getSuppliers(supabase: Client, companyId: string) {
     .eq("company_id", companyId)
     .order("supplier_name");
 
-  if (error) throw error;
+  if (error) throwQuery(error, "Could not load data.");
   return data ?? [];
 }
 
@@ -83,7 +92,7 @@ export async function getProducts(supabase: Client, companyId: string) {
       .order("order_name")
       .range(from, from + pageSize - 1);
 
-    if (error) throw error;
+    if (error) throwQuery(error, "Could not load data.");
     products.push(...(data ?? []));
     if (!data || data.length < pageSize) break;
   }
