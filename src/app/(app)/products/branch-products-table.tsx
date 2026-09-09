@@ -31,6 +31,7 @@ export function BranchProductsTable({
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [names, setNames] = useState<Record<string, string>>(() => namesFromProducts(products));
+  const [searchQuery, setSearchQuery] = useState("");
   const [sizeQuery, setSizeQuery] = useState("");
   const [brandFilter, setBrandFilter] = useState("");
   const [brandSubFilter, setBrandSubFilter] = useState("");
@@ -56,7 +57,14 @@ export function BranchProductsTable({
   );
 
   const visible = useMemo(() => {
+    const needle = searchQuery.trim().toLowerCase();
     return products.filter((product) => {
+      if (needle) {
+        const haystack = [names[product.id], product.name, product.orderName, product.brand]
+          .map((value) => (value ?? "").trim().toLowerCase())
+          .join(" ");
+        if (!haystack.includes(needle)) return false;
+      }
       if (brandFilter && product.brand !== brandFilter) return false;
       if (brandSubFilter === "none" && product.brandSub.trim()) return false;
       if (brandSubFilter && brandSubFilter !== "none" && product.brandSub.trim() !== brandSubFilter) return false;
@@ -67,7 +75,7 @@ export function BranchProductsTable({
       const label = product.sizeLabel?.toLowerCase() ?? "";
       return label.includes(sizeQuery.trim().toLowerCase());
     });
-  }, [brandFilter, brandSubFilter, parsedFilter, products, sizeQuery]);
+  }, [brandFilter, brandSubFilter, names, parsedFilter, products, searchQuery, sizeQuery]);
 
   const grouped = useMemo(() => {
     if (!groupByBrandSub) return [{ key: "", products: visible }];
@@ -194,6 +202,15 @@ export function BranchProductsTable({
       ) : null}
 
       <div className="flex flex-wrap items-end gap-3 rounded-xl border border-border bg-card p-4">
+        <label className="min-w-64 flex-1 space-y-1 text-sm">
+          <span>Search</span>
+          <input
+            className={fieldClass}
+            value={searchQuery}
+            onChange={(event) => setSearchQuery(event.target.value)}
+            placeholder="Name, order name, or brand"
+          />
+        </label>
         <label className="min-w-48 space-y-1 text-sm">
           <span>Brand</span>
           <select
