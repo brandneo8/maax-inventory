@@ -56,14 +56,23 @@ function uniqueProducts(items: CountLine[]): CountProduct[] {
   return [...seen.values()];
 }
 
-function salonFlagsFromItems(items: CountLine[], salonProductIds: string[]) {
-  const assigned = new Set(salonProductIds);
+function salonFlagsFromItems(
+  items: CountLine[],
+  salonProductIds: string[],
+  extraOn: Iterable<string> = [],
+) {
+  const assigned = new Set([...salonProductIds, ...extraOn]);
   return Object.fromEntries(
     [...new Set(items.map((item) => item.productId))].map((productId) => [
       productId,
       assigned.has(productId),
     ]),
   );
+}
+
+function scannedProductIdsFrom(items: CountLine[], entries: CountEntryLine[]) {
+  const itemIds = new Set(entries.map((entry) => entry.itemId));
+  return items.filter((item) => itemIds.has(item.id)).map((item) => item.productId);
 }
 
 function namesFromItems(items: CountLine[]) {
@@ -189,6 +198,7 @@ function CountLinesTable({
   salonHeader,
   salonOn,
   salonEditable,
+  salonLockedIds,
   onSalonChange,
   names,
   nameEditable,
@@ -202,6 +212,7 @@ function CountLinesTable({
   salonHeader?: string;
   salonOn?: Record<string, boolean>;
   salonEditable?: boolean;
+  salonLockedIds?: ReadonlySet<string>;
   onSalonChange?: (productId: string, on: boolean) => void;
   names?: Record<string, string>;
   nameEditable?: boolean;
@@ -224,10 +235,14 @@ function CountLinesTable({
         expected: item.expected,
         counted: quantities[item.id] ?? "",
       }));
+  const salonLocked = (productId: string) => salonLockedIds?.has(productId) ?? false;
+  const salonChecked = (productId: string) => salonLocked(productId) || Boolean(salonOn?.[productId]);
   const salonProductIds = [...new Set(displayRows.map((item) => item.productId))];
-  const salonOnCount = salonProductIds.filter((productId) => salonOn?.[productId]).length;
+  const salonOnCount = salonProductIds.filter((productId) => salonChecked(productId)).length;
   const salonAllOn = salonProductIds.length > 0 && salonOnCount === salonProductIds.length;
   const salonSomeOn = salonOnCount > 0 && salonOnCount < salonProductIds.length;
+  const salonAllLocked =
+    salonProductIds.length > 0 && salonProductIds.every((productId) => salonLocked(productId));
   return (
     <div className={cn("overflow-x-auto rounded-xl border border-border bg-card", frameClass)}>
       <table className={tableClass}>
@@ -244,11 +259,14 @@ function CountLinesTable({
                       if (!input) return;
                       input.indeterminate = salonSomeOn;
                     }}
-                    disabled={!salonEditable || salonProductIds.length === 0}
+                    disabled={!salonEditable || salonProductIds.length === 0 || salonAllLocked}
                     aria-label={salonHeader}
                     onChange={(event) => {
                       const on = event.target.checked;
-                      for (const productId of salonProductIds) onSalonChange?.(productId, on);
+                      for (const productId of salonProductIds) {
+                        if (!on && salonLocked(productId)) continue;
+                        onSalonChange?.(productId, on);
+                      }
                     }}
                   />
                   <span>{salonHeader}</span>
@@ -276,7 +294,8 @@ function CountLinesTable({
           ) : (
             displayRows.map((item) => {
               const variance = liveVariance(item.expected, item.counted);
-              const onSalon = salonOn?.[item.productId] ?? false;
+              const lockedOnSalon = salonLocked(item.productId);
+              const onSalon = salonChecked(item.productId);
               const name = names?.[item.productId] ?? item.name;
               return (
                 <tr key={item.key}>
@@ -286,8 +305,12 @@ function CountLinesTable({
                         type="checkbox"
                         className={checkboxClass}
                         checked={onSalon}
-                        disabled={!salonEditable}
-                        aria-label={salonHeader}
+                        disabled={!salonEditable || lockedOnSalon}
+                        aria-label={
+                          lockedOnSalon
+                            ? `${salonHeader} (counted products stay tagged)`
+                            : salonHeader
+                        }
                         onChange={(event) => onSalonChange?.(item.productId, event.target.checked)}
                       />
                     </td>
@@ -356,7 +379,7 @@ export function CountItemsForm({
     Object.fromEntries(items.map((item) => [item.id, item.counted == null ? "" : String(item.counted)])),
   );
   const [salonOn, setSalonOn] = useState<Record<string, boolean>>(() =>
-    salonFlagsFromItems(items, salonProductIds),
+    salonFlagsFromItems(items, salonProductIds, scannedProductIdsFrom(items, entries)),
   );
   const [names, setNames] = useState<Record<string, string>>(() => namesFromItems(items));
   const [query, setQuery] = useState("");
@@ -378,10 +401,10 @@ export function CountItemsForm({
   }, [items]);
 
   // Keep local salon ticks across quantity refreshes; reset when membership or product set changes.
-  const salonSourceKey = `${[...salonProductIds].sort().join(",")}|${[...new Set(items.map((item) => item.productId))].sort().join(",")}`;
+  const salonSourceKey = `${[...salonProductIds].sort().join(",")}|${[...new Set(items.map((item) => item.productId))].sort().join(",")}|${[...new Set(entries.map((entry) => entry.itemId))].sort().join(",")}`;
   // eslint-disable-next-line react-hooks/exhaustive-deps -- salonSourceKey captures salonProductIds and product ids
   useEffect(() => {
-    setSalonOn(salonFlagsFromItems(items, salonProductIds));
+    setSalonOn(salonFlagsFromItems(items, salonProductIds, scannedProductIdsFrom(items, entries)));
   }, [salonSourceKey]);
 
   const productIdsKey = [...new Set(items.map((item) => item.productId))].sort().join(",");
@@ -420,6 +443,10 @@ export function CountItemsForm({
   const countedRows = useMemo(
     () => sortCountLines(items.filter((item) => scannedItemIds.has(item.id))),
     [items, scannedItemIds],
+  );
+  const countedProductIds = useMemo(
+    () => new Set(countedRows.map((item) => item.productId)),
+    [countedRows],
   );
   const uncountedRows = useMemo(
     () => sortCountLines(items.filter((item) => !scannedItemIds.has(item.id))),
@@ -473,7 +500,10 @@ export function CountItemsForm({
       if (value != null && value !== "") formData.set(`counted:${item.id}`, value);
     }
     for (const productId of new Set(items.map((item) => item.productId))) {
-      formData.set(`salon:${productId}`, salonOn[productId] ? "1" : "0");
+      formData.set(
+        `salon:${productId}`,
+        countedProductIds.has(productId) || salonOn[productId] ? "1" : "0",
+      );
       if (kind === "complete") formData.set(`name:${productId}`, names[productId] ?? "");
     }
     await saveCountQuantities(formData);
@@ -834,9 +864,11 @@ export function CountItemsForm({
               salonHeader={salonHeader}
               salonOn={salonOn}
               salonEditable={editable}
-              onSalonChange={(productId, on) =>
-                setSalonOn((current) => ({ ...current, [productId]: on }))
-              }
+              salonLockedIds={countedProductIds}
+              onSalonChange={(productId, on) => {
+                if (!on && countedProductIds.has(productId)) return;
+                setSalonOn((current) => ({ ...current, [productId]: on }));
+              }}
               names={names}
               nameEditable={editable}
               onNameChange={(productId, name) =>
@@ -861,8 +893,8 @@ export function CountItemsForm({
             {missing > 0 ? (
               <p className="rounded-lg border border-red-200 bg-red-50 px-3 py-3 text-sm text-red-800">
                 {missing} line{missing === 1 ? "" : "s"} still uncounted. Count remaining products as 0 or
-                keep the expected quantity. Use {salonHeader} in the header to tick or untick every visible
-                product on {salonLabel}.
+                keep the expected quantity. Counted products stay on {salonLabel}. Use {salonHeader} here to
+                tick or untick remaining products.
               </p>
             ) : null}
             {editable && filteredUncountedRows.length > 0 ? (
@@ -906,9 +938,11 @@ export function CountItemsForm({
               salonHeader={salonHeader}
               salonOn={salonOn}
               salonEditable={editable}
-              onSalonChange={(productId, on) =>
-                setSalonOn((current) => ({ ...current, [productId]: on }))
-              }
+              salonLockedIds={countedProductIds}
+              onSalonChange={(productId, on) => {
+                if (!on && countedProductIds.has(productId)) return;
+                setSalonOn((current) => ({ ...current, [productId]: on }));
+              }}
               names={names}
               nameEditable={editable}
               onNameChange={(productId, name) =>

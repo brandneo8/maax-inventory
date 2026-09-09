@@ -9,6 +9,7 @@ import {
   chunkList,
   fillUncountedItems,
   getLatestPostedCountDate,
+  getScannedProductIds,
   queryError,
   resolveCountItems,
   setCountedQuantities,
@@ -53,6 +54,19 @@ function salonFlagsFromForm(formData: FormData) {
     if (String(value) === "1") keepOnSalon.add(productId);
   }
   return { productIds: [...new Set(productIds)], keepOnSalon };
+}
+
+async function salonFlagsKeepingScanned(
+  supabase: Parameters<typeof getScannedProductIds>[0],
+  countId: string,
+  formData: FormData,
+) {
+  const flags = salonFlagsFromForm(formData);
+  const scanned = await getScannedProductIds(supabase, countId);
+  const productIds = [...new Set([...flags.productIds, ...scanned])];
+  const keepOnSalon = new Set(flags.keepOnSalon);
+  for (const productId of scanned) keepOnSalon.add(productId);
+  return { productIds, keepOnSalon };
 }
 
 function namesFromForm(formData: FormData) {
@@ -211,7 +225,7 @@ export async function saveCountQuantities(formData: FormData) {
 
   await setCountedQuantities(supabase, count.id, updates, user.email ?? null);
 
-  const salonFlags = salonFlagsFromForm(formData);
+  const salonFlags = await salonFlagsKeepingScanned(supabase, count.id, formData);
   if (salonFlags.productIds.length > 0) {
     await syncProductSalonMembership(supabase, branch.id, salonFlags.productIds, salonFlags.keepOnSalon);
   }
@@ -325,7 +339,7 @@ export async function completeInventoryCount(formData: FormData) {
     if (error) throw queryError(error, "Could not post count variances.");
   }
 
-  const salonFlags = salonFlagsFromForm(formData);
+  const salonFlags = await salonFlagsKeepingScanned(supabase, count.id, formData);
   const tagged = new Set<string>();
   const productIds = [...new Set(items.map((item) => item.product_id))];
   for (const ids of chunkList(productIds.length > 0 ? productIds : ["00000000-0000-0000-0000-000000000000"])) {

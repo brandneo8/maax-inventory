@@ -531,6 +531,33 @@ export async function fillUncountedItems(
   }
 }
 
+export async function getScannedProductIds(supabase: Client, countId: string) {
+  const itemIds = new Set<string>();
+  for (let from = 0; ; from += PAGE_SIZE) {
+    const { data, error } = await supabase
+      .from("inventory_count_entries")
+      .select("inventory_count_item_id")
+      .eq("inventory_count_id", countId)
+      .order("id")
+      .range(from, from + PAGE_SIZE - 1);
+    if (error) throw queryError(error, "Could not load counted products.");
+    for (const row of data ?? []) itemIds.add(row.inventory_count_item_id);
+    if (!data || data.length < PAGE_SIZE) break;
+  }
+
+  const scanned = new Set<string>();
+  if (itemIds.size === 0) return scanned;
+  for (const ids of chunkList([...itemIds])) {
+    const { data, error } = await supabase
+      .from("inventory_count_items")
+      .select("product_id")
+      .in("id", ids);
+    if (error) throw queryError(error, "Could not load counted products.");
+    for (const row of data ?? []) scanned.add(row.product_id);
+  }
+  return scanned;
+}
+
 export async function getSalonProductIds(
   supabase: Client,
   branchId: string,
