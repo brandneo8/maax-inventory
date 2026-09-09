@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { requireBranch } from "@/lib/auth";
-import { resolveCountItems } from "@/lib/data/counts";
+import { chunkList, queryError, resolveCountItems } from "@/lib/data/counts";
 import type { ProductClassification } from "@/lib/labels";
 
 function emptyToNull(value: FormDataEntryValue | null) {
@@ -44,18 +44,22 @@ export async function createInventoryCount(formData: FormData) {
     .select("id")
     .single();
 
-  if (error || !count) throw error ?? new Error("Could not start the count.");
+  if (error || !count) throw queryError(error, "Could not start the count.");
 
-  const { error: itemsError } = await supabase.from("inventory_count_items").insert(
+  for (const batch of chunkList(
     items.map((item) => ({
       inventory_count_id: count.id,
       product_id: item.product_id,
       store_location_id: item.store_location_id,
       expected_quantity: item.expected_quantity,
     })),
-  );
-
-  if (itemsError) throw itemsError;
+  )) {
+    const { error: itemsError } = await supabase.from("inventory_count_items").insert(batch);
+    if (itemsError) {
+      await supabase.from("inventory_counts").delete().eq("id", count.id);
+      throw queryError(itemsError, "Could not create count lines.");
+    }
+  }
 
   revalidatePath("/counts");
   redirect(`/counts/${count.id}`);
@@ -73,15 +77,21 @@ export async function saveCountQuantities(formData: FormData) {
     .eq("branch_id", branch.id)
     .single();
 
-  if (countError || !count) throw countError ?? new Error("Count not found.");
+  if (countError || !count) throw queryError(countError, "Count not found.");
   if (count.status !== "in_progress") throw new Error("This count is already closed.");
 
-  const { data: items, error: itemsError } = await supabase
-    .from("inventory_count_items")
-    .select("id")
-    .eq("inventory_count_id", count.id);
-
-  if (itemsError) throw itemsError;
+  const items: { id: string }[] = [];
+  for (let from = 0; ; from += 1000) {
+    const { data, error: itemsError } = await supabase
+      .from("inventory_count_items")
+      .select("id")
+      .eq("inventory_count_id", count.id)
+      .order("id")
+      .range(from, from + 999);
+    if (itemsError) throw queryError(itemsError, "Could not load count lines.");
+    items.push(...(data ?? []));
+    if (!data || data.length < 1000) break;
+  }
 
   for (const item of items ?? []) {
     const raw = formData.get(`counted:${item.id}`);
@@ -90,7 +100,7 @@ export async function saveCountQuantities(formData: FormData) {
       .from("inventory_count_items")
       .update({ counted_quantity: Number(raw) })
       .eq("id", item.id);
-    if (error) throw error;
+    if (error) throw queryError(error, "Could not save counted quantities.");
   }
 
   revalidatePath(`/counts/${count.id}`);
@@ -108,24 +118,36 @@ export async function completeInventoryCount(formData: FormData) {
     .eq("branch_id", branch.id)
     .single();
 
-  if (countError || !count) throw countError ?? new Error("Count not found.");
+  if (countError || !count) throw queryError(countError, "Count not found.");
   if (count.status !== "in_progress") throw new Error("This count is already closed.");
 
-  const { data: items, error: itemsError } = await supabase
-    .from("inventory_count_items")
-    .select("id, product_id, store_location_id, counted_quantity, variance")
-    .eq("inventory_count_id", count.id);
+  const items: {
+    id: string;
+    product_id: string;
+    store_location_id: string;
+    counted_quantity: number | null;
+    variance: number | null;
+  }[] = [];
+  for (let from = 0; ; from += 1000) {
+    const { data, error: itemsError } = await supabase
+      .from("inventory_count_items")
+      .select("id, product_id, store_location_id, counted_quantity, variance")
+      .eq("inventory_count_id", count.id)
+      .order("id")
+      .range(from, from + 999);
+    if (itemsError) throw queryError(itemsError, "Could not load count lines.");
+    items.push(...(data ?? []));
+    if (!data || data.length < 1000) break;
+  }
 
-  if (itemsError) throw itemsError;
-
-  if ((items ?? []).some((item) => item.counted_quantity === null)) {
+  if (items.some((item) => item.counted_quantity === null)) {
     throw new Error("Enter a counted quantity for every line before completing.");
   }
 
-  const adjustments = (items ?? []).filter((item) => Number(item.variance ?? 0) !== 0);
-  if (adjustments.length > 0) {
+  const adjustments = items.filter((item) => Number(item.variance ?? 0) !== 0);
+  for (const batch of chunkList(adjustments)) {
     const { error } = await supabase.from("inventory_transactions").insert(
-      adjustments.map((item) => ({
+      batch.map((item) => ({
         company_id: companyId,
         product_id: item.product_id,
         store_location_id: item.store_location_id,
@@ -137,14 +159,14 @@ export async function completeInventoryCount(formData: FormData) {
         notes: "Count variance",
       })),
     );
-    if (error) throw error;
+    if (error) throw queryError(error, "Could not post count variances.");
   }
 
   const { error: statusError } = await supabase
     .from("inventory_counts")
     .update({ status: "completed" })
     .eq("id", count.id);
-  if (statusError) throw statusError;
+  if (statusError) throw queryError(statusError, "Could not complete the count.");
 
   revalidatePath(`/counts/${count.id}`);
   revalidatePath("/counts");

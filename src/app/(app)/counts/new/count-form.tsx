@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { unstable_rethrow } from "next/navigation";
 import { createInventoryCount } from "../actions";
 import { CLASSIFICATIONS } from "@/lib/labels";
 import { btnClass, fieldClass } from "@/lib/ui";
@@ -26,6 +27,7 @@ export function CountForm({
     try {
       await createInventoryCount(formData);
     } catch (err) {
+      unstable_rethrow(err);
       setError(err instanceof Error ? err.message : "Could not start the count.");
       setPending(false);
     }
