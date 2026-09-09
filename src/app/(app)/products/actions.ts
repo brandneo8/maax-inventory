@@ -1,9 +1,10 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { requireAdmin } from "@/lib/auth";
+import { requireAdmin, requireBranch } from "@/lib/auth";
 import { catalogSize, normalizeOptionalText, parseMoney } from "@/lib/catalog-import";
 import { persistProductComponents, syncBundleTag } from "@/lib/data/product-components";
+import { updateSalonProductNames } from "@/lib/data/products";
 import type { ProductClassification } from "@/lib/labels";
 import { parseSize } from "@/lib/product-size";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -20,6 +21,18 @@ function revalidateCatalog() {
   revalidatePath("/reports");
   revalidatePath("/counts");
   revalidatePath("/");
+}
+
+export async function saveSalonProductNames(updates: { id: string; name: string }[]) {
+  const { supabase, companyId, branch } = await requireBranch();
+  const saved = await updateSalonProductNames(
+    supabase,
+    companyId,
+    branch.id,
+    updates.map((row) => ({ id: row.id, name: normalizeOptionalText(row.name) })),
+  );
+  revalidateCatalog();
+  return { saved };
 }
 
 async function stampCatalogSaved(companyId: string, email: string | undefined) {

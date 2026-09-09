@@ -1,27 +1,46 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { unstable_rethrow, useRouter } from "next/navigation";
+import { saveSalonProductNames } from "./actions";
 import { classificationLabel } from "@/lib/labels";
 import { parseSize, sizesMatch } from "@/lib/product-size";
-import { fieldClass, tableClass, tdClass, thClass } from "@/lib/ui";
-import { formatQty, formatSku, productDisplayName } from "@/lib/format";
+import { btnClass, btnSecondaryClass, fieldClass, tableClass, tdClass, thClass } from "@/lib/ui";
+import { formatQty, formatSku } from "@/lib/format";
 import type { CatalogProduct } from "@/lib/data/products";
 import { cn } from "@/lib/utils";
 
-function groupKey(product: CatalogProduct) {
+type SalonProduct = CatalogProduct & { onHand: number };
+
+function groupKey(product: SalonProduct) {
   return product.brandSub.trim() || "No Brand_sub";
+}
+
+function namesFromProducts(products: SalonProduct[]) {
+  return Object.fromEntries(products.map((product) => [product.id, product.name ?? ""]));
 }
 
 export function BranchProductsTable({
   products,
 }: {
-  products: (CatalogProduct & { onHand: number })[];
+  products: SalonProduct[];
 }) {
+  const router = useRouter();
+  const [editing, setEditing] = useState(false);
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
+  const [names, setNames] = useState<Record<string, string>>(() => namesFromProducts(products));
   const [sizeQuery, setSizeQuery] = useState("");
   const [brandFilter, setBrandFilter] = useState("");
   const [brandSubFilter, setBrandSubFilter] = useState("");
   const [groupByBrandSub, setGroupByBrandSub] = useState(true);
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
+
+  useEffect(() => {
+    if (editing) return;
+    setNames(namesFromProducts(products));
+  }, [editing, products]);
 
   const parsedFilter = useMemo(() => parseSize(sizeQuery), [sizeQuery]);
   const brands = useMemo(
@@ -68,7 +87,7 @@ export function BranchProductsTable({
       .map(([key, items]) => ({
         key,
         products: items.slice().sort((left, right) =>
-          productDisplayName(left).localeCompare(productDisplayName(right), undefined, { sensitivity: "base" }),
+          (left.orderName || left.name).localeCompare(right.orderName || right.name, undefined, { sensitivity: "base" }),
         ),
       }));
   }, [groupByBrandSub, visible]);
@@ -82,6 +101,10 @@ export function BranchProductsTable({
     return [...seen.entries()].sort((left, right) => left[0] - right[0]);
   }, [products]);
 
+  const dirty = products.filter(
+    (product) => (names[product.id] ?? "").trim() !== (product.name ?? "").trim(),
+  );
+
   function toggleGroup(key: string) {
     setCollapsed((current) => {
       const next = new Set(current);
@@ -91,8 +114,85 @@ export function BranchProductsTable({
     });
   }
 
+  function cancelEdit() {
+    setNames(namesFromProducts(products));
+    setEditing(false);
+    setError(null);
+    setMessage(null);
+  }
+
+  async function saveNames() {
+    setPending(true);
+    setError(null);
+    setMessage(null);
+    try {
+      if (dirty.length === 0) {
+        setEditing(false);
+        setMessage("No name changes to save.");
+        return;
+      }
+      const result = await saveSalonProductNames(
+        dirty.map((product) => ({ id: product.id, name: names[product.id] ?? "" })),
+      );
+      setEditing(false);
+      setMessage(
+        result.saved === 1 ? "Saved 1 salon name." : `Saved ${result.saved} salon names.`,
+      );
+      router.refresh();
+    } catch (err) {
+      unstable_rethrow(err);
+      setError(err instanceof Error ? err.message : "Could not save names.");
+    } finally {
+      setPending(false);
+    }
+  }
+
+  const columnCount = 9;
+
   return (
     <div className="space-y-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p className="text-sm text-muted">
+          {editing
+            ? "Edit the salon-friendly name. Order name stays as on orders. A blank name falls back to order name."
+            : "Open Edit names to set a salon-friendly name. Min and Kin share this name."}
+        </p>
+        <div className="flex flex-wrap gap-2">
+          {editing ? (
+            <>
+              <button className={btnSecondaryClass} type="button" disabled={pending} onClick={cancelEdit}>
+                Cancel
+              </button>
+              <button className={btnClass} type="button" disabled={pending} onClick={() => void saveNames()}>
+                {pending ? "Saving…" : dirty.length > 0 ? `Save names (${dirty.length})` : "Done"}
+              </button>
+            </>
+          ) : (
+            <button
+              className={btnClass}
+              type="button"
+              disabled={pending || products.length === 0}
+              onClick={() => {
+                setError(null);
+                setMessage(null);
+                setEditing(true);
+              }}
+            >
+              Edit names
+            </button>
+          )}
+        </div>
+      </div>
+
+      {error ? (
+        <p className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">{error}</p>
+      ) : null}
+      {message ? (
+        <p className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
+          {message}
+        </p>
+      ) : null}
+
       <div className="flex flex-wrap items-end gap-3 rounded-xl border border-border bg-card p-4">
         <label className="min-w-48 space-y-1 text-sm">
           <span>Brand</span>
@@ -176,6 +276,7 @@ export function BranchProductsTable({
             <tr>
               <th className={thClass}>SKU</th>
               <th className={thClass}>Barcode</th>
+              <th className={thClass}>Order name</th>
               <th className={thClass}>Name</th>
               <th className={thClass}>Brand_sub</th>
               <th className={thClass}>Size</th>
@@ -187,7 +288,7 @@ export function BranchProductsTable({
           <tbody>
             {visible.length === 0 ? (
               <tr>
-                <td className={tdClass} colSpan={8}>
+                <td className={tdClass} colSpan={columnCount}>
                   {products.length === 0
                     ? "No products at this salon yet. They appear here after admin assigns them to this branch."
                     : "No products match that filter."}
@@ -200,7 +301,7 @@ export function BranchProductsTable({
                   const isCollapsed = collapsed.has(group.key);
                   rows.push(
                     <tr key={`group-${group.key}`} className="bg-slate-100">
-                      <td className={cn(tdClass, "font-semibold")} colSpan={8}>
+                      <td className={cn(tdClass, "font-semibold")} colSpan={columnCount}>
                         <button
                           type="button"
                           className="inline-flex items-center gap-2 text-left"
@@ -216,13 +317,30 @@ export function BranchProductsTable({
                   if (isCollapsed) return rows;
                 }
                 for (const product of group.products) {
+                  const name = names[product.id] ?? "";
                   rows.push(
                     <tr key={product.id}>
                       <td className={tdClass}>{formatSku(product.sku)}</td>
                       <td className={tdClass}>{formatSku(product.barcode)}</td>
                       <td className={tdClass}>
-                        {productDisplayName(product) || "—"}
+                        {product.orderName || "—"}
                         {product.brand ? <span className="block text-xs text-muted">{product.brand}</span> : null}
+                      </td>
+                      <td className={tdClass}>
+                        {editing ? (
+                          <input
+                            className={cn(fieldClass, "min-w-48")}
+                            value={name}
+                            placeholder={product.orderName || "Falls back to order name"}
+                            disabled={pending}
+                            aria-label={`Salon name for ${product.orderName || product.sku || "product"}`}
+                            onChange={(event) =>
+                              setNames((current) => ({ ...current, [product.id]: event.target.value }))
+                            }
+                          />
+                        ) : (
+                          product.name || "—"
+                        )}
                       </td>
                       <td className={tdClass}>{product.brandSub || "—"}</td>
                       <td className={tdClass}>{product.sizeLabel || "—"}</td>

@@ -61,7 +61,7 @@ async function getSupplierLinksByProduct(supabase: Client, productIds: string[])
       .from("supplier_products")
       .select("product_id, supplier_id, is_preferred")
       .in("product_id", chunk);
-    if (error) throw error;
+    if (error) throw new Error(error.message || "Could not load supplier links.");
     for (const row of data ?? []) {
       const list = byProduct.get(row.product_id) ?? [];
       list.push({ supplier_id: row.supplier_id, is_preferred: row.is_preferred });
@@ -80,7 +80,7 @@ export async function getCatalogProducts(supabase: Client, companyId: string): P
       products.map((product) => product.id),
     ),
   ]);
-  if (supplierError) throw supplierError;
+  if (supplierError) throw new Error(supplierError.message || "Could not load suppliers.");
 
   const supplierById = new Map(
     (suppliers ?? []).map((supplier) => [
@@ -212,16 +212,59 @@ export async function getBranchOnHand(
   const locationIds = locations.filter((location) => location.branch_id === branchId).map((location) => location.id);
   if (locationIds.length === 0) return qty;
 
-  const { data, error } = await supabase
-    .from("current_stock")
-    .select("product_id, quantity_on_hand")
-    .in("store_location_id", locationIds)
-    .in("product_id", productIds);
-
-  if (error) throw error;
-  for (const row of data ?? []) {
-    if (!row.product_id) continue;
-    qty.set(row.product_id, (qty.get(row.product_id) ?? 0) + Number(row.quantity_on_hand ?? 0));
+  const wanted = new Set(productIds);
+  const pageSize = 1000;
+  for (let from = 0; ; from += pageSize) {
+    const { data, error } = await supabase
+      .from("current_stock")
+      .select("product_id, quantity_on_hand")
+      .in("store_location_id", locationIds)
+      .order("product_id")
+      .order("store_location_id")
+      .range(from, from + pageSize - 1);
+    if (error) throw new Error(error.message || "Could not load on-hand quantities.");
+    for (const row of data ?? []) {
+      if (!row.product_id || !wanted.has(row.product_id)) continue;
+      qty.set(row.product_id, (qty.get(row.product_id) ?? 0) + Number(row.quantity_on_hand ?? 0));
+    }
+    if (!data || data.length < pageSize) break;
   }
   return qty;
+}
+
+export async function updateSalonProductNames(
+  supabase: Client,
+  companyId: string,
+  branchId: string,
+  updates: { id: string; name: string | null }[],
+) {
+  const wanted = [...new Map(updates.filter((row) => row.id).map((row) => [row.id, row.name]))];
+  if (wanted.length === 0) return 0;
+
+  const allowed = new Set<string>();
+  for (let index = 0; index < wanted.length; index += 200) {
+    const chunk = wanted.slice(index, index + 200).map(([id]) => id);
+    const { data, error } = await supabase
+      .from("product_branches")
+      .select("product_id")
+      .eq("branch_id", branchId)
+      .in("product_id", chunk);
+    if (error) throw new Error(error.message || "Could not check this salon’s product list.");
+    for (const row of data ?? []) allowed.add(row.product_id);
+  }
+
+  if (wanted.some(([id]) => !allowed.has(id))) {
+    throw new Error("Some products are not on this salon’s list.");
+  }
+
+  for (const [id, name] of wanted) {
+    const { error } = await supabase
+      .from("products")
+      .update({ name })
+      .eq("id", id)
+      .eq("company_id", companyId);
+    if (error) throw new Error(error.message || "Could not save product names.");
+  }
+
+  return wanted.length;
 }

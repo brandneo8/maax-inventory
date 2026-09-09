@@ -18,7 +18,8 @@ export default async function ProductsPage() {
       <div>
         <h1 className="text-2xl font-semibold tracking-tight">Products</h1>
         <p className="mt-1 text-sm text-muted">
-          Working in {branch.displayName}. This list is the inventory assigned to this salon.
+          Working in {branch.displayName}. This list is the inventory assigned to this salon. Edit names
+          to set a salon-friendly name; order name stays as on orders.
         </p>
       </div>
 
