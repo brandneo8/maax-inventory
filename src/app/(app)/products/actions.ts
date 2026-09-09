@@ -4,7 +4,8 @@ import { revalidatePath } from "next/cache";
 import { requireAdmin } from "@/lib/auth";
 import { catalogSize, normalizeOptionalText, parseMoney } from "@/lib/catalog-import";
 import { persistProductComponents, syncBundleTag } from "@/lib/data/product-components";
-import type { ProductClassification } from "@/lib/labels";
+import { formatDate } from "@/lib/format";
+import { countStatusLabel, salonName, type ProductClassification } from "@/lib/labels";
 import { parseSize } from "@/lib/product-size";
 import { createAdminClient } from "@/lib/supabase/admin";
 import type { createClient } from "@/lib/supabase/server";
@@ -313,7 +314,6 @@ export async function saveProducts(drafts: ProductDraft[]) {
 async function productHasRows(
   supabase: Client,
   table:
-    | "inventory_count_items"
     | "inventory_transactions"
     | "purchase_order_items"
     | "goods_receipt_items"
@@ -326,11 +326,28 @@ async function productHasRows(
   return { exists: (data ?? []).length > 0 };
 }
 
-function joinReasons(reasons: string[]) {
-  if (reasons.length === 0) return "it is used elsewhere in inventory";
-  if (reasons.length === 1) return reasons[0];
-  return `${reasons.slice(0, -1).join(", ")}, and ${reasons[reasons.length - 1]}`;
+function asOne<T>(value: T | T[] | null | undefined): T | null {
+  if (Array.isArray(value)) return value[0] ?? null;
+  return value ?? null;
 }
+
+export type ProductDeleteBlockItem = {
+  label: string;
+  href?: string;
+  actionLabel?: string;
+  branchId?: string;
+};
+
+export type ProductDeleteBlockGroup = {
+  title: string;
+  hint: string;
+  items: ProductDeleteBlockItem[];
+};
+
+export type DeleteProductResult =
+  | { ok: true }
+  | { error: string }
+  | { blocked: true; productLabel: string; groups: ProductDeleteBlockGroup[] };
 
 function productDeleteError(error: { code?: string; message?: string }) {
   if (error.code === "23503") {
@@ -339,20 +356,68 @@ function productDeleteError(error: { code?: string; message?: string }) {
   return error.message || "Could not delete that product.";
 }
 
-export async function deleteProduct(id: string): Promise<{ error?: string }> {
+export async function deleteProduct(id: string): Promise<DeleteProductResult> {
   const { supabase, companyId } = await requireAdmin();
   if (!id) return { error: "That product is missing." };
 
   const { data: product, error: productError } = await supabase
     .from("products")
-    .select("id")
+    .select("id, sku, name, order_name")
     .eq("id", id)
     .eq("company_id", companyId)
     .maybeSingle();
   if (productError) return { error: productError.message };
   if (!product) return { error: "That product was already removed." };
 
-  const reasons: string[] = [];
+  const productLabel =
+    product.order_name?.trim() || product.name?.trim() || product.sku?.trim() || "this product";
+
+  const groups: ProductDeleteBlockGroup[] = [];
+
+  const { data: countRows, error: countError } = await supabase
+    .from("inventory_count_items")
+    .select(
+      "inventory_count_id, inventory_counts(id, count_date, status, company_id, branch_id, branches(name))",
+    )
+    .eq("product_id", id);
+  if (countError) return { error: countError.message };
+
+  const countsById = new Map<
+    string,
+    { id: string; countDate: string; status: string; salon: string; branchId: string }
+  >();
+  for (const row of countRows ?? []) {
+    const count = asOne(row.inventory_counts);
+    if (!count || count.company_id !== companyId) continue;
+    const branch = asOne(count.branches);
+    countsById.set(count.id, {
+      id: count.id,
+      countDate: count.count_date,
+      status: count.status,
+      salon: salonName(branch?.name ?? ""),
+      branchId: count.branch_id,
+    });
+  }
+  const counts = [...countsById.values()].sort((left, right) => {
+    const draft = Number(right.status === "in_progress") - Number(left.status === "in_progress");
+    if (draft !== 0) return draft;
+    return right.countDate.localeCompare(left.countDate);
+  });
+  if (counts.length > 0) {
+    groups.push({
+      title: "Inventory movements",
+      hint: "Complete, cancel or remove this product from inventory movements.",
+      items: counts.map((count) => ({
+        label: [count.salon || "Salon", formatDate(count.countDate), countStatusLabel(count.status)]
+          .filter((part) => part && part !== "—")
+          .join(" · "),
+        href: `/counts/${count.id}`,
+        actionLabel: "View count",
+        branchId: count.branchId,
+      })),
+    });
+  }
+
   const { data: bundleRows, error: bundleError } = await supabase
     .from("product_components")
     .select("set_product_id")
@@ -370,13 +435,14 @@ export async function deleteProduct(id: string): Promise<{ error?: string }> {
     const labels = (bundles ?? [])
       .map((row) => row.name?.trim() || row.order_name?.trim())
       .filter(Boolean);
-    reasons.push(
-      labels.length > 0 ? `it is part of ${labels.join(", ")}` : "it is part of a bundle",
-    );
+    groups.push({
+      title: "Composite products",
+      hint: "Remove this product from those bundles first.",
+      items: (labels.length > 0 ? labels : ["A bundle"]).map((label) => ({ label })),
+    });
   }
 
   const checks = await Promise.all([
-    productHasRows(supabase, "inventory_count_items", id),
     productHasRows(supabase, "inventory_transactions", id),
     productHasRows(supabase, "purchase_order_items", id),
     productHasRows(supabase, "goods_receipt_items", id),
@@ -385,17 +451,36 @@ export async function deleteProduct(id: string): Promise<{ error?: string }> {
   ]);
   const checkError = checks.find((check) => check.error)?.error;
   if (checkError) return { error: checkError };
-  if (checks[0].exists) reasons.push("it appears on an inventory count");
-  if (checks[1].exists) reasons.push("it has stock movements");
-  if (checks[2].exists) reasons.push("it is on a purchase order");
-  if (checks[3].exists) reasons.push("it is on a goods receipt");
-  if (checks[4].exists) reasons.push("it is on an invoice");
-  if (checks[5].exists) reasons.push("it has retail-use records");
 
-  if (reasons.length > 0) {
-    return {
-      error: `Cannot delete this product because ${joinReasons(reasons)}. Untick a salon to hide it from that list instead of deleting.`,
-    };
+  if (checks[0].exists && counts.length === 0) {
+    groups.push({
+      title: "Inventory movements",
+      hint: "This product has stock ledger entries, so it cannot be hard-deleted.",
+      items: [{ label: "Stock movements" }],
+    });
+  }
+
+  const purchasing: ProductDeleteBlockItem[] = [];
+  if (checks[1].exists) purchasing.push({ label: "Purchase order" });
+  if (checks[2].exists) purchasing.push({ label: "Goods receipt" });
+  if (checks[3].exists) purchasing.push({ label: "Invoice" });
+  if (purchasing.length > 0) {
+    groups.push({
+      title: "Open purchasing",
+      hint: "Remove this product from those documents first.",
+      items: purchasing,
+    });
+  }
+  if (checks[4].exists) {
+    groups.push({
+      title: "Retail use",
+      hint: "This product has retail-use records, so it cannot be hard-deleted.",
+      items: [{ label: "Retail-use entries" }],
+    });
+  }
+
+  if (groups.length > 0) {
+    return { blocked: true, productLabel, groups };
   }
 
   const { data: removed, error } = await supabase
@@ -408,7 +493,7 @@ export async function deleteProduct(id: string): Promise<{ error?: string }> {
   if (!removed?.length) return { error: "Could not delete that product." };
 
   revalidateCatalog();
-  return {};
+  return { ok: true };
 }
 
 export async function bulkUpdateProductClassification(input: {

@@ -8,6 +8,7 @@ export type CountLine = {
   name: string;
   sku: string;
   brand: string;
+  brandSub: string;
   sizeLabel: string;
   location: string;
   expected: number;
@@ -51,6 +52,7 @@ export function toCountLine(
     name: product?.name?.trim() ?? "",
     sku: product?.sku?.trim() ?? "",
     brand: brandName(product && "brands" in product ? product.brands : null),
+    brandSub: product && "brand_sub" in product ? String(product.brand_sub ?? "").trim() : "",
     sizeLabel: product && "size_label" in product ? String(product.size_label ?? "").trim() : "",
     location: itemLocation?.name ?? "—",
     expected: Number(item.expected_quantity ?? 0),
@@ -80,6 +82,8 @@ export function sortCountLines(rows: CountLine[]) {
   return [...rows].sort((a, b) => {
     const brand = a.brand.localeCompare(b.brand, undefined, { sensitivity: "base" });
     if (brand !== 0) return brand;
+    const brandSub = a.brandSub.localeCompare(b.brandSub, undefined, { sensitivity: "base" });
+    if (brandSub !== 0) return brandSub;
     const orderName = a.orderName.localeCompare(b.orderName, undefined, { sensitivity: "base" });
     if (orderName !== 0) return orderName;
     const name = a.name.localeCompare(b.name, undefined, { sensitivity: "base" });

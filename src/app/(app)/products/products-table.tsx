@@ -5,8 +5,12 @@ import { unstable_rethrow, useRouter } from "next/navigation";
 import {
   deleteProduct,
   saveProducts,
+  type DeleteProductResult,
+  type ProductDeleteBlockGroup,
+  type ProductDeleteBlockItem,
   type ProductDraft,
 } from "./actions";
+import { selectBranch } from "@/app/(app)/branch-actions";
 import { catalogTax, confirmedRetailPrice, grossMarginPercent, allocatedBundleTotal, autoAllocateBundleCosts, bundleCostRemainder, bundleCostsComplete, inheritedUnitCost, roundMoney } from "@/lib/catalog-pricing";
 import { downloadCsv } from "@/lib/csv";
 import { formatCatalogSavedLabel, formatMoney, formatPercent, formatQty, productDisplayName, productLabel } from "@/lib/format";
@@ -15,7 +19,7 @@ import { SalonChipField } from "@/components/salon-chip-field";
 import { BrandSubFilter, NO_BRAND_SUB } from "@/components/brand-sub-filter";
 import { CLASSIFICATIONS, classificationLabel, salonChipLabel, type ProductClassification } from "@/lib/labels";
 import { parseSize, sizesMatch } from "@/lib/product-size";
-import { btnClass, btnSecondaryClass, checkboxClass, fieldClass, tableClass, tdClass, thClass } from "@/lib/ui";
+import { btnClass, btnDangerClass, btnSecondaryClass, checkboxClass, fieldClass, tableClass, tdClass, thClass } from "@/lib/ui";
 import { cn } from "@/lib/utils";
 import { BulkEditModal, type BulkEditFields } from "./bulk-edit-modal";
 
@@ -471,6 +475,12 @@ export function ProductsTable({
   const [dirty, setDirty] = useState<Set<number>>(() => new Set());
   const [bundleIndex, setBundleIndex] = useState<number | null>(null);
   const [bundleQuery, setBundleQuery] = useState("");
+  const [deleteBlock, setDeleteBlock] = useState<{
+    index: number;
+    productId: string;
+    productLabel: string;
+    groups: ProductDeleteBlockGroup[];
+  } | null>(null);
   const headRef = useRef<HTMLTableSectionElement>(null);
   const [headHeight, setHeadHeight] = useState(41);
   const skipProductSync = useRef(false);
@@ -1107,38 +1117,79 @@ export function ProductsTable({
     setDirty((current) => new Set(current).add(index));
   }
 
+  function removeRow(index: number, productId?: string) {
+    if (productId) {
+      dirtyIdsRef.current.delete(productId);
+      setSelected((current) => current.filter((id) => id !== productId));
+    }
+    setRows((current) => {
+      const next = current.filter((_, rowIndex) => rowIndex !== index);
+      if (editing) {
+        return next.length > 0 ? next : [emptyRow(branches.map((branch) => branch.id))];
+      }
+      return next;
+    });
+    setSnapshotAt(new Date());
+  }
+
   async function onDelete(index: number) {
     const row = rows[index];
     if (!row) return;
-    const bundles = row.id ? (usedInBundles.get(row.id) ?? []) : [];
-    if (bundles.length > 0) {
-      setError(
-        `Cannot delete this product because it is part of ${bundles.join(", ")}. Remove it from those bundles first.`,
-      );
-      return;
-    }
     setPending(true);
     setError(null);
     setMessage(null);
     try {
       if (row.id) {
-        dirtyIdsRef.current.delete(row.id);
         const result = await deleteProduct(row.id);
-        if (result?.error) {
-          setError(result.error);
-          return;
+        if (applyDeleteResult(index, row.id, result, productDisplayName(row) || row.orderName || "this product")) {
+          router.refresh();
         }
-        setSelected((current) => current.filter((id) => id !== row.id));
+        return;
       }
-      setRows((current) => {
-        const next = current.filter((_, rowIndex) => rowIndex !== index);
-        if (editing) {
-          return next.length > 0 ? next : [emptyRow(branches.map((branch) => branch.id))];
-        }
-        return next;
+      removeRow(index);
+    } catch (err) {
+      unstable_rethrow(err);
+      setError(err instanceof Error ? err.message : "Could not delete that product.");
+    } finally {
+      setPending(false);
+    }
+  }
+
+  function applyDeleteResult(
+    index: number,
+    productId: string,
+    result: DeleteProductResult,
+    fallbackLabel: string,
+  ) {
+    if ("blocked" in result && result.blocked) {
+      setDeleteBlock({
+        index,
+        productId,
+        productLabel: result.productLabel || fallbackLabel,
+        groups: result.groups,
       });
-      setSnapshotAt(new Date());
-      router.refresh();
+      return false;
+    }
+    if ("error" in result && result.error) {
+      setError(result.error);
+      return false;
+    }
+    setDeleteBlock(null);
+    removeRow(index, productId);
+    return true;
+  }
+
+  async function retryBlockedDelete() {
+    if (!deleteBlock) return;
+    const { productId, productLabel } = deleteBlock;
+    setPending(true);
+    setError(null);
+    try {
+      const result = await deleteProduct(productId);
+      const index = rows.findIndex((row) => row.id === productId);
+      if (applyDeleteResult(index >= 0 ? index : deleteBlock.index, productId, result, productLabel)) {
+        router.refresh();
+      }
     } catch (err) {
       unstable_rethrow(err);
       setError(err instanceof Error ? err.message : "Could not delete that product.");
@@ -1963,7 +2014,109 @@ export function ProductsTable({
           onClose={() => setBundleIndex(null)}
         />
       ) : null}
+
+      {deleteBlock ? (
+        <ProductDeleteBlockedModal
+          productLabel={deleteBlock.productLabel}
+          groups={deleteBlock.groups}
+          pending={pending}
+          onRetry={() => void retryBlockedDelete()}
+          onClose={() => setDeleteBlock(null)}
+        />
+      ) : null}
     </div>
+  );
+}
+
+function ProductDeleteBlockedModal({
+  productLabel,
+  groups,
+  pending,
+  onRetry,
+  onClose,
+}: {
+  productLabel: string;
+  groups: ProductDeleteBlockGroup[];
+  pending: boolean;
+  onRetry: () => void;
+  onClose: () => void;
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={onClose}>
+      <div
+        className="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-xl border border-border bg-white p-5 shadow-lg"
+        onClick={(event) => event.stopPropagation()}
+        role="alertdialog"
+        aria-labelledby="delete-blocked-title"
+        aria-modal="true"
+      >
+        <div className="flex items-start justify-between gap-3">
+          <h3 id="delete-blocked-title" className="text-base font-semibold">
+            ⚠️ Unable to delete “{productLabel}”
+          </h3>
+          <button
+            className="rounded-md px-2 py-1 text-lg leading-none text-muted hover:bg-slate-100"
+            type="button"
+            onClick={onClose}
+            aria-label="Close"
+          >
+            ×
+          </button>
+        </div>
+        <p className="mt-2 text-sm text-muted">
+          To delete a product, it can&apos;t be part of any incomplete workflows, open sales, or composite
+          products.
+        </p>
+        <div className="mt-4 space-y-4">
+          {groups.map((group) => (
+            <div key={group.title}>
+              <p className="text-sm font-semibold">{group.title}</p>
+              <p className="mt-0.5 text-sm text-muted">{group.hint}</p>
+              <ul className="mt-2 divide-y divide-border rounded-lg border border-border">
+                {group.items.map((item) => (
+                  <li key={`${group.title}-${item.label}-${item.href ?? ""}`} className="flex items-center justify-between gap-3 px-3 py-2.5 text-sm">
+                    <span>{item.label}</span>
+                    {item.href ? <CountLink item={item} /> : null}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ))}
+        </div>
+        <div className="mt-5 flex justify-end border-t border-border pt-4">
+          <button className={btnDangerClass} type="button" disabled={pending} onClick={onRetry}>
+            {pending ? "Trying…" : "Try again and delete product"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function CountLink({ item }: { item: ProductDeleteBlockItem }) {
+  const href = item.href;
+  if (!href) return null;
+
+  async function openCount() {
+    if (item.branchId) {
+      try {
+        await selectBranch(item.branchId);
+      } catch {
+        // Open the count anyway; the page will 404 if this salon is not selected.
+      }
+    }
+    window.open(href, "_blank", "noopener,noreferrer");
+  }
+
+  return (
+    <button
+      className="inline-flex shrink-0 items-center gap-1 text-blue-600 underline"
+      type="button"
+      onClick={() => void openCount()}
+    >
+      {item.actionLabel || "View"}
+      <span aria-hidden="true">↗</span>
+    </button>
   );
 }
 

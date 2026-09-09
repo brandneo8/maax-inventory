@@ -27,14 +27,12 @@ export default async function CountDetailPage({
   const lines = count.items.map(toCountLine);
   const lineById = new Map(lines.map((line) => [line.id, line]));
   const entries = count.entries.map((entry) => toCountEntry(entry, lineById.get(entry.inventory_count_item_id)));
-  const lineLocationIds = new Set(lines.map((line) => line.storeLocationId));
   const branchLocations = (await getStoreLocations(supabase, companyId)).filter(
     (storeLocation) => storeLocation.branch_id === branch.id,
   );
-  const scopedLocations = count.store_location_id
+  const locations = count.store_location_id
     ? branchLocations.filter((storeLocation) => storeLocation.id === count.store_location_id)
     : branchLocations;
-  const locations = scopedLocations.filter((storeLocation) => lineLocationIds.has(storeLocation.id));
 
   return (
     <div className="space-y-6">

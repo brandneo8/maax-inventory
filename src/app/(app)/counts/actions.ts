@@ -240,7 +240,8 @@ export async function fillUncountedCountItems(formData: FormData) {
   if (countError || !count) throw queryError(countError, "Count not found.");
   if (count.status !== "in_progress") throw new Error("This count is already closed.");
 
-  await fillUncountedItems(supabase, count.id, mode);
+  const itemIds = formData.getAll("item_id").map((value) => String(value)).filter(Boolean);
+  await fillUncountedItems(supabase, count.id, mode, itemIds);
 
   revalidatePath(`/counts/${count.id}`);
   revalidatePath(`/counts/${count.id}/review`);

@@ -87,7 +87,7 @@ export async function getInventoryCount(supabase: Client, companyId: string, id:
     const { data: page, error: itemsError } = await supabase
       .from("inventory_count_items")
       .select(
-        "id, product_id, store_location_id, expected_quantity, counted_quantity, variance, notes, products(sku, name, order_name, size_label, brands(name)), store_locations(name)",
+        "id, product_id, store_location_id, expected_quantity, counted_quantity, variance, notes, products(sku, name, order_name, size_label, brand_sub, brands(name)), store_locations(name)",
       )
       .eq("inventory_count_id", id)
       .order("id")
@@ -382,7 +382,7 @@ export async function addCountEntry(
     createdBy: string | null;
   },
 ) {
-  const { data: item, error } = await supabase
+  const { data: itemRow, error } = await supabase
     .from("inventory_count_items")
     .select("id, counted_quantity")
     .eq("inventory_count_id", args.countId)
@@ -390,7 +390,28 @@ export async function addCountEntry(
     .eq("store_location_id", args.storeLocationId)
     .maybeSingle();
   if (error) throw queryError(error, "Could not find that count line.");
-  if (!item) throw new Error("That product is not in this count for the selected location.");
+  let item = itemRow;
+  if (!item) {
+    const { data: stock, error: stockError } = await supabase
+      .from("current_stock")
+      .select("quantity_on_hand")
+      .eq("product_id", args.productId)
+      .eq("store_location_id", args.storeLocationId)
+      .maybeSingle();
+    if (stockError) throw queryError(stockError, "Could not load on-hand for that location.");
+    const { data: created, error: createError } = await supabase
+      .from("inventory_count_items")
+      .insert({
+        inventory_count_id: args.countId,
+        product_id: args.productId,
+        store_location_id: args.storeLocationId,
+        expected_quantity: Number(stock?.quantity_on_hand ?? 0),
+      })
+      .select("id, counted_quantity")
+      .single();
+    if (createError || !created) throw queryError(createError, "Could not add that location to this count.");
+    item = created;
+  }
 
   const next = Number(item.counted_quantity ?? 0) + args.quantityDelta;
   if (next < 0) {
@@ -463,47 +484,50 @@ export async function fillUncountedItems(
   supabase: Client,
   countId: string,
   mode: "zero" | "keep",
+  itemIds: string[] = [],
 ) {
+  const wanted = [...new Set(itemIds.filter(Boolean))];
+  if (wanted.length === 0) return;
+
   if (mode === "zero") {
-    const { error } = await supabase
-      .from("inventory_count_items")
-      .update({ counted_quantity: 0 })
-      .eq("inventory_count_id", countId)
-      .is("counted_quantity", null);
-    if (error) throw queryError(error, "Could not count remaining lines as 0.");
+    for (const ids of chunkList(wanted)) {
+      const { error } = await supabase
+        .from("inventory_count_items")
+        .update({ counted_quantity: 0 })
+        .eq("inventory_count_id", countId)
+        .in("id", ids);
+      if (error) throw queryError(error, "Could not count remaining lines as 0.");
+    }
     return;
   }
 
-  const { error } = await supabase.rpc("fn_fill_uncounted_count_items", {
-    p_count_id: countId,
-    p_mode: mode,
-  });
-  if (!error) return;
-
   const items: { id: string; expected_quantity: number | null }[] = [];
-  for (let from = 0; ; from += PAGE_SIZE) {
-    const { data, error: loadError } = await supabase
+  for (const ids of chunkList(wanted)) {
+    const { data, error } = await supabase
       .from("inventory_count_items")
       .select("id, expected_quantity")
       .eq("inventory_count_id", countId)
-      .is("counted_quantity", null)
-      .order("id")
-      .range(from, from + PAGE_SIZE - 1);
-    if (loadError) {
-      throw queryError(error, "Could not keep the expected quantity on remaining lines.");
-    }
+      .in("id", ids);
+    if (error) throw queryError(error, "Could not keep the expected quantity on remaining lines.");
     items.push(...(data ?? []));
-    if (!data || data.length < PAGE_SIZE) break;
   }
 
+  const byExpected = new Map<number, string[]>();
   for (const item of items) {
-    const { error: updateError } = await supabase
-      .from("inventory_count_items")
-      .update({ counted_quantity: Number(item.expected_quantity ?? 0) })
-      .eq("id", item.id)
-      .eq("inventory_count_id", countId)
-      .is("counted_quantity", null);
-    if (updateError) throw queryError(updateError, "Could not keep the expected quantity on remaining lines.");
+    const expected = Number(item.expected_quantity ?? 0);
+    const list = byExpected.get(expected) ?? [];
+    list.push(item.id);
+    byExpected.set(expected, list);
+  }
+  for (const [expected, ids] of byExpected) {
+    for (const chunk of chunkList(ids)) {
+      const { error } = await supabase
+        .from("inventory_count_items")
+        .update({ counted_quantity: expected })
+        .eq("inventory_count_id", countId)
+        .in("id", chunk);
+      if (error) throw queryError(error, "Could not keep the expected quantity on remaining lines.");
+    }
   }
 }
 

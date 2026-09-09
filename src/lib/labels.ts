@@ -60,6 +60,12 @@ export function salonChipLabel(name: string) {
   return normalized || name.trim().toLowerCase();
 }
 
+export function keepOnSalonLabel(name: string) {
+  const chip = salonChipLabel(name);
+  if (!chip) return "Keep on salon";
+  return `Keep on ${chip.charAt(0).toUpperCase()}${chip.slice(1)}`;
+}
+
 export function countStatusLabel(status: string) {
   if (status === "in_progress") return "Draft";
   if (status === "completed") return "Confirmed";

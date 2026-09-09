@@ -9,11 +9,11 @@ import {
   saveCountQuantities,
 } from "../actions";
 import { formatDateTime, formatQty } from "@/lib/format";
-import { salonChipLabel, salonName } from "@/lib/labels";
+import { keepOnSalonLabel, salonName } from "@/lib/labels";
 import { searchFieldsMatch } from "@/lib/search";
 import type { CountEntryLine, CountLine, CountLocationOption } from "../count-lines";
 import { signedQty, sortCountLines, varianceTextClass } from "../count-lines";
-import { btnClass, btnSecondaryClass, fieldClass, tableClass, tdClass, thClass } from "@/lib/ui";
+import { btnClass, btnSecondaryClass, checkboxClass, fieldClass, tableClass, tdClass, thClass } from "@/lib/ui";
 import { cn } from "@/lib/utils";
 
 export type { CountLine } from "../count-lines";
@@ -75,6 +75,112 @@ function namesFromItems(items: CountLine[]) {
   );
 }
 
+function uniqueSortedLabels(values: string[]) {
+  return [...new Set(values.map((value) => value.trim()).filter(Boolean))].sort((left, right) =>
+    left.localeCompare(right, undefined, { sensitivity: "base" }),
+  );
+}
+
+function matchesBrandFilters(item: CountLine, brand: string, brandSub: string) {
+  if (brand && item.brand !== brand) return false;
+  if (brandSub === "__none__" && item.brandSub.trim()) return false;
+  if (brandSub && brandSub !== "__none__" && item.brandSub !== brandSub) return false;
+  return true;
+}
+
+function tableBrands(rows: CountLine[]) {
+  return uniqueSortedLabels(rows.map((item) => item.brand));
+}
+
+function tableBrandSubs(rows: CountLine[], brand: string) {
+  const source = brand ? rows.filter((item) => item.brand === brand) : rows;
+  return uniqueSortedLabels(source.map((item) => item.brandSub));
+}
+
+function BrandTableFilters({
+  brand,
+  brandSub,
+  brands,
+  brandSubs,
+  onBrandChange,
+  onBrandSubChange,
+}: {
+  brand: string;
+  brandSub: string;
+  brands: string[];
+  brandSubs: string[];
+  onBrandChange: (brand: string) => void;
+  onBrandSubChange: (brandSub: string) => void;
+}) {
+  return (
+    <div className="flex flex-wrap items-end gap-3">
+      <label className="min-w-48 space-y-1 text-sm">
+        <span>Brand</span>
+        <select
+          className={fieldClass}
+          value={brand}
+          onChange={(event) => onBrandChange(event.target.value)}
+        >
+          <option value="">All brands</option>
+          {brands.map((option) => (
+            <option key={option} value={option}>
+              {option}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label className="min-w-48 space-y-1 text-sm">
+        <span>Brand_sub</span>
+        <select
+          className={fieldClass}
+          value={brandSub}
+          onChange={(event) => onBrandSubChange(event.target.value)}
+        >
+          <option value="">All product lines</option>
+          <option value="__none__">No Brand_sub</option>
+          {brandSubs.map((option) => (
+            <option key={option} value={option}>
+              {option}
+            </option>
+          ))}
+        </select>
+      </label>
+    </div>
+  );
+}
+
+function mergeCountedLocations(rows: CountLine[], quantities: Record<string, string>) {
+  const groups = new Map<string, CountLine[]>();
+  for (const row of rows) {
+    const list = groups.get(row.productId) ?? [];
+    list.push(row);
+    groups.set(row.productId, list);
+  }
+  return [...groups.values()].map((group) => {
+    const first = group[0];
+    const locations = [
+      ...new Set(group.map((row) => row.location).filter((name) => name && name !== "—")),
+    ].sort((left, right) => left.localeCompare(right, undefined, { sensitivity: "base" }));
+    const expected = group.reduce((sum, row) => sum + row.expected, 0);
+    const countedParts = group.map((row) => quantities[row.id] ?? "");
+    const counted = countedParts.some((value) => value.trim() === "")
+      ? ""
+      : String(countedParts.reduce((sum, value) => sum + Number(value), 0));
+    return {
+      key: first.productId,
+      productId: first.productId,
+      orderName: first.orderName,
+      name: first.name,
+      brand: first.brand,
+      brandSub: first.brandSub,
+      sizeLabel: first.sizeLabel,
+      location: locations.join(", ") || "—",
+      expected,
+      counted,
+    };
+  });
+}
+
 function CountLinesTable({
   rows,
   quantities,
@@ -87,6 +193,7 @@ function CountLinesTable({
   names,
   nameEditable,
   onNameChange,
+  mergeLocations = false,
 }: {
   rows: CountLine[];
   quantities: Record<string, string>;
@@ -99,20 +206,59 @@ function CountLinesTable({
   names?: Record<string, string>;
   nameEditable?: boolean;
   onNameChange?: (productId: string, name: string) => void;
+  mergeLocations?: boolean;
 }) {
   const showSalon = Boolean(salonHeader);
-  const columns = showSalon ? 9 : 8;
+  const columns = showSalon ? 10 : 9;
+  const displayRows = mergeLocations
+    ? mergeCountedLocations(rows, quantities)
+    : rows.map((item) => ({
+        key: item.id,
+        productId: item.productId,
+        orderName: item.orderName,
+        name: item.name,
+        brand: item.brand,
+        brandSub: item.brandSub,
+        sizeLabel: item.sizeLabel,
+        location: item.location,
+        expected: item.expected,
+        counted: quantities[item.id] ?? "",
+      }));
+  const salonProductIds = [...new Set(displayRows.map((item) => item.productId))];
+  const salonOnCount = salonProductIds.filter((productId) => salonOn?.[productId]).length;
+  const salonAllOn = salonProductIds.length > 0 && salonOnCount === salonProductIds.length;
+  const salonSomeOn = salonOnCount > 0 && salonOnCount < salonProductIds.length;
   return (
     <div className={cn("overflow-x-auto rounded-xl border border-border bg-card", frameClass)}>
       <table className={tableClass}>
         <thead>
           <tr>
             {showSalon ? (
-              <th className={cn(thClass, "w-16 capitalize")}>{salonHeader}</th>
+              <th className={cn(thClass, "min-w-36 whitespace-nowrap")}>
+                <label className="inline-flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    className={checkboxClass}
+                    checked={salonAllOn}
+                    ref={(input) => {
+                      if (!input) return;
+                      input.indeterminate = salonSomeOn;
+                    }}
+                    disabled={!salonEditable || salonProductIds.length === 0}
+                    aria-label={salonHeader}
+                    onChange={(event) => {
+                      const on = event.target.checked;
+                      for (const productId of salonProductIds) onSalonChange?.(productId, on);
+                    }}
+                  />
+                  <span>{salonHeader}</span>
+                </label>
+              </th>
             ) : null}
             <th className={thClass}>Order name</th>
             <th className={thClass}>Name</th>
             <th className={thClass}>Brand</th>
+            <th className={thClass}>Brand_sub</th>
             <th className={thClass}>Size</th>
             <th className={thClass}>Location</th>
             <th className={thClass}>Expected</th>
@@ -121,27 +267,27 @@ function CountLinesTable({
           </tr>
         </thead>
         <tbody>
-          {rows.length === 0 ? (
+          {displayRows.length === 0 ? (
             <tr>
               <td className={tdClass} colSpan={columns}>
                 {empty}
               </td>
             </tr>
           ) : (
-            rows.map((item) => {
-              const counted = quantities[item.id] ?? "";
-              const variance = liveVariance(item.expected, counted);
+            displayRows.map((item) => {
+              const variance = liveVariance(item.expected, item.counted);
               const onSalon = salonOn?.[item.productId] ?? false;
               const name = names?.[item.productId] ?? item.name;
               return (
-                <tr key={item.id}>
+                <tr key={item.key}>
                   {showSalon ? (
                     <td className={tdClass}>
                       <input
                         type="checkbox"
+                        className={checkboxClass}
                         checked={onSalon}
                         disabled={!salonEditable}
-                        aria-label={`Available at ${salonHeader}`}
+                        aria-label={salonHeader}
                         onChange={(event) => onSalonChange?.(item.productId, event.target.checked)}
                       />
                     </td>
@@ -153,7 +299,7 @@ function CountLinesTable({
                         className={cn(fieldClass, "min-w-40")}
                         value={name}
                         placeholder={item.orderName || "Falls back to order name"}
-                        aria-label={`Salon name for ${item.orderName || item.sku || "product"}`}
+                        aria-label={`Salon name for ${item.orderName || "product"}`}
                         onChange={(event) => onNameChange?.(item.productId, event.target.value)}
                       />
                     ) : (
@@ -161,10 +307,11 @@ function CountLinesTable({
                     )}
                   </td>
                   <td className={tdClass}>{item.brand || "—"}</td>
+                  <td className={tdClass}>{item.brandSub || "—"}</td>
                   <td className={tdClass}>{item.sizeLabel || "—"}</td>
                   <td className={tdClass}>{item.location}</td>
                   <td className={tdClass}>{formatQty(item.expected)}</td>
-                  <td className={tdClass}>{counted.trim() === "" ? "—" : formatQty(counted)}</td>
+                  <td className={tdClass}>{item.counted.trim() === "" ? "—" : formatQty(item.counted)}</td>
                   <td className={cn(tdClass, varianceTextClass(variance))}>
                     {variance === null ? "—" : signedQty(variance)}
                   </td>
@@ -218,6 +365,10 @@ export function CountItemsForm({
   const [locationId, setLocationId] = useState(
     lockedLocationId ?? locations[0]?.id ?? "",
   );
+  const [countedBrandFilter, setCountedBrandFilter] = useState("");
+  const [countedBrandSubFilter, setCountedBrandSubFilter] = useState("");
+  const [uncountedBrandFilter, setUncountedBrandFilter] = useState("");
+  const [uncountedBrandSubFilter, setUncountedBrandSubFilter] = useState("");
   const qtyRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -245,10 +396,6 @@ export function CountItemsForm({
       return next;
     });
   }, [productIdsKey]);
-
-  useEffect(() => {
-    if (lockedLocationId) setLocationId(lockedLocationId);
-  }, [lockedLocationId]);
 
   const products = useMemo(() => uniqueProducts(items), [items]);
   const needle = query.trim().toLowerCase();
@@ -278,8 +425,38 @@ export function CountItemsForm({
     () => sortCountLines(items.filter((item) => !scannedItemIds.has(item.id))),
     [items, scannedItemIds],
   );
+  const countedBrands = useMemo(() => tableBrands(countedRows), [countedRows]);
+  const countedBrandSubs = useMemo(
+    () => tableBrandSubs(countedRows, countedBrandFilter),
+    [countedBrandFilter, countedRows],
+  );
+  const uncountedBrands = useMemo(() => tableBrands(uncountedRows), [uncountedRows]);
+  const uncountedBrandSubs = useMemo(
+    () => tableBrandSubs(uncountedRows, uncountedBrandFilter),
+    [uncountedBrandFilter, uncountedRows],
+  );
+  const filteredCountedRows = useMemo(
+    () => countedRows.filter((item) => matchesBrandFilters(item, countedBrandFilter, countedBrandSubFilter)),
+    [countedBrandFilter, countedBrandSubFilter, countedRows],
+  );
+  const filteredUncountedRows = useMemo(
+    () =>
+      uncountedRows.filter((item) =>
+        matchesBrandFilters(item, uncountedBrandFilter, uncountedBrandSubFilter),
+      ),
+    [uncountedBrandFilter, uncountedBrandSubFilter, uncountedRows],
+  );
   const missing = items.filter((item) => (quantities[item.id] ?? "").trim() === "").length;
-  const locationLocked = Boolean(lockedLocationId) || locations.length <= 1;
+  const locationLocked = Boolean(lockedLocationId);
+
+  useEffect(() => {
+    if (lockedLocationId) {
+      setLocationId(lockedLocationId);
+      return;
+    }
+    if (locationId && locations.some((location) => location.id === locationId)) return;
+    setLocationId(locations[0]?.id ?? "");
+  }, [lockedLocationId, locationId, locations]);
 
   function pickMatch(product: CountProduct) {
     setSelectedProductId(product.productId);
@@ -379,6 +556,7 @@ export function CountItemsForm({
     const formData = new FormData();
     formData.set("count_id", countId);
     formData.set("mode", mode);
+    for (const item of filteredUncountedRows) formData.append("item_id", item.id);
     setPending(mode);
     setError(null);
     setMessage(null);
@@ -387,8 +565,8 @@ export function CountItemsForm({
       await fillUncountedCountItems(formData);
       setMessage(
         mode === "zero"
-          ? "Remaining lines counted as 0."
-          : "Remaining lines kept at the expected quantity.",
+          ? "Remaining lines counted as 0. You can switch to keep the expected quantity."
+          : "Remaining lines kept at the expected quantity. You can switch to count as 0.",
       );
       router.refresh();
     } catch (err) {
@@ -399,23 +577,20 @@ export function CountItemsForm({
     }
   }
 
-  function dropUncountedFromSalonList() {
-    const productIds = [...new Set(uncountedRows.map((item) => item.productId))];
-    setSalonOn((current) => {
-      const next = { ...current };
-      for (const productId of productIds) next[productId] = false;
-      return next;
-    });
-    setError(null);
-    setMessage(
-      productIds.length === 0
-        ? `No uncounted products to drop from ${salonName(branchName) || "this salon"}.`
-        : `Unchecked ${productIds.length} product${productIds.length === 1 ? "" : "s"} from the ${salonName(branchName) || "salon"} list. Tick individual rows to keep them, then save or confirm.`,
-    );
-  }
-
   const salonLabel = salonName(branchName) || "this salon";
-  const salonHeader = salonChipLabel(branchName) || "salon";
+  const salonHeader = keepOnSalonLabel(branchName);
+  const uncountedFilledAsZero =
+    filteredUncountedRows.length > 0 &&
+    filteredUncountedRows.every((item) => {
+      const value = quantities[item.id] ?? "";
+      return value !== "" && Number(value) === 0;
+    });
+  const uncountedFilledAsKeep =
+    filteredUncountedRows.length > 0 &&
+    filteredUncountedRows.every((item) => {
+      const value = quantities[item.id] ?? "";
+      return value !== "" && Number(value) === item.expected;
+    });
 
   return (
     <div className="space-y-4">
@@ -454,7 +629,7 @@ export function CountItemsForm({
       ) : null}
 
       {mode === "count" && editable ? (
-        <div className="grid gap-3 rounded-xl border border-border bg-card p-4 md:grid-cols-[minmax(0,1.4fr)_10rem_8rem_8rem_10rem_auto]">
+        <div className="grid gap-3 rounded-xl border border-border bg-card p-4 md:grid-cols-[minmax(0,1.4fr)_minmax(14rem,1fr)_8rem_8rem_8rem_auto]">
           <label className="relative space-y-1 text-sm">
             <span>Find product</span>
             <input
@@ -501,12 +676,12 @@ export function CountItemsForm({
               </p>
             ) : null}
           </label>
-          <label className="space-y-1 text-sm">
+          <label className="min-w-56 space-y-1 text-sm">
             <span>Location</span>
             <select
               className={fieldClass}
               value={locationId}
-              disabled={locationLocked}
+              disabled={locationLocked || locations.length === 0}
               onChange={(event) => setLocationId(event.target.value)}
             >
               {locations.length === 0 ? <option value="">No locations</option> : null}
@@ -562,7 +737,7 @@ export function CountItemsForm({
         <p className="text-sm text-muted">
           Quantities come from counting or the bulk actions on uncounted lines. Edit Name to set the
           salon-friendly name shared by Min and Kin — confirming this count replaces the existing names.
-          Untick a product to drop it from the {salonLabel} list, then save or confirm.
+          A ticked {salonHeader} checkbox leaves the product on {salonLabel}.
         </p>
       ) : null}
 
@@ -637,10 +812,25 @@ export function CountItemsForm({
         <div className="space-y-6">
           <div className="space-y-2">
             <h2 className="text-sm font-medium">Counted</h2>
+            <BrandTableFilters
+              brand={countedBrandFilter}
+              brandSub={countedBrandSubFilter}
+              brands={countedBrands}
+              brandSubs={countedBrandSubs}
+              onBrandChange={(brand) => {
+                setCountedBrandFilter(brand);
+                setCountedBrandSubFilter("");
+              }}
+              onBrandSubChange={setCountedBrandSubFilter}
+            />
             <CountLinesTable
-              rows={countedRows}
+              rows={filteredCountedRows}
               quantities={quantities}
-              empty="No products scanned on the counting page."
+              empty={
+                countedRows.length === 0
+                  ? "No products scanned on the counting page."
+                  : "No counted products match these filters."
+              }
               salonHeader={salonHeader}
               salonOn={salonOn}
               salonEditable={editable}
@@ -652,55 +842,46 @@ export function CountItemsForm({
               onNameChange={(productId, name) =>
                 setNames((current) => ({ ...current, [productId]: name }))
               }
+              mergeLocations
             />
           </div>
           <div className="space-y-2">
             <h2 className="text-sm font-medium">Not counted</h2>
+            <BrandTableFilters
+              brand={uncountedBrandFilter}
+              brandSub={uncountedBrandSubFilter}
+              brands={uncountedBrands}
+              brandSubs={uncountedBrandSubs}
+              onBrandChange={(brand) => {
+                setUncountedBrandFilter(brand);
+                setUncountedBrandSubFilter("");
+              }}
+              onBrandSubChange={setUncountedBrandSubFilter}
+            />
             {missing > 0 ? (
-              <div className="space-y-3 rounded-lg border border-red-200 bg-red-50 px-3 py-3 text-sm text-red-800">
-                <p>
-                  {missing} line{missing === 1 ? "" : "s"} still uncounted. Count remaining products as
-                  0 or keep the expected quantity. Drop from {salonLabel} unchecks those products from
-                  the salon list — you can tick individual rows back on.
-                </p>
-                {editable ? (
-                  <div className="flex flex-wrap gap-2">
-                    <button
-                      className={btnClass}
-                      disabled={pending !== null}
-                      type="button"
-                      onClick={() => void fillUncounted("zero")}
-                    >
-                      {pending === "zero" ? "Updating…" : "Count all as 0"}
-                    </button>
-                    <button
-                      className={btnSecondaryClass}
-                      disabled={pending !== null}
-                      type="button"
-                      onClick={() => void fillUncounted("keep")}
-                    >
-                      {pending === "keep" ? "Updating…" : "Keep current quantity"}
-                    </button>
-                    <button
-                      className={btnSecondaryClass}
-                      disabled={pending !== null}
-                      type="button"
-                      onClick={dropUncountedFromSalonList}
-                    >
-                      Drop from {salonLabel}
-                    </button>
-                  </div>
-                ) : null}
-              </div>
-            ) : editable && uncountedRows.length > 0 ? (
+              <p className="rounded-lg border border-red-200 bg-red-50 px-3 py-3 text-sm text-red-800">
+                {missing} line{missing === 1 ? "" : "s"} still uncounted. Count remaining products as 0 or
+                keep the expected quantity. Use {salonHeader} in the header to tick or untick every visible
+                product on {salonLabel}.
+              </p>
+            ) : null}
+            {editable && filteredUncountedRows.length > 0 ? (
               <div className="flex flex-wrap gap-2">
                 <button
-                  className={btnSecondaryClass}
+                  className={uncountedFilledAsZero && !uncountedFilledAsKeep ? btnClass : btnSecondaryClass}
                   disabled={pending !== null}
                   type="button"
-                  onClick={dropUncountedFromSalonList}
+                  onClick={() => void fillUncounted("zero")}
                 >
-                  Drop from {salonLabel}
+                  {pending === "zero" ? "Updating…" : "Count all as 0"}
+                </button>
+                <button
+                  className={uncountedFilledAsKeep ? btnClass : btnSecondaryClass}
+                  disabled={pending !== null}
+                  type="button"
+                  onClick={() => void fillUncounted("keep")}
+                >
+                  {pending === "keep" ? "Updating…" : "Keep current quantity"}
                 </button>
               </div>
             ) : null}
@@ -715,9 +896,13 @@ export function CountItemsForm({
               </p>
             ) : null}
             <CountLinesTable
-              rows={uncountedRows}
+              rows={filteredUncountedRows}
               quantities={quantities}
-              empty="Every product in this count was scanned."
+              empty={
+                uncountedRows.length === 0
+                  ? "Every product in this count was scanned."
+                  : "No uncounted products match these filters."
+              }
               salonHeader={salonHeader}
               salonOn={salonOn}
               salonEditable={editable}

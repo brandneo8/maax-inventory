@@ -28,14 +28,12 @@ export default async function CountReviewPage({
   const entries = count.entries.map((entry) => toCountEntry(entry, lineById.get(entry.inventory_count_item_id)));
   const missing = lines.filter((line) => line.counted == null).length;
   const changed = lines.filter((line) => line.variance != null && line.variance !== 0).length;
-  const lineLocationIds = new Set(lines.map((line) => line.storeLocationId));
   const branchLocations = (await getStoreLocations(supabase, companyId)).filter(
     (storeLocation) => storeLocation.branch_id === branch.id,
   );
-  const scopedLocations = count.store_location_id
+  const locations = count.store_location_id
     ? branchLocations.filter((storeLocation) => storeLocation.id === count.store_location_id)
     : branchLocations;
-  const locations = scopedLocations.filter((storeLocation) => lineLocationIds.has(storeLocation.id));
   const salonProductIds = [
     ...(await getSalonProductIds(
       supabase,
