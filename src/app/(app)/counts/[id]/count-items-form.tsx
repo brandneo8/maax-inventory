@@ -10,6 +10,7 @@ import {
 } from "../actions";
 import { formatDateTime, formatQty } from "@/lib/format";
 import { salonChipLabel, salonName } from "@/lib/labels";
+import { searchFieldsMatch } from "@/lib/search";
 import type { CountEntryLine, CountLine, CountLocationOption } from "../count-lines";
 import { signedQty, sortCountLines, varianceTextClass } from "../count-lines";
 import { btnClass, btnSecondaryClass, fieldClass, tableClass, tdClass, thClass } from "@/lib/ui";
@@ -33,10 +34,7 @@ function liveVariance(expected: number, counted: string) {
 }
 
 function productMatches(product: CountProduct, needle: string) {
-  if (!needle) return true;
-  return [product.orderName, product.name, product.sku, product.brand].some((value) =>
-    value.toLowerCase().includes(needle),
-  );
+  return searchFieldsMatch([product.orderName, product.name, product.sku, product.brand], needle);
 }
 
 function lineTitle(item: { name: string; orderName: string; sku: string }) {
@@ -68,6 +66,15 @@ function salonFlagsFromItems(items: CountLine[], salonProductIds: string[]) {
   );
 }
 
+function namesFromItems(items: CountLine[]) {
+  return Object.fromEntries(
+    [...new Set(items.map((item) => item.productId))].map((productId) => {
+      const item = items.find((row) => row.productId === productId);
+      return [productId, item?.name ?? ""];
+    }),
+  );
+}
+
 function CountLinesTable({
   rows,
   quantities,
@@ -77,6 +84,9 @@ function CountLinesTable({
   salonOn,
   salonEditable,
   onSalonChange,
+  names,
+  nameEditable,
+  onNameChange,
 }: {
   rows: CountLine[];
   quantities: Record<string, string>;
@@ -86,9 +96,12 @@ function CountLinesTable({
   salonOn?: Record<string, boolean>;
   salonEditable?: boolean;
   onSalonChange?: (productId: string, on: boolean) => void;
+  names?: Record<string, string>;
+  nameEditable?: boolean;
+  onNameChange?: (productId: string, name: string) => void;
 }) {
   const showSalon = Boolean(salonHeader);
-  const columns = showSalon ? 8 : 7;
+  const columns = showSalon ? 9 : 8;
   return (
     <div className={cn("overflow-x-auto rounded-xl border border-border bg-card", frameClass)}>
       <table className={tableClass}>
@@ -100,6 +113,7 @@ function CountLinesTable({
             <th className={thClass}>Order name</th>
             <th className={thClass}>Name</th>
             <th className={thClass}>Brand</th>
+            <th className={thClass}>Size</th>
             <th className={thClass}>Location</th>
             <th className={thClass}>Expected</th>
             <th className={thClass}>Counted</th>
@@ -118,6 +132,7 @@ function CountLinesTable({
               const counted = quantities[item.id] ?? "";
               const variance = liveVariance(item.expected, counted);
               const onSalon = salonOn?.[item.productId] ?? false;
+              const name = names?.[item.productId] ?? item.name;
               return (
                 <tr key={item.id}>
                   {showSalon ? (
@@ -132,8 +147,21 @@ function CountLinesTable({
                     </td>
                   ) : null}
                   <td className={tdClass}>{item.orderName || "—"}</td>
-                  <td className={tdClass}>{item.name || "—"}</td>
+                  <td className={tdClass}>
+                    {nameEditable ? (
+                      <input
+                        className={cn(fieldClass, "min-w-40")}
+                        value={name}
+                        placeholder={item.orderName || "Falls back to order name"}
+                        aria-label={`Salon name for ${item.orderName || item.sku || "product"}`}
+                        onChange={(event) => onNameChange?.(item.productId, event.target.value)}
+                      />
+                    ) : (
+                      name || "—"
+                    )}
+                  </td>
                   <td className={tdClass}>{item.brand || "—"}</td>
+                  <td className={tdClass}>{item.sizeLabel || "—"}</td>
                   <td className={tdClass}>{item.location}</td>
                   <td className={tdClass}>{formatQty(item.expected)}</td>
                   <td className={tdClass}>{counted.trim() === "" ? "—" : formatQty(counted)}</td>
@@ -183,6 +211,7 @@ export function CountItemsForm({
   const [salonOn, setSalonOn] = useState<Record<string, boolean>>(() =>
     salonFlagsFromItems(items, salonProductIds),
   );
+  const [names, setNames] = useState<Record<string, string>>(() => namesFromItems(items));
   const [query, setQuery] = useState("");
   const [searchQty, setSearchQty] = useState("");
   const [selectedProductId, setSelectedProductId] = useState<string | null>(null);
@@ -203,6 +232,19 @@ export function CountItemsForm({
   useEffect(() => {
     setSalonOn(salonFlagsFromItems(items, salonProductIds));
   }, [salonSourceKey]);
+
+  const productIdsKey = [...new Set(items.map((item) => item.productId))].sort().join(",");
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- keep typed names across quantity refreshes
+  useEffect(() => {
+    setNames((current) => {
+      const defaults = namesFromItems(items);
+      const next: Record<string, string> = {};
+      for (const productId of Object.keys(defaults)) {
+        next[productId] = productId in current ? current[productId] : defaults[productId];
+      }
+      return next;
+    });
+  }, [productIdsKey]);
 
   useEffect(() => {
     if (lockedLocationId) setLocationId(lockedLocationId);
@@ -255,6 +297,7 @@ export function CountItemsForm({
     }
     for (const productId of new Set(items.map((item) => item.productId))) {
       formData.set(`salon:${productId}`, salonOn[productId] ? "1" : "0");
+      if (kind === "complete") formData.set(`name:${productId}`, names[productId] ?? "");
     }
     await saveCountQuantities(formData);
     if (kind === "complete") await completeInventoryCount(formData);
@@ -517,8 +560,9 @@ export function CountItemsForm({
         </div>
       ) : mode === "review" ? (
         <p className="text-sm text-muted">
-          Quantities come from counting or the bulk actions on uncounted lines. Untick a product to drop
-          it from the {salonLabel} list, then save or confirm.
+          Quantities come from counting or the bulk actions on uncounted lines. Edit Name to set the
+          salon-friendly name shared by Min and Kin — confirming this count replaces the existing names.
+          Untick a product to drop it from the {salonLabel} list, then save or confirm.
         </p>
       ) : null}
 
@@ -541,6 +585,7 @@ export function CountItemsForm({
                   <thead>
                     <tr>
                       <th className={thClass}>Product</th>
+                      <th className={thClass}>Size</th>
                       <th className={thClass}>Location</th>
                       <th className={thClass}>Qty</th>
                       <th className={thClass}>Time</th>
@@ -549,7 +594,7 @@ export function CountItemsForm({
                   <tbody>
                     {entries.length === 0 ? (
                       <tr>
-                        <td className={tdClass} colSpan={4}>
+                        <td className={tdClass} colSpan={5}>
                           No scans yet.
                         </td>
                       </tr>
@@ -562,6 +607,7 @@ export function CountItemsForm({
                               <span className="block text-xs text-muted">{entry.name}</span>
                             ) : null}
                           </td>
+                          <td className={tdClass}>{entry.sizeLabel || "—"}</td>
                           <td className={tdClass}>{entry.location}</td>
                           <td className={cn(tdClass, varianceTextClass(entry.quantityDelta))}>
                             {signedQty(entry.quantityDelta)}
@@ -600,6 +646,11 @@ export function CountItemsForm({
               salonEditable={editable}
               onSalonChange={(productId, on) =>
                 setSalonOn((current) => ({ ...current, [productId]: on }))
+              }
+              names={names}
+              nameEditable={editable}
+              onNameChange={(productId, name) =>
+                setNames((current) => ({ ...current, [productId]: name }))
               }
             />
           </div>
@@ -672,6 +723,11 @@ export function CountItemsForm({
               salonEditable={editable}
               onSalonChange={(productId, on) =>
                 setSalonOn((current) => ({ ...current, [productId]: on }))
+              }
+              names={names}
+              nameEditable={editable}
+              onNameChange={(productId, name) =>
+                setNames((current) => ({ ...current, [productId]: name }))
               }
             />
           </div>

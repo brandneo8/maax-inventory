@@ -1,5 +1,6 @@
 import type { createClient } from "@/lib/supabase/server";
 import type { ProductClassification } from "@/lib/labels";
+import { normalizeSearchText } from "@/lib/search";
 
 type Client = Awaited<ReturnType<typeof createClient>>;
 
@@ -86,7 +87,7 @@ export async function getInventoryCount(supabase: Client, companyId: string, id:
     const { data: page, error: itemsError } = await supabase
       .from("inventory_count_items")
       .select(
-        "id, product_id, store_location_id, expected_quantity, counted_quantity, variance, notes, products(sku, name, order_name, brands(name)), store_locations(name)",
+        "id, product_id, store_location_id, expected_quantity, counted_quantity, variance, notes, products(sku, name, order_name, size_label, brands(name)), store_locations(name)",
       )
       .eq("inventory_count_id", id)
       .order("id")
@@ -218,7 +219,7 @@ export type CountCatalogHit = {
 };
 
 function likeNeedle(raw: string) {
-  return raw.replace(/[%_,()]/g, " ").replace(/\s+/g, " ").trim().slice(0, 80);
+  return normalizeSearchText(raw).replace(/ /g, "%").slice(0, 80);
 }
 
 export async function countLocationId(

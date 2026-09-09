@@ -1,12 +1,11 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { unstable_rethrow, useRouter } from "next/navigation";
-import { saveSalonProductNames } from "./actions";
+import { useMemo, useState } from "react";
 import { classificationLabel } from "@/lib/labels";
 import { parseSize, sizesMatch } from "@/lib/product-size";
-import { btnClass, btnSecondaryClass, fieldClass, tableClass, tdClass, thClass } from "@/lib/ui";
-import { formatQty, formatSku } from "@/lib/format";
+import { btnSecondaryClass, fieldClass, tableClass, tdClass, thClass } from "@/lib/ui";
+import { formatQty, formatSku, productDisplayName } from "@/lib/format";
+import { searchFieldsMatch } from "@/lib/search";
 import type { CatalogProduct } from "@/lib/data/products";
 import { cn } from "@/lib/utils";
 
@@ -16,32 +15,18 @@ function groupKey(product: SalonProduct) {
   return product.brandSub.trim() || "No Brand_sub";
 }
 
-function namesFromProducts(products: SalonProduct[]) {
-  return Object.fromEntries(products.map((product) => [product.id, product.name ?? ""]));
-}
-
 export function BranchProductsTable({
   products,
 }: {
   products: SalonProduct[];
 }) {
-  const router = useRouter();
-  const [editing, setEditing] = useState(false);
-  const [pending, setPending] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [message, setMessage] = useState<string | null>(null);
-  const [names, setNames] = useState<Record<string, string>>(() => namesFromProducts(products));
   const [searchQuery, setSearchQuery] = useState("");
   const [sizeQuery, setSizeQuery] = useState("");
   const [brandFilter, setBrandFilter] = useState("");
   const [brandSubFilter, setBrandSubFilter] = useState("");
   const [groupByBrandSub, setGroupByBrandSub] = useState(true);
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
-
-  useEffect(() => {
-    if (editing) return;
-    setNames(namesFromProducts(products));
-  }, [editing, products]);
+  const [bundleProduct, setBundleProduct] = useState<SalonProduct | null>(null);
 
   const parsedFilter = useMemo(() => parseSize(sizeQuery), [sizeQuery]);
   const brands = useMemo(
@@ -57,13 +42,9 @@ export function BranchProductsTable({
   );
 
   const visible = useMemo(() => {
-    const needle = searchQuery.trim().toLowerCase();
     return products.filter((product) => {
-      if (needle) {
-        const haystack = [names[product.id], product.name, product.orderName, product.brand]
-          .map((value) => (value ?? "").trim().toLowerCase())
-          .join(" ");
-        if (!haystack.includes(needle)) return false;
+      if (!searchFieldsMatch([product.name, product.orderName, product.brand], searchQuery)) {
+        return false;
       }
       if (brandFilter && product.brand !== brandFilter) return false;
       if (brandSubFilter === "none" && product.brandSub.trim()) return false;
@@ -75,7 +56,7 @@ export function BranchProductsTable({
       const label = product.sizeLabel?.toLowerCase() ?? "";
       return label.includes(sizeQuery.trim().toLowerCase());
     });
-  }, [brandFilter, brandSubFilter, names, parsedFilter, products, searchQuery, sizeQuery]);
+  }, [brandFilter, brandSubFilter, parsedFilter, products, searchQuery, sizeQuery]);
 
   const grouped = useMemo(() => {
     if (!groupByBrandSub) return [{ key: "", products: visible }];
@@ -109,10 +90,6 @@ export function BranchProductsTable({
     return [...seen.entries()].sort((left, right) => left[0] - right[0]);
   }, [products]);
 
-  const dirty = products.filter(
-    (product) => (names[product.id] ?? "").trim() !== (product.name ?? "").trim(),
-  );
-
   function toggleGroup(key: string) {
     setCollapsed((current) => {
       const next = new Set(current);
@@ -122,85 +99,10 @@ export function BranchProductsTable({
     });
   }
 
-  function cancelEdit() {
-    setNames(namesFromProducts(products));
-    setEditing(false);
-    setError(null);
-    setMessage(null);
-  }
-
-  async function saveNames() {
-    setPending(true);
-    setError(null);
-    setMessage(null);
-    try {
-      if (dirty.length === 0) {
-        setEditing(false);
-        setMessage("No name changes to save.");
-        return;
-      }
-      const result = await saveSalonProductNames(
-        dirty.map((product) => ({ id: product.id, name: names[product.id] ?? "" })),
-      );
-      setEditing(false);
-      setMessage(
-        result.saved === 1 ? "Saved 1 salon name." : `Saved ${result.saved} salon names.`,
-      );
-      router.refresh();
-    } catch (err) {
-      unstable_rethrow(err);
-      setError(err instanceof Error ? err.message : "Could not save names.");
-    } finally {
-      setPending(false);
-    }
-  }
-
   const columnCount = 9;
 
   return (
     <div className="space-y-3">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <p className="text-sm text-muted">
-          {editing
-            ? "Edit the salon-friendly name. Order name stays as on orders. A blank name falls back to order name."
-            : "Open Edit names to set a salon-friendly name. Min and Kin share this name."}
-        </p>
-        <div className="flex flex-wrap gap-2">
-          {editing ? (
-            <>
-              <button className={btnSecondaryClass} type="button" disabled={pending} onClick={cancelEdit}>
-                Cancel
-              </button>
-              <button className={btnClass} type="button" disabled={pending} onClick={() => void saveNames()}>
-                {pending ? "Saving…" : dirty.length > 0 ? `Save names (${dirty.length})` : "Done"}
-              </button>
-            </>
-          ) : (
-            <button
-              className={btnClass}
-              type="button"
-              disabled={pending || products.length === 0}
-              onClick={() => {
-                setError(null);
-                setMessage(null);
-                setEditing(true);
-              }}
-            >
-              Edit names
-            </button>
-          )}
-        </div>
-      </div>
-
-      {error ? (
-        <p className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">{error}</p>
-      ) : null}
-      {message ? (
-        <p className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
-          {message}
-        </p>
-      ) : null}
-
       <div className="flex flex-wrap items-end gap-3 rounded-xl border border-border bg-card p-4">
         <label className="min-w-64 flex-1 space-y-1 text-sm">
           <span>Search</span>
@@ -334,7 +236,6 @@ export function BranchProductsTable({
                   if (isCollapsed) return rows;
                 }
                 for (const product of group.products) {
-                  const name = names[product.id] ?? "";
                   rows.push(
                     <tr key={product.id}>
                       <td className={tdClass}>{formatSku(product.sku)}</td>
@@ -343,25 +244,22 @@ export function BranchProductsTable({
                         {product.orderName || "—"}
                         {product.brand ? <span className="block text-xs text-muted">{product.brand}</span> : null}
                       </td>
-                      <td className={tdClass}>
-                        {editing ? (
-                          <input
-                            className={cn(fieldClass, "min-w-48")}
-                            value={name}
-                            placeholder={product.orderName || "Falls back to order name"}
-                            disabled={pending}
-                            aria-label={`Salon name for ${product.orderName || product.sku || "product"}`}
-                            onChange={(event) =>
-                              setNames((current) => ({ ...current, [product.id]: event.target.value }))
-                            }
-                          />
-                        ) : (
-                          product.name || "—"
-                        )}
-                      </td>
+                      <td className={tdClass}>{product.name || "—"}</td>
                       <td className={tdClass}>{product.brandSub || "—"}</td>
                       <td className={tdClass}>{product.sizeLabel || "—"}</td>
-                      <td className={tdClass}>{product.isSet ? "Bundle" : "Single"}</td>
+                      <td className={tdClass}>
+                        {product.isSet ? (
+                          <button
+                            type="button"
+                            className="text-blue-600 underline"
+                            onClick={() => setBundleProduct(product)}
+                          >
+                            Bundle
+                          </button>
+                        ) : (
+                          "Single"
+                        )}
+                      </td>
                       <td className={tdClass}>{classificationLabel(product.defaultClassification)}</td>
                       <td className={tdClass}>{formatQty(product.onHand)}</td>
                     </tr>,
@@ -373,6 +271,50 @@ export function BranchProductsTable({
           </tbody>
         </table>
       </div>
+
+      {bundleProduct ? (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+          onClick={() => setBundleProduct(null)}
+        >
+          <div
+            className="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-xl border border-border bg-white p-4 shadow-lg"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h3 className="text-base font-semibold">Bundle contents</h3>
+                <p className="text-sm text-muted">
+                  {productDisplayName(bundleProduct) || bundleProduct.orderName || "Untitled bundle"}
+                </p>
+              </div>
+              <button className={btnSecondaryClass} type="button" onClick={() => setBundleProduct(null)}>
+                Close
+              </button>
+            </div>
+            {bundleProduct.components.length === 0 ? (
+              <p className="mt-4 text-sm text-muted">No products are listed in this bundle yet.</p>
+            ) : (
+              <table className={cn(tableClass, "mt-4")}>
+                <thead>
+                  <tr>
+                    <th className={thClass}>Product</th>
+                    <th className={thClass}>Qty</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {bundleProduct.components.map((component) => (
+                    <tr key={component.productId}>
+                      <td className={tdClass}>{component.label}</td>
+                      <td className={tdClass}>{formatQty(component.quantity)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

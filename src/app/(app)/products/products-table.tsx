@@ -1,7 +1,7 @@
 "use client";
 
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { useRouter } from "next/navigation";
+import { unstable_rethrow, useRouter } from "next/navigation";
 import {
   deleteProduct,
   saveProducts,
@@ -10,11 +10,12 @@ import {
 import { catalogTax, confirmedRetailPrice, grossMarginPercent, allocatedBundleTotal, autoAllocateBundleCosts, bundleCostRemainder, bundleCostsComplete, inheritedUnitCost, roundMoney } from "@/lib/catalog-pricing";
 import { downloadCsv } from "@/lib/csv";
 import { formatCatalogSavedLabel, formatMoney, formatPercent, formatQty, productDisplayName, productLabel } from "@/lib/format";
+import { searchFieldsMatch, searchTextMatches } from "@/lib/search";
 import { SalonChipField } from "@/components/salon-chip-field";
 import { BrandSubFilter, NO_BRAND_SUB } from "@/components/brand-sub-filter";
 import { CLASSIFICATIONS, classificationLabel, salonChipLabel, type ProductClassification } from "@/lib/labels";
 import { parseSize, sizesMatch } from "@/lib/product-size";
-import { btnClass, btnSecondaryClass, fieldClass, tableClass, tdClass, thClass } from "@/lib/ui";
+import { btnClass, btnSecondaryClass, checkboxClass, fieldClass, tableClass, tdClass, thClass } from "@/lib/ui";
 import { cn } from "@/lib/utils";
 import { BulkEditModal, type BulkEditFields } from "./bulk-edit-modal";
 
@@ -573,10 +574,11 @@ export function ProductsTable({
       if (typeFilter && typeFilter !== "none" && current.classification !== typeFilter) return false;
       if (tagFilter === "none" && current.tagIds.length > 0) return false;
       if (tagFilter && tagFilter !== "none" && !current.tagIds.includes(tagFilter)) return false;
-      const needle = query.trim().toLowerCase();
+      const needle = query.trim();
       if (!needle) return true;
-      return [current.sku, current.barcode, current.name, current.orderName, current.brand, current.brandSub, current.size, current.supplierName].some(
-        (value) => value.toLowerCase().includes(needle),
+      return searchFieldsMatch(
+        [current.sku, current.barcode, current.name, current.orderName, current.brand, current.brandSub, current.size, current.supplierName],
+        needle,
       );
     },
     [brandFilter, brandSubFilter, overlayTick, query, salonFilter, sizeFilter, supplierFilter, tagFilter, typeFilter],
@@ -1108,13 +1110,24 @@ export function ProductsTable({
   async function onDelete(index: number) {
     const row = rows[index];
     if (!row) return;
+    const bundles = row.id ? (usedInBundles.get(row.id) ?? []) : [];
+    if (bundles.length > 0) {
+      setError(
+        `Cannot delete this product because it is part of ${bundles.join(", ")}. Remove it from those bundles first.`,
+      );
+      return;
+    }
     setPending(true);
     setError(null);
     setMessage(null);
     try {
       if (row.id) {
         dirtyIdsRef.current.delete(row.id);
-        await deleteProduct(row.id);
+        const result = await deleteProduct(row.id);
+        if (result?.error) {
+          setError(result.error);
+          return;
+        }
         setSelected((current) => current.filter((id) => id !== row.id));
       }
       setRows((current) => {
@@ -1127,6 +1140,7 @@ export function ProductsTable({
       setSnapshotAt(new Date());
       router.refresh();
     } catch (err) {
+      unstable_rethrow(err);
       setError(err instanceof Error ? err.message : "Could not delete that product.");
     } finally {
       setPending(false);
@@ -1386,6 +1400,7 @@ export function ProductsTable({
                 <div className="flex items-center gap-1.5 whitespace-nowrap">
                   <input
                     type="checkbox"
+                    className={checkboxClass}
                     checked={allSelected}
                     onChange={toggleAll}
                     aria-label="Select all products"
@@ -1527,6 +1542,7 @@ export function ProductsTable({
                             {groupIds.length > 0 ? (
                               <input
                                 type="checkbox"
+                                className={checkboxClass}
                                 checked={groupSelectedCount === groupIds.length}
                                 ref={(input) => {
                                   if (!input) return;
@@ -1562,6 +1578,7 @@ export function ProductsTable({
                       {row.id ? (
                         <input
                           type="checkbox"
+                          className={checkboxClass}
                           checked={isSelected}
                           onChange={() => toggleOne(row.id!)}
                           aria-label={`Select ${productDisplayName(row) || row.orderName || "product"}`}
@@ -1807,6 +1824,7 @@ export function ProductsTable({
                       {editing ? (
                         <input
                           type="checkbox"
+                          className={checkboxClass}
                           checked={row.isSet}
                           onChange={(event) => updateRow(index, { isSet: event.target.checked })}
                           aria-label={`Mark ${productDisplayName(row) || row.orderName || "product"} as a bundle`}
@@ -1974,11 +1992,10 @@ function BundlePicker({
 }) {
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
-  const needle = query.trim().toLowerCase();
   const selectedIds = new Set(selected.map((item) => item.productId));
   const matches = choices
     .filter((choice) => choice.id !== excludeId && !selectedIds.has(choice.id))
-    .filter((choice) => !needle || choice.label.toLowerCase().includes(needle))
+    .filter((choice) => searchTextMatches(choice.label, query))
     .slice(0, 20);
   const mixed = selected.length > 1;
   const allocated = selected.map((item) => parsedAllocatedCost(item.allocatedCost));

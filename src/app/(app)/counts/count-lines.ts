@@ -8,6 +8,7 @@ export type CountLine = {
   name: string;
   sku: string;
   brand: string;
+  sizeLabel: string;
   location: string;
   expected: number;
   counted: number | null;
@@ -20,6 +21,7 @@ export type CountEntryLine = {
   orderName: string;
   name: string;
   brand: string;
+  sizeLabel: string;
   location: string;
   quantityDelta: number;
   createdAt: string;
@@ -49,6 +51,7 @@ export function toCountLine(
     name: product?.name?.trim() ?? "",
     sku: product?.sku?.trim() ?? "",
     brand: brandName(product && "brands" in product ? product.brands : null),
+    sizeLabel: product && "size_label" in product ? String(product.size_label ?? "").trim() : "",
     location: itemLocation?.name ?? "—",
     expected: Number(item.expected_quantity ?? 0),
     counted: item.counted_quantity === null ? null : Number(item.counted_quantity),
@@ -66,6 +69,7 @@ export function toCountEntry(
     orderName: item?.orderName ?? "",
     name: item?.name ?? "",
     brand: item?.brand ?? "",
+    sizeLabel: item?.sizeLabel ?? "",
     location: item?.location ?? "—",
     quantityDelta: Number(entry.quantity_delta),
     createdAt: entry.created_at,

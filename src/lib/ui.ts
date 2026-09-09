@@ -13,6 +13,7 @@ export const btnDangerClass =
 export const tableClass = "min-w-full text-left text-sm";
 export const thClass = "border-b border-border px-3 py-2 font-medium text-muted";
 export const tdClass = "border-b border-border px-3 py-2";
+export const checkboxClass = "h-[1.2em] w-[1.2em] shrink-0 accent-slate-900";
 
 export function workingIn(displayName: string) {
   return `Working in ${displayName}.`;

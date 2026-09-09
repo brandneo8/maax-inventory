@@ -1,10 +1,9 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { requireAdmin, requireBranch } from "@/lib/auth";
+import { requireAdmin } from "@/lib/auth";
 import { catalogSize, normalizeOptionalText, parseMoney } from "@/lib/catalog-import";
 import { persistProductComponents, syncBundleTag } from "@/lib/data/product-components";
-import { updateSalonProductNames } from "@/lib/data/products";
 import type { ProductClassification } from "@/lib/labels";
 import { parseSize } from "@/lib/product-size";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -21,18 +20,6 @@ function revalidateCatalog() {
   revalidatePath("/reports");
   revalidatePath("/counts");
   revalidatePath("/");
-}
-
-export async function saveSalonProductNames(updates: { id: string; name: string }[]) {
-  const { supabase, companyId, branch } = await requireBranch();
-  const saved = await updateSalonProductNames(
-    supabase,
-    companyId,
-    branch.id,
-    updates.map((row) => ({ id: row.id, name: normalizeOptionalText(row.name) })),
-  );
-  revalidateCatalog();
-  return { saved };
 }
 
 async function stampCatalogSaved(companyId: string, email: string | undefined) {
@@ -323,11 +310,105 @@ export async function saveProducts(drafts: ProductDraft[]) {
   return { saved };
 }
 
-export async function deleteProduct(id: string) {
+async function productHasRows(
+  supabase: Client,
+  table:
+    | "inventory_count_items"
+    | "inventory_transactions"
+    | "purchase_order_items"
+    | "goods_receipt_items"
+    | "invoice_items"
+    | "retail_use_entries",
+  productId: string,
+) {
+  const { data, error } = await supabase.from(table).select("product_id").eq("product_id", productId).limit(1);
+  if (error) return { error: error.message, exists: false };
+  return { exists: (data ?? []).length > 0 };
+}
+
+function joinReasons(reasons: string[]) {
+  if (reasons.length === 0) return "it is used elsewhere in inventory";
+  if (reasons.length === 1) return reasons[0];
+  return `${reasons.slice(0, -1).join(", ")}, and ${reasons[reasons.length - 1]}`;
+}
+
+function productDeleteError(error: { code?: string; message?: string }) {
+  if (error.code === "23503") {
+    return "This product cannot be deleted because it is used in stock, orders, counts, or a bundle.";
+  }
+  return error.message || "Could not delete that product.";
+}
+
+export async function deleteProduct(id: string): Promise<{ error?: string }> {
   const { supabase, companyId } = await requireAdmin();
-  const { error } = await supabase.from("products").delete().eq("id", id).eq("company_id", companyId);
-  if (error) throw new Error(error.message);
+  if (!id) return { error: "That product is missing." };
+
+  const { data: product, error: productError } = await supabase
+    .from("products")
+    .select("id")
+    .eq("id", id)
+    .eq("company_id", companyId)
+    .maybeSingle();
+  if (productError) return { error: productError.message };
+  if (!product) return { error: "That product was already removed." };
+
+  const reasons: string[] = [];
+  const { data: bundleRows, error: bundleError } = await supabase
+    .from("product_components")
+    .select("set_product_id")
+    .eq("component_product_id", id)
+    .limit(8);
+  if (bundleError) return { error: bundleError.message };
+  if ((bundleRows ?? []).length > 0) {
+    const bundleIds = [...new Set((bundleRows ?? []).map((row) => row.set_product_id))];
+    const { data: bundles, error: namesError } = await supabase
+      .from("products")
+      .select("order_name, name")
+      .eq("company_id", companyId)
+      .in("id", bundleIds);
+    if (namesError) return { error: namesError.message };
+    const labels = (bundles ?? [])
+      .map((row) => row.name?.trim() || row.order_name?.trim())
+      .filter(Boolean);
+    reasons.push(
+      labels.length > 0 ? `it is part of ${labels.join(", ")}` : "it is part of a bundle",
+    );
+  }
+
+  const checks = await Promise.all([
+    productHasRows(supabase, "inventory_count_items", id),
+    productHasRows(supabase, "inventory_transactions", id),
+    productHasRows(supabase, "purchase_order_items", id),
+    productHasRows(supabase, "goods_receipt_items", id),
+    productHasRows(supabase, "invoice_items", id),
+    productHasRows(supabase, "retail_use_entries", id),
+  ]);
+  const checkError = checks.find((check) => check.error)?.error;
+  if (checkError) return { error: checkError };
+  if (checks[0].exists) reasons.push("it appears on an inventory count");
+  if (checks[1].exists) reasons.push("it has stock movements");
+  if (checks[2].exists) reasons.push("it is on a purchase order");
+  if (checks[3].exists) reasons.push("it is on a goods receipt");
+  if (checks[4].exists) reasons.push("it is on an invoice");
+  if (checks[5].exists) reasons.push("it has retail-use records");
+
+  if (reasons.length > 0) {
+    return {
+      error: `Cannot delete this product because ${joinReasons(reasons)}. Untick a salon to hide it from that list instead of deleting.`,
+    };
+  }
+
+  const { data: removed, error } = await supabase
+    .from("products")
+    .delete()
+    .eq("id", id)
+    .eq("company_id", companyId)
+    .select("id");
+  if (error) return { error: productDeleteError(error) };
+  if (!removed?.length) return { error: "Could not delete that product." };
+
   revalidateCatalog();
+  return {};
 }
 
 export async function bulkUpdateProductClassification(input: {

@@ -232,30 +232,13 @@ export async function getBranchOnHand(
   return qty;
 }
 
-export async function updateSalonProductNames(
+export async function updateProductNames(
   supabase: Client,
   companyId: string,
-  branchId: string,
   updates: { id: string; name: string | null }[],
 ) {
   const wanted = [...new Map(updates.filter((row) => row.id).map((row) => [row.id, row.name]))];
   if (wanted.length === 0) return 0;
-
-  const allowed = new Set<string>();
-  for (let index = 0; index < wanted.length; index += 200) {
-    const chunk = wanted.slice(index, index + 200).map(([id]) => id);
-    const { data, error } = await supabase
-      .from("product_branches")
-      .select("product_id")
-      .eq("branch_id", branchId)
-      .in("product_id", chunk);
-    if (error) throw new Error(error.message || "Could not check this salon’s product list.");
-    for (const row of data ?? []) allowed.add(row.product_id);
-  }
-
-  if (wanted.some(([id]) => !allowed.has(id))) {
-    throw new Error("Some products are not on this salon’s list.");
-  }
 
   for (const [id, name] of wanted) {
     const { error } = await supabase

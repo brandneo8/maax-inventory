@@ -15,6 +15,7 @@ import {
   syncProductSalonMembership,
   voidCompletedCount,
 } from "@/lib/data/counts";
+import { updateProductNames } from "@/lib/data/products";
 import { formatDate, singaporeToday } from "@/lib/format";
 import type { ProductClassification } from "@/lib/labels";
 
@@ -52,6 +53,18 @@ function salonFlagsFromForm(formData: FormData) {
     if (String(value) === "1") keepOnSalon.add(productId);
   }
   return { productIds: [...new Set(productIds)], keepOnSalon };
+}
+
+function namesFromForm(formData: FormData) {
+  const updates: { id: string; name: string | null }[] = [];
+  for (const [key, value] of formData.entries()) {
+    if (!key.startsWith("name:")) continue;
+    const id = key.slice("name:".length);
+    if (!id) continue;
+    const name = String(value).trim();
+    updates.push({ id, name: name ? name : null });
+  }
+  return updates;
 }
 
 export async function createInventoryCount(formData: FormData) {
@@ -336,6 +349,12 @@ export async function completeInventoryCount(formData: FormData) {
 
   if (salonFlags.productIds.length > 0) {
     await syncProductSalonMembership(supabase, branch.id, salonFlags.productIds, salonFlags.keepOnSalon);
+  }
+
+  const allowedNameIds = new Set(productIds);
+  const nameUpdates = namesFromForm(formData).filter((row) => allowedNameIds.has(row.id));
+  if (nameUpdates.length > 0) {
+    await updateProductNames(supabase, companyId, nameUpdates);
   }
 
   const { error: statusError } = await supabase
