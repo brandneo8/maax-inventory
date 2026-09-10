@@ -13,10 +13,27 @@ export default async function ReportsPage() {
   ]);
   const branchStock = stock.filter((row) => row.branch_id === branch.id);
   const qtyByProduct = new Map<string, number>();
+  const salonStockMap = new Map<
+    string,
+    { productId: string; sku: string | undefined; name: string | undefined; quantity: number }
+  >();
   for (const row of branchStock) {
     if (!row.product_id) continue;
-    qtyByProduct.set(row.product_id, (qtyByProduct.get(row.product_id) ?? 0) + Number(row.quantity_on_hand));
+    const quantity = Number(row.quantity_on_hand);
+    qtyByProduct.set(row.product_id, (qtyByProduct.get(row.product_id) ?? 0) + quantity);
+    const current = salonStockMap.get(row.product_id);
+    if (current) {
+      current.quantity += quantity;
+    } else {
+      salonStockMap.set(row.product_id, {
+        productId: row.product_id,
+        sku: row.sku ?? undefined,
+        name: row.name ?? undefined,
+        quantity,
+      });
+    }
   }
+  const salonStock = [...salonStockMap.values()].filter((row) => row.quantity > 0);
   const lowStock = products.filter((product) => {
     if (product.low_stock_threshold == null) return false;
     return (qtyByProduct.get(product.id) ?? 0) <= Number(product.low_stock_threshold);
@@ -73,24 +90,22 @@ export default async function ReportsPage() {
               <tr>
                 <th className={thClass}>SKU</th>
                 <th className={thClass}>Product</th>
-                <th className={thClass}>Location</th>
                 <th className={thClass}>Qty</th>
               </tr>
             </thead>
             <tbody>
-              {branchStock.length === 0 ? (
+              {salonStock.length === 0 ? (
                 <tr>
-                  <td className={tdClass} colSpan={4}>
+                  <td className={tdClass} colSpan={3}>
                     No stock on hand at this branch yet.
                   </td>
                 </tr>
               ) : (
-                branchStock.map((row) => (
-                  <tr key={`${row.product_id}:${row.store_location_id}`}>
+                salonStock.map((row) => (
+                  <tr key={row.productId}>
                     <td className={tdClass}>{formatSku(row.sku)}</td>
                     <td className={tdClass}>{row.name}</td>
-                    <td className={tdClass}>{row.location_name}</td>
-                    <td className={tdClass}>{formatQty(row.quantity_on_hand)}</td>
+                    <td className={tdClass}>{formatQty(row.quantity)}</td>
                   </tr>
                 ))
               )}

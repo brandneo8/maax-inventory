@@ -359,22 +359,26 @@ create table inventory_count_items (
   id                 uuid primary key default gen_random_uuid(),
   inventory_count_id uuid not null references inventory_counts(id) on delete cascade,
   product_id         uuid not null references products(id),
-  store_location_id  uuid not null references store_locations(id),
+  store_location_id  uuid references store_locations(id),
   expected_quantity  numeric(12,2),
   counted_quantity   numeric(12,2),
   variance           numeric(12,2) generated always as (counted_quantity - expected_quantity) stored,
-  notes              text
+  notes              text,
+  unique (inventory_count_id, product_id)
 );
+comment on column inventory_count_items.store_location_id is 'Unused for uniqueness. Count lines are one row per product; room notes live on entries.';
 
 create table inventory_count_entries (
   id                       uuid primary key default gen_random_uuid(),
   inventory_count_id       uuid not null references inventory_counts(id) on delete cascade,
   inventory_count_item_id  uuid not null references inventory_count_items(id) on delete cascade,
+  store_location_id        uuid references store_locations(id) on delete set null,
   quantity_delta           numeric(12,2) not null,
   created_at               timestamptz not null default now(),
   created_by               text
 );
-comment on table inventory_count_entries is 'Additive count scans. counted_quantity on inventory_count_items is the running total of these deltas.';
+comment on table inventory_count_entries is 'Additive count scans. counted_quantity on inventory_count_items is the running total of these deltas. store_location_id is the room remark for that scan.';
+comment on column inventory_count_entries.store_location_id is 'Optional room where this scan was found. Does not split on-hand or count lines.';
 
 create or replace function search_products_for_count(
   p_company_id uuid,

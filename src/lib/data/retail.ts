@@ -68,29 +68,20 @@ export async function getRetailExportRows(supabase: Client, companyId: string, b
     const product = productMap.get(productId);
     if (!product) return [];
     const brand = Array.isArray(product.brands) ? product.brands[0] : product.brands;
-    const rows = stockByProduct.get(productId) ?? [
+    const rows = (stockByProduct.get(productId) ?? []).filter(
+      (row) => !branchId || row.branch_id === branchId,
+    );
+    const quantity = rows.reduce((sum, row) => sum + Number(row.quantity_on_hand ?? 0), 0);
+    const branchName = rows.find((row) => row.branch_name)?.branch_name ?? "";
+    return [
       {
-        product_id: productId,
-        store_location_id: null,
-        quantity_on_hand: 0,
-        sku: product.sku,
-        name: productDisplayName(product),
-        location_name: null,
-        branch_id: branchId ?? null,
-        branch_name: null,
-      },
-    ];
-
-    return rows
-      .filter((row) => !branchId || row.branch_id === branchId)
-      .map((row) => ({
         sku: product.sku,
         name: productDisplayName(product),
         brand: brand?.name ?? "",
         classification: product.default_classification ?? "",
-        branch: row.branch_name ?? "",
-        location: row.location_name ?? "",
-        quantity_on_hand: Number(row.quantity_on_hand ?? 0),
-      }));
+        branch: branchName,
+        quantity_on_hand: quantity,
+      },
+    ];
   });
 }

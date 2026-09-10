@@ -30,9 +30,6 @@ export default async function CountDetailPage({
   const branchLocations = (await getStoreLocations(supabase, companyId)).filter(
     (storeLocation) => storeLocation.branch_id === branch.id,
   );
-  const locations = count.store_location_id
-    ? branchLocations.filter((storeLocation) => storeLocation.id === count.store_location_id)
-    : branchLocations;
 
   return (
     <div className="space-y-6">
@@ -67,8 +64,7 @@ export default async function CountDetailPage({
         countId={count.id}
         items={lines}
         entries={entries}
-        locations={locations}
-        lockedLocationId={count.store_location_id}
+        locations={branchLocations}
         branchName={branch.name}
         editable={open}
         mode="count"

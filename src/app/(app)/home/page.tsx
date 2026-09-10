@@ -37,6 +37,10 @@ export default async function HomePage() {
           <p className="rounded-xl border border-border bg-card p-4 text-sm text-muted">
             Add products first, then import usage against them.
           </p>
+        ) : branchLocations.length === 0 ? (
+          <p className="rounded-xl border border-border bg-card p-4 text-sm text-muted">
+            This branch has no store locations.
+          </p>
         ) : (
           <ImportForms
             key={branch.id}
@@ -45,10 +49,6 @@ export default async function HomePage() {
             products={products.map((product) => ({
               id: product.id,
               label: productLabel(product),
-            }))}
-            locations={branchLocations.map((location) => ({
-              id: location.id,
-              label: location.name,
             }))}
           />
         )}
@@ -126,27 +126,25 @@ export default async function HomePage() {
                 <th className={thClass}>Brand</th>
                 <th className={thClass}>Type</th>
                 <th className={thClass}>Branch</th>
-                <th className={thClass}>Location</th>
                 <th className={thClass}>On hand</th>
               </tr>
             </thead>
             <tbody>
               {exportRows.length === 0 ? (
                 <tr>
-                  <td className={tdClass} colSpan={7}>
+                  <td className={tdClass} colSpan={6}>
                     No retail products to export yet. Add products typed as retail, or receive them
                     on an order.
                   </td>
                 </tr>
               ) : (
                 exportRows.map((row, index) => (
-                  <tr key={`${row.sku}-${row.branch}-${row.location}-${index}`}>
+                  <tr key={`${row.sku}-${row.branch}-${index}`}>
                     <td className={tdClass}>{formatSku(row.sku)}</td>
                     <td className={tdClass}>{row.name}</td>
                     <td className={tdClass}>{row.brand || "—"}</td>
                     <td className={tdClass}>{row.classification || "—"}</td>
                     <td className={tdClass}>{row.branch || "—"}</td>
-                    <td className={tdClass}>{row.location || "—"}</td>
                     <td className={tdClass}>{formatQty(row.quantity_on_hand)}</td>
                   </tr>
                 ))

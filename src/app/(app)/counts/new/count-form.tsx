@@ -10,13 +10,11 @@ import { btnClass, fieldClass } from "@/lib/ui";
 type Option = { id: string; label: string };
 
 export function CountForm({
-  locations,
   brands,
   tags,
   today,
   latestPostedDate,
 }: {
-  locations: Option[];
   brands: Option[];
   tags: Option[];
   today: string;
@@ -66,17 +64,6 @@ export function CountForm({
               ? ` Confirming another count on ${formatDate(latestPostedDate)} replaces the previous confirmed count for that day.`
               : " Confirming another count on the same day replaces the previous confirmed count for that day."}
           </span>
-        </label>
-        <label className="space-y-1 text-sm">
-          <span>Location</span>
-          <select className={fieldClass} name="store_location_id" defaultValue="">
-            <option value="">Whole branch</option>
-            {locations.map((location) => (
-              <option key={location.id} value={location.id}>
-                {location.label}
-              </option>
-            ))}
-          </select>
         </label>
         <label className="space-y-1 text-sm">
           <span>Brand</span>

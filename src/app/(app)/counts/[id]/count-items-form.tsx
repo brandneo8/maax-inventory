@@ -165,38 +165,6 @@ function BrandTableFilters({
   );
 }
 
-function mergeCountedLocations(rows: CountLine[], quantities: Record<string, string>) {
-  const groups = new Map<string, CountLine[]>();
-  for (const row of rows) {
-    const list = groups.get(row.productId) ?? [];
-    list.push(row);
-    groups.set(row.productId, list);
-  }
-  return [...groups.values()].map((group) => {
-    const first = group[0];
-    const locations = [
-      ...new Set(group.map((row) => row.location).filter((name) => name && name !== "—")),
-    ].sort((left, right) => left.localeCompare(right, undefined, { sensitivity: "base" }));
-    const expected = group.reduce((sum, row) => sum + row.expected, 0);
-    const countedParts = group.map((row) => quantities[row.id] ?? "");
-    const counted = countedParts.some((value) => value.trim() === "")
-      ? ""
-      : String(countedParts.reduce((sum, value) => sum + Number(value), 0));
-    return {
-      key: first.productId,
-      productId: first.productId,
-      orderName: first.orderName,
-      name: first.name,
-      brand: first.brand,
-      brandSub: first.brandSub,
-      sizeLabel: first.sizeLabel,
-      location: locations.join(", ") || "—",
-      expected,
-      counted,
-    };
-  });
-}
-
 function CountLinesTable({
   rows,
   quantities,
@@ -210,7 +178,6 @@ function CountLinesTable({
   names,
   nameEditable,
   onNameChange,
-  mergeLocations = false,
 }: {
   rows: CountLine[];
   quantities: Record<string, string>;
@@ -224,24 +191,20 @@ function CountLinesTable({
   names?: Record<string, string>;
   nameEditable?: boolean;
   onNameChange?: (productId: string, name: string) => void;
-  mergeLocations?: boolean;
 }) {
   const showSalon = Boolean(salonHeader);
-  const columns = showSalon ? 10 : 9;
-  const displayRows = mergeLocations
-    ? mergeCountedLocations(rows, quantities)
-    : rows.map((item) => ({
-        key: item.id,
-        productId: item.productId,
-        orderName: item.orderName,
-        name: item.name,
-        brand: item.brand,
-        brandSub: item.brandSub,
-        sizeLabel: item.sizeLabel,
-        location: item.location,
-        expected: item.expected,
-        counted: quantities[item.id] ?? "",
-      }));
+  const columns = showSalon ? 9 : 8;
+  const displayRows = rows.map((item) => ({
+    key: item.id,
+    productId: item.productId,
+    orderName: item.orderName,
+    name: item.name,
+    brand: item.brand,
+    brandSub: item.brandSub,
+    sizeLabel: item.sizeLabel,
+    expected: item.expected,
+    counted: quantities[item.id] ?? "",
+  }));
   const salonLocked = (productId: string) => salonLockedIds?.has(productId) ?? false;
   const salonChecked = (productId: string) => salonLocked(productId) || Boolean(salonOn?.[productId]);
   const salonProductIds = [...new Set(displayRows.map((item) => item.productId))];
@@ -285,7 +248,6 @@ function CountLinesTable({
             <th className={thClass}>Brand</th>
             <th className={thClass}>Brand_sub</th>
             <th className={thClass}>Size</th>
-            <th className={thClass}>Location</th>
             <th className={thClass}>Expected</th>
             <th className={thClass}>Counted</th>
             <th className={thClass}>Variance</th>
@@ -339,7 +301,6 @@ function CountLinesTable({
                   <td className={tdClass}>{item.brand || "—"}</td>
                   <td className={tdClass}>{item.brandSub || "—"}</td>
                   <td className={tdClass}>{item.sizeLabel || "—"}</td>
-                  <td className={tdClass}>{item.location}</td>
                   <td className={tdClass}>{formatQty(item.expected)}</td>
                   <td className={tdClass}>{item.counted.trim() === "" ? "—" : formatQty(item.counted)}</td>
                   <td className={cn(tdClass, varianceTextClass(variance))}>
@@ -360,7 +321,6 @@ export function CountItemsForm({
   items,
   entries,
   locations,
-  lockedLocationId = null,
   branchName = "",
   salonProductIds = [],
   editable = true,
@@ -370,7 +330,6 @@ export function CountItemsForm({
   items: CountLine[];
   entries: CountEntryLine[];
   locations: CountLocationOption[];
-  lockedLocationId?: string | null;
   branchName?: string;
   salonProductIds?: string[];
   editable?: boolean;
@@ -395,9 +354,7 @@ export function CountItemsForm({
   const [catalogHits, setCatalogHits] = useState<CountProduct[]>([]);
   const [catalogReady, setCatalogReady] = useState(false);
   const [catalogError, setCatalogError] = useState<string | null>(null);
-  const [locationId, setLocationId] = useState(
-    lockedLocationId ?? locations[0]?.id ?? "",
-  );
+  const [locationId, setLocationId] = useState(locations[0]?.id ?? "");
   const [countedBrandFilter, setCountedBrandFilter] = useState("");
   const [countedBrandSubFilter, setCountedBrandSubFilter] = useState("");
   const [uncountedBrandFilter, setUncountedBrandFilter] = useState("");
@@ -449,7 +406,7 @@ export function CountItemsForm({
     setCatalogReady(false);
     setCatalogError(null);
     const timer = window.setTimeout(() => {
-      void searchCountProductsAction(countId, query, locationId)
+      void searchCountProductsAction(countId, query)
         .then((hits) => {
           if (cancelled) return;
           setCatalogHits(
@@ -477,7 +434,7 @@ export function CountItemsForm({
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [countId, locationId, needle, query, selectedProduct]);
+  }, [countId, needle, query, selectedProduct]);
 
   const matches = useMemo(() => {
     const byId = new Map<string, CountProduct>();
@@ -491,9 +448,7 @@ export function CountItemsForm({
       .slice(0, 16);
   }, [catalogHits, localMatches]);
   const selectedLine = selectedProduct
-    ? (items.find(
-        (item) => item.productId === selectedProduct.productId && item.storeLocationId === locationId,
-      ) ?? null)
+    ? (items.find((item) => item.productId === selectedProduct.productId) ?? null)
     : null;
   const selectedExpected = selectedLine?.expected ?? selectedProduct?.expected;
   const selectedCounted = selectedLine ? (selectedLine.counted ?? 0) : selectedProduct ? 0 : null;
@@ -537,16 +492,11 @@ export function CountItemsForm({
     [uncountedBrandFilter, uncountedBrandSubFilter, uncountedRows],
   );
   const missing = items.filter((item) => (quantities[item.id] ?? "").trim() === "").length;
-  const locationLocked = Boolean(lockedLocationId);
 
   useEffect(() => {
-    if (lockedLocationId) {
-      setLocationId(lockedLocationId);
-      return;
-    }
     if (locationId && locations.some((location) => location.id === locationId)) return;
     setLocationId(locations[0]?.id ?? "");
-  }, [lockedLocationId, locationId, locations]);
+  }, [locationId, locations]);
 
   function pickMatch(product: CountProduct) {
     setSelectedProduct(product);
@@ -580,7 +530,7 @@ export function CountItemsForm({
       return;
     }
     if (!locationId) {
-      setError("Select the location you are counting.");
+      setError("Select the location you found this product in.");
       return;
     }
     const amount = Number(searchQty);
@@ -588,9 +538,7 @@ export function CountItemsForm({
       setError("Enter an amount to add or deduct. Use a negative number to reduce the counted total.");
       return;
     }
-    const target = items.find(
-      (item) => item.productId === product.productId && item.storeLocationId === locationId,
-    );
+    const target = items.find((item) => item.productId === product.productId);
     const current = Number(target?.counted ?? 0);
     if (current + amount < 0) {
       setError(`Cannot deduct ${formatQty(Math.abs(amount))}. Counted is ${formatQty(current)}.`);
@@ -658,13 +606,13 @@ export function CountItemsForm({
       await fillUncountedCountItems(formData);
       setMessage(
         mode === "zero"
-          ? "Remaining lines counted as 0. You can switch to keep the expected quantity."
-          : "Remaining lines kept at the expected quantity. You can switch to count as 0.",
+          ? "Remaining products counted as 0. You can switch to keep the expected quantity."
+          : "Remaining products kept at the expected quantity. You can switch to count as 0.",
       );
       router.refresh();
     } catch (err) {
       unstable_rethrow(err);
-      setError(err instanceof Error ? err.message : "Could not fill remaining lines.");
+      setError(err instanceof Error ? err.message : "Could not fill remaining products.");
     } finally {
       setPending(null);
     }
@@ -743,11 +691,7 @@ export function CountItemsForm({
               placeholder="Product name, order name, or brand"
               autoComplete="off"
             />
-            {needle && !selectedProduct && catalogError ? (
-              <p className="absolute z-20 mt-1 w-full rounded-lg border border-red-200 bg-white px-3 py-2 text-sm text-red-800 shadow-lg">
-                {catalogError}
-              </p>
-            ) : needle && !selectedProduct && matches.length > 0 ? (
+            {needle && !selectedProduct && matches.length > 0 ? (
               <ul className="absolute z-20 mt-1 max-h-64 w-full overflow-auto rounded-lg border border-border bg-white py-1 shadow-lg">
                 {matches.map((product) => (
                   <li key={product.productId}>
@@ -772,8 +716,11 @@ export function CountItemsForm({
                   </li>
                 ))}
               </ul>
-            ) : null}
-            {needle && !selectedProduct && !catalogError && catalogReady && matches.length === 0 ? (
+            ) : needle && !selectedProduct && catalogError ? (
+              <p className="absolute z-20 mt-1 w-full rounded-lg border border-red-200 bg-white px-3 py-2 text-sm text-red-800 shadow-lg">
+                {catalogError}
+              </p>
+            ) : needle && !selectedProduct && catalogReady && matches.length === 0 ? (
               <p className="absolute z-20 mt-1 w-full rounded-lg border border-border bg-white px-3 py-2 text-sm text-muted shadow-lg">
                 No matching products in the catalog.
               </p>
@@ -784,7 +731,7 @@ export function CountItemsForm({
             <select
               className={fieldClass}
               value={locationId}
-              disabled={locationLocked || locations.length === 0}
+              disabled={locations.length === 0}
               onChange={(event) => setLocationId(event.target.value)}
             >
               {locations.length === 0 ? <option value="">No locations</option> : null}
@@ -838,7 +785,7 @@ export function CountItemsForm({
         </div>
       ) : mode === "review" ? (
         <p className="text-sm text-muted">
-          Quantities come from counting or the bulk actions on uncounted lines. Edit Name to set the
+          Quantities come from counting or the bulk actions on uncounted products. Edit Name to set the
           salon-friendly name shared by Min and Kin — confirming this count replaces the existing names.
           A ticked {salonHeader} checkbox leaves the product on {salonLabel}.
         </p>
@@ -947,7 +894,6 @@ export function CountItemsForm({
               onNameChange={(productId, name) =>
                 setNames((current) => ({ ...current, [productId]: name }))
               }
-              mergeLocations
             />
           </div>
           <div className="space-y-2">
@@ -965,7 +911,7 @@ export function CountItemsForm({
             />
             {missing > 0 ? (
               <p className="rounded-lg border border-red-200 bg-red-50 px-3 py-3 text-sm text-red-800">
-                {missing} line{missing === 1 ? "" : "s"} still uncounted. Count remaining products as 0 or
+                {missing} product{missing === 1 ? "" : "s"} still uncounted. Count remaining products as 0 or
                 keep the expected quantity. Counted products stay on {salonLabel}. Use {salonHeader} here to
                 tick or untick remaining products.
               </p>

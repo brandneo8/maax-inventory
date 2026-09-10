@@ -51,10 +51,7 @@ export default async function ReceiveOrderPage({
       ) : (
         <ReceiveForm
           purchaseOrderId={order.id}
-          locations={branchLocations.map((location) => ({
-            id: location.id,
-            label: location.name,
-          }))}
+          defaultLocationId={branchLocations[0].id}
           lines={order.items.map((item) => {
             const product = Array.isArray(item.products) ? item.products[0] : item.products;
             return {

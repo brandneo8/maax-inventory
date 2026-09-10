@@ -3,14 +3,13 @@ import type { getInventoryCount } from "@/lib/data/counts";
 export type CountLine = {
   id: string;
   productId: string;
-  storeLocationId: string;
+  storeLocationId: string | null;
   orderName: string;
   name: string;
   sku: string;
   brand: string;
   brandSub: string;
   sizeLabel: string;
-  location: string;
   expected: number;
   counted: number | null;
   variance: number | null;
@@ -39,11 +38,16 @@ function brandName(value: unknown) {
   return String((brand as { name?: string | null }).name ?? "").trim();
 }
 
+function locationName(value: unknown) {
+  const location = Array.isArray(value) ? value[0] : value;
+  if (!location || typeof location !== "object" || !("name" in location)) return "";
+  return String((location as { name?: string | null }).name ?? "").trim();
+}
+
 export function toCountLine(
   item: Awaited<ReturnType<typeof getInventoryCount>>["items"][number],
 ): CountLine {
   const product = Array.isArray(item.products) ? item.products[0] : item.products;
-  const itemLocation = Array.isArray(item.store_locations) ? item.store_locations[0] : item.store_locations;
   return {
     id: item.id,
     productId: item.product_id,
@@ -54,7 +58,6 @@ export function toCountLine(
     brand: brandName(product && "brands" in product ? product.brands : null),
     brandSub: product && "brand_sub" in product ? String(product.brand_sub ?? "").trim() : "",
     sizeLabel: product && "size_label" in product ? String(product.size_label ?? "").trim() : "",
-    location: itemLocation?.name ?? "—",
     expected: Number(item.expected_quantity ?? 0),
     counted: item.counted_quantity === null ? null : Number(item.counted_quantity),
     variance: item.variance === null ? null : Number(item.variance),
@@ -72,7 +75,7 @@ export function toCountEntry(
     name: item?.name ?? "",
     brand: item?.brand ?? "",
     sizeLabel: item?.sizeLabel ?? "",
-    location: item?.location ?? "—",
+    location: locationName(entry.store_locations) || "—",
     quantityDelta: Number(entry.quantity_delta),
     createdAt: entry.created_at,
   };
@@ -86,9 +89,7 @@ export function sortCountLines(rows: CountLine[]) {
     if (brandSub !== 0) return brandSub;
     const orderName = a.orderName.localeCompare(b.orderName, undefined, { sensitivity: "base" });
     if (orderName !== 0) return orderName;
-    const name = a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
-    if (name !== 0) return name;
-    return a.location.localeCompare(b.location, undefined, { sensitivity: "base" });
+    return a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
   });
 }
 

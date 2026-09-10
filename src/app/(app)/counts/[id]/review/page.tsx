@@ -31,9 +31,6 @@ export default async function CountReviewPage({
   const branchLocations = (await getStoreLocations(supabase, companyId)).filter(
     (storeLocation) => storeLocation.branch_id === branch.id,
   );
-  const locations = count.store_location_id
-    ? branchLocations.filter((storeLocation) => storeLocation.id === count.store_location_id)
-    : branchLocations;
   const salonProductIds = [
     ...(await getSalonProductIds(
       supabase,
@@ -57,7 +54,7 @@ export default async function CountReviewPage({
             brand?.name,
             classificationLabel(count.filter_classification),
             tag?.name,
-            missing > 0 ? `${missing} uncounted` : "All lines counted",
+            missing > 0 ? `${missing} uncounted` : "All products counted",
             `${changed} variance${changed === 1 ? "" : "s"} to post`,
           ]
             .filter((part) => part && part !== "—")
@@ -69,8 +66,7 @@ export default async function CountReviewPage({
         countId={count.id}
         items={lines}
         entries={entries}
-        locations={locations}
-        lockedLocationId={count.store_location_id}
+        locations={branchLocations}
         branchName={branch.name}
         salonProductIds={salonProductIds}
         editable

@@ -327,6 +327,7 @@ export type Database = {
           inventory_count_id: string
           inventory_count_item_id: string
           quantity_delta: number
+          store_location_id: string | null
         }
         Insert: {
           created_at?: string
@@ -335,6 +336,7 @@ export type Database = {
           inventory_count_id: string
           inventory_count_item_id: string
           quantity_delta: number
+          store_location_id?: string | null
         }
         Update: {
           created_at?: string
@@ -343,6 +345,7 @@ export type Database = {
           inventory_count_id?: string
           inventory_count_item_id?: string
           quantity_delta?: number
+          store_location_id?: string | null
         }
         Relationships: [
           {
@@ -359,6 +362,13 @@ export type Database = {
             referencedRelation: "inventory_count_items"
             referencedColumns: ["id"]
           },
+          {
+            foreignKeyName: "inventory_count_entries_store_location_id_fkey"
+            columns: ["store_location_id"]
+            isOneToOne: false
+            referencedRelation: "store_locations"
+            referencedColumns: ["id"]
+          },
         ]
       }
       inventory_count_items: {
@@ -369,7 +379,7 @@ export type Database = {
           inventory_count_id: string
           notes: string | null
           product_id: string
-          store_location_id: string
+          store_location_id: string | null
           variance: number | null
         }
         Insert: {
@@ -379,7 +389,7 @@ export type Database = {
           inventory_count_id: string
           notes?: string | null
           product_id: string
-          store_location_id: string
+          store_location_id?: string | null
           variance?: number | null
         }
         Update: {
@@ -389,7 +399,7 @@ export type Database = {
           inventory_count_id?: string
           notes?: string | null
           product_id?: string
-          store_location_id?: string
+          store_location_id?: string | null
           variance?: number | null
         }
         Relationships: [

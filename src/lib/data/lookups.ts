@@ -33,6 +33,22 @@ export async function getStoreLocations(supabase: Client, companyId: string) {
   return (data ?? []).map(({ branches: _branches, ...location }) => location);
 }
 
+export async function getDefaultStoreLocationId(supabase: Client, branchId: string) {
+  const { data, error } = await supabase
+    .from("store_locations")
+    .select("id")
+    .eq("branch_id", branchId)
+    .order("sort_order")
+    .order("name")
+    .limit(1)
+    .maybeSingle();
+
+  if (error) throwQuery(error, "Could not load storage locations.");
+  const id = data?.id;
+  if (!id) throw new Error("This salon has no storage locations.");
+  return id;
+}
+
 export async function getBrands(supabase: Client, companyId: string) {
   const { data, error } = await supabase
     .from("brands")

@@ -17,6 +17,7 @@ import {
   syncProductSalonMembership,
   voidCompletedCount,
 } from "@/lib/data/counts";
+import { getDefaultStoreLocationId } from "@/lib/data/lookups";
 import { updateProductNames } from "@/lib/data/products";
 import { formatDate, singaporeToday } from "@/lib/format";
 import type { ProductClassification } from "@/lib/labels";
@@ -84,7 +85,6 @@ function namesFromForm(formData: FormData) {
 
 export async function createInventoryCount(formData: FormData) {
   const { supabase, companyId, user, branch } = await requireBranch();
-  const storeLocationId = emptyToNull(formData.get("store_location_id"));
   const filterBrandId = emptyToNull(formData.get("filter_brand_id"));
   const filterClassification = emptyToNull(formData.get("filter_classification")) as
     | ProductClassification
@@ -96,7 +96,6 @@ export async function createInventoryCount(formData: FormData) {
   assertCountDateAllowed(countDate, today, latestPostedDate, "start");
 
   const items = await resolveCountItems(supabase, companyId, branch.id, {
-    store_location_id: storeLocationId,
     filter_brand_id: filterBrandId,
     filter_classification: filterClassification,
     filter_tag_id: filterTagId,
@@ -107,7 +106,7 @@ export async function createInventoryCount(formData: FormData) {
     .insert({
       company_id: companyId,
       branch_id: branch.id,
-      store_location_id: storeLocationId,
+      store_location_id: null,
       filter_brand_id: filterBrandId,
       filter_classification: filterClassification,
       filter_tag_id: filterTagId,
@@ -124,7 +123,7 @@ export async function createInventoryCount(formData: FormData) {
     items.map((item) => ({
       inventory_count_id: count.id,
       product_id: item.product_id,
-      store_location_id: item.store_location_id,
+      store_location_id: null,
       expected_quantity: item.expected_quantity,
     })),
   )) {
@@ -147,14 +146,14 @@ export async function addCountEntryAction(formData: FormData) {
   const quantityDelta = Number(formData.get("quantity_delta") ?? "");
 
   if (!productId) throw new Error("Search a product, then choose the line to count.");
-  if (!storeLocationId) throw new Error("Select the location you are counting.");
+  if (!storeLocationId) throw new Error("Select the location you found this product in.");
   if (!Number.isFinite(quantityDelta) || quantityDelta === 0) {
     throw new Error("Enter an amount to add or deduct.");
   }
 
   const { data: count, error: countError } = await supabase
     .from("inventory_counts")
-    .select("id, status, store_location_id")
+    .select("id, status")
     .eq("id", countId)
     .eq("company_id", companyId)
     .eq("branch_id", branch.id)
@@ -162,9 +161,6 @@ export async function addCountEntryAction(formData: FormData) {
 
   if (countError || !count) throw queryError(countError, "Count not found.");
   if (count.status !== "in_progress") throw new Error("This count is already closed.");
-  if (count.store_location_id && count.store_location_id !== storeLocationId) {
-    throw new Error("This count is limited to one storage location.");
-  }
 
   const { data: location, error: locationError } = await supabase
     .from("store_locations")
@@ -190,6 +186,7 @@ export async function addCountEntryAction(formData: FormData) {
     storeLocationId,
     quantityDelta,
     createdBy: user.email ?? null,
+    branchId: branch.id,
   });
   await assignProductsToSalon(supabase, branch.id, [productId]);
 
@@ -198,7 +195,7 @@ export async function addCountEntryAction(formData: FormData) {
   revalidatePath("/products");
 }
 
-export async function searchCountProductsAction(countId: string, query: string, storeLocationId: string) {
+export async function searchCountProductsAction(countId: string, query: string) {
   const { supabase, companyId, branch } = await requireBranch();
   const { data: count, error } = await supabase
     .from("inventory_counts")
@@ -210,7 +207,7 @@ export async function searchCountProductsAction(countId: string, query: string, 
   if (error) throw queryError(error, "Count not found.");
   if (!count) throw new Error("Count not found.");
   if (count.status !== "in_progress") throw new Error("This count is already closed.");
-  return searchCatalogForCount(supabase, companyId, branch.id, count.id, query, storeLocationId || null);
+  return searchCatalogForCount(supabase, companyId, branch.id, count.id, query);
 }
 
 export async function saveCountQuantities(formData: FormData) {
@@ -267,7 +264,7 @@ export async function fillUncountedCountItems(formData: FormData) {
   const countId = String(formData.get("count_id") ?? "");
   const mode = String(formData.get("mode") ?? "");
   if (mode !== "zero" && mode !== "keep") {
-    throw new Error("Choose whether to count remaining lines as 0 or keep the expected quantity.");
+    throw new Error("Choose whether to count remaining products as 0 or keep the expected quantity.");
   }
 
   const { data: count, error: countError } = await supabase
@@ -325,27 +322,28 @@ export async function completeInventoryCount(formData: FormData) {
     });
   }
 
+  const defaultLocationId = await getDefaultStoreLocationId(supabase, branch.id);
+
   const items: {
     id: string;
     product_id: string;
-    store_location_id: string;
     counted_quantity: number | null;
     variance: number | null;
   }[] = [];
   for (let from = 0; ; from += 1000) {
     const { data, error: itemsError } = await supabase
       .from("inventory_count_items")
-      .select("id, product_id, store_location_id, counted_quantity, variance")
+      .select("id, product_id, counted_quantity, variance")
       .eq("inventory_count_id", count.id)
       .order("id")
       .range(from, from + 999);
     if (itemsError) throw queryError(itemsError, "Could not load count lines.");
     items.push(...(data ?? []));
-    if (!data || data.length < 1000) break;
+    if (!data || !data.length || data.length < 1000) break;
   }
 
   if (items.some((item) => item.counted_quantity === null)) {
-    throw new Error("Enter a counted quantity for every line before completing.");
+    throw new Error("Enter a counted quantity for every product before completing.");
   }
 
   const adjustments = items.filter((item) => Number(item.variance ?? 0) !== 0);
@@ -354,7 +352,7 @@ export async function completeInventoryCount(formData: FormData) {
       batch.map((item) => ({
         company_id: companyId,
         product_id: item.product_id,
-        store_location_id: item.store_location_id,
+        store_location_id: defaultLocationId,
         txn_type: "count_adjustment" as const,
         quantity_change: Number(item.variance),
         reference_table: "inventory_count_items",

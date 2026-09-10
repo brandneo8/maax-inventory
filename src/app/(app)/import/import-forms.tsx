@@ -10,12 +10,10 @@ export function ImportForms({
   branchId,
   branchName,
   products,
-  locations,
 }: {
   branchId: string;
   branchName: string;
   products: Option[];
-  locations: Option[];
 }) {
   const today = useMemo(() => new Date().toISOString().slice(0, 10), []);
   const [error, setError] = useState<string | null>(null);
@@ -60,16 +58,6 @@ export function ImportForms({
           <p className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">{error}</p>
         ) : null}
         <label className="block space-y-1 text-sm">
-          <span>Location</span>
-          <select key={branchId} className={fieldClass} name="store_location_id" required defaultValue={locations[0]?.id}>
-            {locations.map((location) => (
-              <option key={location.id} value={location.id}>
-                {location.label}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="block space-y-1 text-sm">
           <span>Product</span>
           <select className={fieldClass} name="product_id" required defaultValue="">
             <option value="" disabled>
@@ -107,7 +95,7 @@ export function ImportForms({
         <input type="hidden" name="branch_id" value={branchId} />
         <h2 className="text-sm font-semibold">Upload CSV / Excel export</h2>
         <p className="text-sm text-muted">
-          Headers: <code>sku, quantity_used, entry_date, location, external_reference, notes</code>.
+          Headers: <code>sku, quantity_used, entry_date, external_reference, notes</code>.
           Rows are imported into {branchName}. Save Excel as CSV first.
         </p>
         {csvError ? (

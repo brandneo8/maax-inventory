@@ -1,14 +1,13 @@
 import Link from "next/link";
 import { requireBranch } from "@/lib/auth";
 import { getLatestPostedCountDate } from "@/lib/data/counts";
-import { getBrands, getStoreLocations, getTags } from "@/lib/data/lookups";
+import { getBrands, getTags } from "@/lib/data/lookups";
 import { singaporeToday } from "@/lib/format";
 import { CountForm } from "./count-form";
 
 export default async function NewCountPage() {
   const { supabase, companyId, branch } = await requireBranch();
-  const [locations, brands, tags, latestPostedDate] = await Promise.all([
-    getStoreLocations(supabase, companyId),
+  const [brands, tags, latestPostedDate] = await Promise.all([
     getBrands(supabase, companyId),
     getTags(supabase, companyId),
     getLatestPostedCountDate(supabase, companyId, branch.id),
@@ -30,9 +29,6 @@ export default async function NewCountPage() {
 
       <CountForm
         key={branch.id}
-        locations={locations
-          .filter((location) => location.branch_id === branch.id)
-          .map((location) => ({ id: location.id, label: location.name }))}
         brands={brands.map((brand) => ({ id: brand.id, label: brand.name }))}
         tags={tags.map((tag) => ({ id: tag.id, label: tag.name }))}
         today={today}
