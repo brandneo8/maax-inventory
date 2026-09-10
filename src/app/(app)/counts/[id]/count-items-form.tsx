@@ -26,6 +26,7 @@ type CountProduct = {
   name: string;
   sku: string;
   brand: string;
+  sizeLabel: string;
   expected?: number;
   onCount?: boolean;
   onSalon?: boolean;
@@ -39,7 +40,10 @@ function liveVariance(expected: number, counted: string) {
 }
 
 function productMatches(product: CountProduct, needle: string) {
-  return searchFieldsMatch([product.orderName, product.name, product.sku, product.brand], needle);
+  return searchFieldsMatch(
+    [product.orderName, product.name, product.sku, product.brand, product.sizeLabel],
+    needle,
+  );
 }
 
 function lineTitle(item: { name: string; orderName: string; sku: string }) {
@@ -56,6 +60,7 @@ function uniqueProducts(items: CountLine[]): CountProduct[] {
       name: item.name,
       sku: item.sku,
       brand: item.brand,
+      sizeLabel: item.sizeLabel,
       expected: item.expected,
       onCount: true,
       onSalon: true,
@@ -415,6 +420,7 @@ export function CountItemsForm({
               name: hit.name,
               sku: hit.sku,
               brand: hit.brand,
+              sizeLabel: hit.sizeLabel,
               expected: hit.expected,
               onCount: hit.onCount,
               onSalon: hit.onSalon,
@@ -454,6 +460,7 @@ export function CountItemsForm({
     : null;
   const selectedExpected = selectedLine?.expected ?? selectedProduct?.expected;
   const selectedCounted = selectedLine ? (selectedLine.counted ?? 0) : selectedProduct ? 0 : null;
+  const selectedSize = selectedProduct?.sizeLabel || selectedLine?.sizeLabel || "";
 
   const summaryRows = useMemo(
     () => sortCountLines(items.filter((item) => item.counted != null)),
@@ -662,7 +669,7 @@ export function CountItemsForm({
       ) : null}
 
       {mode === "count" && editable ? (
-        <div className="grid gap-3 rounded-xl border border-border bg-card p-4 md:grid-cols-[minmax(0,1.4fr)_8rem_8rem_8rem_auto]">
+        <div className="grid gap-3 rounded-xl border border-border bg-card p-4 md:grid-cols-[minmax(0,1.4fr)_8rem_8rem_8rem_8rem_auto]">
           <label className="relative space-y-1 text-sm">
             <span>Find product</span>
             <input
@@ -698,7 +705,9 @@ export function CountItemsForm({
                       {product.name && product.name !== product.orderName ? (
                         <span className="block text-xs text-muted">{product.name}</span>
                       ) : null}
-                      <span className="block text-xs text-muted">{product.brand || "No brand"}</span>
+                      <span className="block text-xs text-muted">
+                        {[product.brand || "No brand", product.sizeLabel || "No size"].join(" · ")}
+                      </span>
                       {product.onSalon === false ? (
                         <span className="block text-xs text-muted">
                           Not on {salonLabel} yet — counting it will add it
@@ -717,6 +726,10 @@ export function CountItemsForm({
                 No matching products in the catalog.
               </p>
             ) : null}
+          </label>
+          <label className="space-y-1 text-sm">
+            <span>Size</span>
+            <p className={cn(fieldClass, "bg-slate-50 text-slate-800")}>{selectedSize || "—"}</p>
           </label>
           <label className="space-y-1 text-sm">
             <span>Expected</span>

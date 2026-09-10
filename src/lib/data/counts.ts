@@ -228,6 +228,7 @@ export type CountCatalogHit = {
   name: string;
   sku: string;
   brand: string;
+  sizeLabel: string;
   expected: number;
   onCount: boolean;
   onSalon: boolean;
@@ -266,12 +267,22 @@ export async function searchCatalogForCount(
     p_limit: 20,
   });
   const hits = rpcError ? await searchCatalogFallback(db, companyId, branchId, needle) : (rpcHits ?? []);
+  const sizeById = new Map<string, string>();
+  const ids = hits.map((product) => product.id);
+  if (ids.length > 0) {
+    const { data: sizes, error: sizeError } = await db.from("products").select("id, size_label").in("id", ids);
+    if (sizeError) throw queryError(sizeError, "Could not load product sizes.");
+    for (const row of sizes ?? []) {
+      sizeById.set(row.id, String(row.size_label ?? "").trim());
+    }
+  }
   return hits.map((product) => ({
     productId: product.id,
     orderName: product.order_name?.trim() ?? "",
     name: product.name?.trim() ?? "",
     sku: product.sku?.trim() ?? "",
     brand: product.brand_name?.trim() ?? "",
+    sizeLabel: sizeById.get(product.id) ?? "",
     expected: 0,
     onCount: false,
     onSalon: Boolean(product.on_salon),
