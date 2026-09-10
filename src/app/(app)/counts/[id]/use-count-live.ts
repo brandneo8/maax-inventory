@@ -2,7 +2,7 @@
 
 import { useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
-import { createClient } from "@/lib/supabase/client";
+import { createClient, isSupabaseConfigured } from "@/lib/supabase/client";
 
 export function useCountLive(countId: string, enabled: boolean, paused: boolean) {
   const router = useRouter();
@@ -20,7 +20,6 @@ export function useCountLive(countId: string, enabled: boolean, paused: boolean)
   useEffect(() => {
     if (!enabled || !countId) return;
 
-    const supabase = createClient();
     let debounce: number | null = null;
     let poll: number | null = null;
 
@@ -54,6 +53,23 @@ export function useCountLive(countId: string, enabled: boolean, paused: boolean)
       }, 2000);
     };
 
+    const onVisible = () => {
+      if (document.visibilityState === "visible") refresh();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("focus", refresh);
+
+    if (!isSupabaseConfigured()) {
+      startPoll();
+      return () => {
+        if (debounce != null) window.clearTimeout(debounce);
+        stopPoll();
+        document.removeEventListener("visibilitychange", onVisible);
+        window.removeEventListener("focus", refresh);
+      };
+    }
+
+    const supabase = createClient();
     const channel = supabase
       .channel(`count:${countId}`)
       .on(
@@ -85,12 +101,6 @@ export function useCountLive(countId: string, enabled: boolean, paused: boolean)
           startPoll();
         }
       });
-
-    const onVisible = () => {
-      if (document.visibilityState === "visible") refresh();
-    };
-    document.addEventListener("visibilitychange", onVisible);
-    window.addEventListener("focus", refresh);
 
     return () => {
       if (debounce != null) window.clearTimeout(debounce);
