@@ -43,8 +43,6 @@ function revalidateCatalog() {
   revalidatePath("/home");
   revalidatePath("/orders");
   revalidatePath("/reports");
-  revalidatePath("/counts");
-  revalidatePath("/");
 }
 
 async function resolveBrandId(supabase: Client, companyId: string, brandName: string) {

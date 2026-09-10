@@ -19,8 +19,13 @@ function revalidateCatalog() {
   revalidatePath("/home");
   revalidatePath("/orders");
   revalidatePath("/reports");
-  revalidatePath("/counts");
-  revalidatePath("/");
+}
+
+function catalogWriteError(error: { code?: string; message?: string }) {
+  if (error.code === "23505") {
+    return "A product with that SKU or barcode already exists.";
+  }
+  return error.message || "Could not save products.";
 }
 
 async function stampCatalogSaved(companyId: string, email: string | undefined) {
@@ -88,7 +93,7 @@ export async function createProduct(formData: FormData) {
     .select("id")
     .single();
 
-  if (error) throw error;
+  if (error) throw new Error(catalogWriteError(error));
 
   const validBranchIds = await companyBranchIds(supabase, companyId);
   const assigned = validBranchIds.filter((id) => formData.get(`branch:${id}`) === "on");
@@ -277,7 +282,7 @@ export async function saveProducts(drafts: ProductDraft[]) {
         .update(payload)
         .eq("id", productId)
         .eq("company_id", companyId);
-      if (error) throw new Error(error.message);
+      if (error) throw new Error(catalogWriteError(error));
     } else {
       const { data: created, error } = await supabase
         .from("products")
@@ -288,21 +293,23 @@ export async function saveProducts(drafts: ProductDraft[]) {
         })
         .select("id")
         .single();
-      if (error) throw new Error(error.message);
+      if (error) throw new Error(catalogWriteError(error));
       productId = created.id;
     }
 
     await syncProductBranches(supabase, productId, draft.branchIds ?? [], validBranchIds);
     await syncProductSuppliers(supabase, productId, draft.supplierIds ?? [], validSupplierIds);
-    await persistProductComponents(supabase, companyId, {
-      productId,
-      isSet: draft.isSet,
-      parentUnitCost: parseMoney(draft.unitCost) ?? 0,
-      components: draft.components ?? [],
-      replaceEmpty: false,
-    });
+    if (draft.id || draft.isSet) {
+      await persistProductComponents(supabase, companyId, {
+        productId,
+        isSet: draft.isSet,
+        parentUnitCost: parseMoney(draft.unitCost) ?? 0,
+        components: draft.components ?? [],
+        replaceEmpty: false,
+      });
+      await syncBundleTag(supabase, companyId, productId, draft.isSet);
+    }
     await syncProductTags(supabase, companyId, productId, draft.tagIds ?? []);
-    await syncBundleTag(supabase, companyId, productId, draft.isSet);
     saved.push({ clientKey: draft.clientKey ?? null, id: productId });
   }
 
