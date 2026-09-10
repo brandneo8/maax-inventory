@@ -3,7 +3,6 @@ import type { getInventoryCount } from "@/lib/data/counts";
 export type CountLine = {
   id: string;
   productId: string;
-  storeLocationId: string | null;
   orderName: string;
   name: string;
   sku: string;
@@ -22,26 +21,14 @@ export type CountEntryLine = {
   name: string;
   brand: string;
   sizeLabel: string;
-  location: string;
   quantityDelta: number;
   createdAt: string;
-};
-
-export type CountLocationOption = {
-  id: string;
-  name: string;
 };
 
 function brandName(value: unknown) {
   const brand = Array.isArray(value) ? value[0] : value;
   if (!brand || typeof brand !== "object" || !("name" in brand)) return "";
   return String((brand as { name?: string | null }).name ?? "").trim();
-}
-
-function locationName(value: unknown) {
-  const location = Array.isArray(value) ? value[0] : value;
-  if (!location || typeof location !== "object" || !("name" in location)) return "";
-  return String((location as { name?: string | null }).name ?? "").trim();
 }
 
 export function toCountLine(
@@ -51,7 +38,6 @@ export function toCountLine(
   return {
     id: item.id,
     productId: item.product_id,
-    storeLocationId: item.store_location_id,
     orderName: product?.order_name?.trim() ?? "",
     name: product?.name?.trim() ?? "",
     sku: product?.sku?.trim() ?? "",
@@ -75,7 +61,6 @@ export function toCountEntry(
     name: item?.name ?? "",
     brand: item?.brand ?? "",
     sizeLabel: item?.sizeLabel ?? "",
-    location: locationName(entry.store_locations) || "—",
     quantityDelta: Number(entry.quantity_delta),
     createdAt: entry.created_at,
   };

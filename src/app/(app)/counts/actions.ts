@@ -142,11 +142,9 @@ export async function addCountEntryAction(formData: FormData) {
   const { supabase, companyId, user, branch } = await requireBranch();
   const countId = String(formData.get("count_id") ?? "");
   const productId = String(formData.get("product_id") ?? "");
-  const storeLocationId = String(formData.get("store_location_id") ?? "");
   const quantityDelta = Number(formData.get("quantity_delta") ?? "");
 
   if (!productId) throw new Error("Search a product, then choose the line to count.");
-  if (!storeLocationId) throw new Error("Select the location you found this product in.");
   if (!Number.isFinite(quantityDelta) || quantityDelta === 0) {
     throw new Error("Enter an amount to add or deduct.");
   }
@@ -162,15 +160,6 @@ export async function addCountEntryAction(formData: FormData) {
   if (countError || !count) throw queryError(countError, "Count not found.");
   if (count.status !== "in_progress") throw new Error("This count is already closed.");
 
-  const { data: location, error: locationError } = await supabase
-    .from("store_locations")
-    .select("id")
-    .eq("id", storeLocationId)
-    .eq("branch_id", branch.id)
-    .maybeSingle();
-  if (locationError) throw queryError(locationError, "Could not check the storage location.");
-  if (!location) throw new Error("That storage location is not on this salon.");
-
   const { data: product, error: productError } = await supabase
     .from("products")
     .select("id, is_active")
@@ -183,7 +172,6 @@ export async function addCountEntryAction(formData: FormData) {
   await addCountEntry(supabase, {
     countId: count.id,
     productId,
-    storeLocationId,
     quantityDelta,
     createdBy: user.email ?? null,
     branchId: branch.id,

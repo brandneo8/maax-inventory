@@ -45,7 +45,7 @@ export async function getDefaultStoreLocationId(supabase: Client, branchId: stri
 
   if (error) throwQuery(error, "Could not load storage locations.");
   const id = data?.id;
-  if (!id) throw new Error("This salon has no storage locations.");
+  if (!id) throw new Error("This salon isn’t set up for stock yet.");
   return id;
 }
 

@@ -10,7 +10,7 @@ export async function getRecentRetailUse(supabase: Client, companyId: string, br
   let query = supabase
     .from("retail_use_entries")
     .select(
-      "id, quantity_used, entry_date, external_reference, notes, products(sku, name, order_name), branches(name), store_locations(name)",
+      "id, quantity_used, entry_date, external_reference, notes, products(sku, name, order_name), branches(name)",
     )
     .eq("company_id", companyId)
     .order("created_at", { ascending: false })

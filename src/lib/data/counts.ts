@@ -29,7 +29,7 @@ export async function getInventoryCounts(supabase: Client, companyId: string, br
   const { data, error } = await supabase
     .from("inventory_counts")
     .select(
-      "id, status, count_date, counted_by, store_locations(name), brands(name), tags(name), filter_classification",
+      "id, status, count_date, counted_by, brands(name), tags(name), filter_classification",
     )
     .eq("company_id", companyId)
     .eq("branch_id", branchId)
@@ -74,7 +74,7 @@ export async function getInventoryCount(supabase: Client, companyId: string, id:
   const { data, error } = await supabase
     .from("inventory_counts")
     .select(
-      "id, status, count_date, counted_by, store_location_id, filter_brand_id, filter_classification, filter_tag_id, store_locations(name), brands(name), tags(name)",
+      "id, status, count_date, counted_by, filter_brand_id, filter_classification, filter_tag_id, brands(name), tags(name)",
     )
     .eq("company_id", companyId)
     .eq("branch_id", branchId)
@@ -88,7 +88,7 @@ export async function getInventoryCount(supabase: Client, companyId: string, id:
     const { data: page, error: itemsError } = await supabase
       .from("inventory_count_items")
       .select(
-        "id, product_id, store_location_id, expected_quantity, counted_quantity, variance, notes, products(sku, name, order_name, size_label, brand_sub, brands(name))",
+        "id, product_id, expected_quantity, counted_quantity, variance, notes, products(sku, name, order_name, size_label, brand_sub, brands(name))",
       )
       .eq("inventory_count_id", id)
       .order("id")
@@ -103,7 +103,7 @@ export async function getInventoryCount(supabase: Client, companyId: string, id:
     const { data: page, error: entriesError } = await supabase
       .from("inventory_count_entries")
       .select(
-        "id, inventory_count_id, inventory_count_item_id, store_location_id, quantity_delta, created_at, created_by, store_locations(name)",
+        "id, inventory_count_id, inventory_count_item_id, quantity_delta, created_at, created_by",
       )
       .eq("inventory_count_id", id)
       .order("created_at", { ascending: false })
@@ -184,7 +184,7 @@ export async function resolveCountItems(
   const locationIds = (locations ?? []).map((location) => location.id);
 
   if (locationIds.length === 0) {
-    throw new Error("This salon has no storage locations. Add a location before starting a count.");
+    throw new Error("This salon isn’t set up for stock yet.");
   }
   if (scopedIds.length === 0) {
     throw new Error("No products on this salon match those count filters.");
@@ -449,7 +449,6 @@ export async function addCountEntry(
   args: {
     countId: string;
     productId: string;
-    storeLocationId: string | null;
     quantityDelta: number;
     createdBy: string | null;
     branchId: string;
@@ -490,7 +489,7 @@ export async function addCountEntry(
   const { error: insertError } = await supabase.from("inventory_count_entries").insert({
     inventory_count_id: args.countId,
     inventory_count_item_id: item.id,
-    store_location_id: args.storeLocationId,
+    store_location_id: null,
     quantity_delta: args.quantityDelta,
     created_by: args.createdBy,
   });

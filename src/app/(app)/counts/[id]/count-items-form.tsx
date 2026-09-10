@@ -12,7 +12,7 @@ import {
 import { formatDateTime, formatQty } from "@/lib/format";
 import { keepOnSalonLabel, salonName } from "@/lib/labels";
 import { searchFieldsMatch } from "@/lib/search";
-import type { CountEntryLine, CountLine, CountLocationOption } from "../count-lines";
+import type { CountEntryLine, CountLine } from "../count-lines";
 import { signedQty, sortCountLines, varianceTextClass } from "../count-lines";
 import { btnClass, btnSecondaryClass, checkboxClass, fieldClass, tableClass, tdClass, thClass } from "@/lib/ui";
 import { cn } from "@/lib/utils";
@@ -320,7 +320,6 @@ export function CountItemsForm({
   countId,
   items,
   entries,
-  locations,
   branchName = "",
   salonProductIds = [],
   editable = true,
@@ -329,7 +328,6 @@ export function CountItemsForm({
   countId: string;
   items: CountLine[];
   entries: CountEntryLine[];
-  locations: CountLocationOption[];
   branchName?: string;
   salonProductIds?: string[];
   editable?: boolean;
@@ -354,7 +352,6 @@ export function CountItemsForm({
   const [catalogHits, setCatalogHits] = useState<CountProduct[]>([]);
   const [catalogReady, setCatalogReady] = useState(false);
   const [catalogError, setCatalogError] = useState<string | null>(null);
-  const [locationId, setLocationId] = useState(locations[0]?.id ?? "");
   const [countedBrandFilter, setCountedBrandFilter] = useState("");
   const [countedBrandSubFilter, setCountedBrandSubFilter] = useState("");
   const [uncountedBrandFilter, setUncountedBrandFilter] = useState("");
@@ -493,11 +490,6 @@ export function CountItemsForm({
   );
   const missing = items.filter((item) => (quantities[item.id] ?? "").trim() === "").length;
 
-  useEffect(() => {
-    if (locationId && locations.some((location) => location.id === locationId)) return;
-    setLocationId(locations[0]?.id ?? "");
-  }, [locationId, locations]);
-
   function pickMatch(product: CountProduct) {
     setSelectedProduct(product);
     setQuery(product.brand ? `${lineTitle(product)} · ${product.brand}` : lineTitle(product));
@@ -529,10 +521,6 @@ export function CountItemsForm({
       setError("Search a product or brand, then choose the line to count.");
       return;
     }
-    if (!locationId) {
-      setError("Select the location you found this product in.");
-      return;
-    }
     const amount = Number(searchQty);
     if (searchQty.trim() === "" || !Number.isFinite(amount) || amount === 0) {
       setError("Enter an amount to add or deduct. Use a negative number to reduce the counted total.");
@@ -548,7 +536,6 @@ export function CountItemsForm({
     const formData = new FormData();
     formData.set("count_id", countId);
     formData.set("product_id", product.productId);
-    formData.set("store_location_id", locationId);
     formData.set("quantity_delta", String(amount));
 
     setPending("count");
@@ -670,7 +657,7 @@ export function CountItemsForm({
       ) : null}
 
       {mode === "count" && editable ? (
-        <div className="grid gap-3 rounded-xl border border-border bg-card p-4 md:grid-cols-[minmax(0,1.4fr)_minmax(14rem,1fr)_8rem_8rem_8rem_auto]">
+        <div className="grid gap-3 rounded-xl border border-border bg-card p-4 md:grid-cols-[minmax(0,1.4fr)_8rem_8rem_8rem_auto]">
           <label className="relative space-y-1 text-sm">
             <span>Find product</span>
             <input
@@ -725,22 +712,6 @@ export function CountItemsForm({
                 No matching products in the catalog.
               </p>
             ) : null}
-          </label>
-          <label className="min-w-56 space-y-1 text-sm">
-            <span>Location</span>
-            <select
-              className={fieldClass}
-              value={locationId}
-              disabled={locations.length === 0}
-              onChange={(event) => setLocationId(event.target.value)}
-            >
-              {locations.length === 0 ? <option value="">No locations</option> : null}
-              {locations.map((location) => (
-                <option key={location.id} value={location.id}>
-                  {location.name}
-                </option>
-              ))}
-            </select>
           </label>
           <label className="space-y-1 text-sm">
             <span>Expected</span>
@@ -811,7 +782,6 @@ export function CountItemsForm({
                     <tr>
                       <th className={thClass}>Product</th>
                       <th className={thClass}>Size</th>
-                      <th className={thClass}>Location</th>
                       <th className={thClass}>Qty</th>
                       <th className={thClass}>Time</th>
                     </tr>
@@ -819,7 +789,7 @@ export function CountItemsForm({
                   <tbody>
                     {entries.length === 0 ? (
                       <tr>
-                        <td className={tdClass} colSpan={5}>
+                        <td className={tdClass} colSpan={4}>
                           No scans yet.
                         </td>
                       </tr>
@@ -833,7 +803,6 @@ export function CountItemsForm({
                             ) : null}
                           </td>
                           <td className={tdClass}>{entry.sizeLabel || "—"}</td>
-                          <td className={tdClass}>{entry.location}</td>
                           <td className={cn(tdClass, varianceTextClass(entry.quantityDelta))}>
                             {signedQty(entry.quantityDelta)}
                           </td>

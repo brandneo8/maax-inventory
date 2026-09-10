@@ -39,7 +39,7 @@ export default async function HomePage() {
           </p>
         ) : branchLocations.length === 0 ? (
           <p className="rounded-xl border border-border bg-card p-4 text-sm text-muted">
-            This branch has no store locations.
+            This salon isn’t set up for stock yet.
           </p>
         ) : (
           <ImportForms
@@ -62,7 +62,6 @@ export default async function HomePage() {
                   <th className={thClass}>Date</th>
                   <th className={thClass}>Product</th>
                   <th className={thClass}>Branch</th>
-                  <th className={thClass}>Location</th>
                   <th className={thClass}>Qty used</th>
                   <th className={thClass}>Reference</th>
                 </tr>
@@ -70,7 +69,7 @@ export default async function HomePage() {
               <tbody>
                 {recent.length === 0 ? (
                   <tr>
-                    <td className={tdClass} colSpan={6}>
+                    <td className={tdClass} colSpan={5}>
                       No retail-use entries yet.
                     </td>
                   </tr>
@@ -78,9 +77,6 @@ export default async function HomePage() {
                   recent.map((entry) => {
                     const product = Array.isArray(entry.products) ? entry.products[0] : entry.products;
                     const entryBranch = Array.isArray(entry.branches) ? entry.branches[0] : entry.branches;
-                    const location = Array.isArray(entry.store_locations)
-                      ? entry.store_locations[0]
-                      : entry.store_locations;
                     return (
                       <tr key={entry.id}>
                         <td className={tdClass}>{formatDate(entry.entry_date)}</td>
@@ -88,7 +84,6 @@ export default async function HomePage() {
                           {productLabel(product)}
                         </td>
                         <td className={tdClass}>{entryBranch?.name ?? "—"}</td>
-                        <td className={tdClass}>{location?.name ?? "—"}</td>
                         <td className={tdClass}>{formatQty(entry.quantity_used)}</td>
                         <td className={tdClass}>{entry.external_reference ?? "—"}</td>
                       </tr>

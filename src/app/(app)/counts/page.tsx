@@ -16,7 +16,7 @@ export default async function CountsPage() {
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Inventory counts</h1>
           <p className="mt-1 text-sm text-muted">
-            Working in {branch.displayName}. Scope a session by location, brand, type, or tag.
+            Working in {branch.displayName}. Scope a session by brand, type, or tag.
             Completing it writes ledger adjustments for this salon only. Open a draft to keep counting later.
           </p>
         </div>
@@ -47,13 +47,9 @@ export default async function CountsPage() {
               </tr>
             ) : (
               counts.map((count) => {
-                const location = Array.isArray(count.store_locations)
-                  ? count.store_locations[0]
-                  : count.store_locations;
                 const brand = Array.isArray(count.brands) ? count.brands[0] : count.brands;
                 const tag = Array.isArray(count.tags) ? count.tags[0] : count.tags;
                 const scope = [
-                  location?.name ?? "Whole branch",
                   brand?.name,
                   classificationLabel(count.filter_classification),
                   tag?.name,
@@ -68,7 +64,7 @@ export default async function CountsPage() {
                         {formatDate(count.count_date)}
                       </Link>
                     </td>
-                    <td className={tdClass}>{scope}</td>
+                    <td className={tdClass}>{scope || "All products"}</td>
                     <td className={tdClass}>{formatQty(count.countedQuantity)}</td>
                     <td className={tdClass}>{count.uniqueSkus}</td>
                     <td className={tdClass}>{count.counted_by ?? "—"}</td>

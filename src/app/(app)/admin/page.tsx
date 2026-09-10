@@ -17,11 +17,6 @@ const sections = [
     title: "Suppliers",
     body: "Maintain supplier contacts, channels, and GST registration.",
   },
-  {
-    href: "/admin/locations",
-    title: "Locations",
-    body: "Set count locations for Min and Kin, such as store room and colour bars.",
-  },
 ];
 
 export default async function AdminPage() {
@@ -32,10 +27,10 @@ export default async function AdminPage() {
       <div>
         <h1 className="text-2xl font-semibold tracking-tight">Admin</h1>
         <p className="mt-1 text-sm text-muted">
-          Manage users, the company product catalog, suppliers, and count locations.
+          Manage users, the company product catalog, and suppliers.
         </p>
       </div>
-      <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-4">
+      <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
         {sections.map((section) => (
           <Link
             key={section.href}

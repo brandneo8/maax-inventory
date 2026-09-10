@@ -46,7 +46,7 @@ export default async function ReceiveOrderPage({
         </p>
       ) : branchLocations.length === 0 ? (
         <p className="rounded-xl border border-border bg-card p-4 text-sm text-muted">
-          This branch has no store locations.
+          This salon isn’t set up for stock yet.
         </p>
       ) : (
         <ReceiveForm
