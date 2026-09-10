@@ -7,6 +7,7 @@ import {
   completeInventoryCount,
   fillUncountedCountItems,
   saveCountQuantities,
+  searchCountProductsAction,
 } from "../actions";
 import { formatDateTime, formatQty } from "@/lib/format";
 import { keepOnSalonLabel, salonName } from "@/lib/labels";
@@ -24,6 +25,9 @@ type CountProduct = {
   name: string;
   sku: string;
   brand: string;
+  expected?: number;
+  onCount?: boolean;
+  onSalon?: boolean;
 };
 
 function liveVariance(expected: number, counted: string) {
@@ -51,6 +55,9 @@ function uniqueProducts(items: CountLine[]): CountProduct[] {
       name: item.name,
       sku: item.sku,
       brand: item.brand,
+      expected: item.expected,
+      onCount: true,
+      onSalon: true,
     });
   }
   return [...seen.values()];
@@ -384,7 +391,10 @@ export function CountItemsForm({
   const [names, setNames] = useState<Record<string, string>>(() => namesFromItems(items));
   const [query, setQuery] = useState("");
   const [searchQty, setSearchQty] = useState("");
-  const [selectedProductId, setSelectedProductId] = useState<string | null>(null);
+  const [selectedProduct, setSelectedProduct] = useState<CountProduct | null>(null);
+  const [catalogHits, setCatalogHits] = useState<CountProduct[]>([]);
+  const [catalogReady, setCatalogReady] = useState(false);
+  const [catalogError, setCatalogError] = useState<string | null>(null);
   const [locationId, setLocationId] = useState(
     lockedLocationId ?? locations[0]?.id ?? "",
   );
@@ -393,6 +403,7 @@ export function CountItemsForm({
   const [uncountedBrandFilter, setUncountedBrandFilter] = useState("");
   const [uncountedBrandSubFilter, setUncountedBrandSubFilter] = useState("");
   const qtyRef = useRef<HTMLInputElement>(null);
+  const productSearchRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     setQuantities(
@@ -422,18 +433,70 @@ export function CountItemsForm({
 
   const products = useMemo(() => uniqueProducts(items), [items]);
   const needle = query.trim().toLowerCase();
-  const matches = useMemo(() => {
+  const localMatches = useMemo(() => {
     if (!needle) return [];
     return products.filter((product) => productMatches(product, needle)).slice(0, 8);
   }, [needle, products]);
 
-  const selectedProduct =
-    selectedProductId ? (products.find((product) => product.productId === selectedProductId) ?? null) : null;
+  useEffect(() => {
+    if (selectedProduct || needle.length < 2) {
+      setCatalogHits([]);
+      setCatalogReady(false);
+      setCatalogError(null);
+      return;
+    }
+    let cancelled = false;
+    setCatalogReady(false);
+    setCatalogError(null);
+    const timer = window.setTimeout(() => {
+      void searchCountProductsAction(countId, query, locationId)
+        .then((hits) => {
+          if (cancelled) return;
+          setCatalogHits(
+            hits.map((hit) => ({
+              productId: hit.productId,
+              orderName: hit.orderName,
+              name: hit.name,
+              sku: hit.sku,
+              brand: hit.brand,
+              expected: hit.expected,
+              onCount: hit.onCount,
+              onSalon: hit.onSalon,
+            })),
+          );
+          setCatalogReady(true);
+        })
+        .catch((err) => {
+          if (cancelled) return;
+          setCatalogHits([]);
+          setCatalogReady(true);
+          setCatalogError(err instanceof Error ? err.message : "Could not search the catalog.");
+        });
+    }, 200);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [countId, locationId, needle, query, selectedProduct]);
+
+  const matches = useMemo(() => {
+    const byId = new Map<string, CountProduct>();
+    for (const product of localMatches) byId.set(product.productId, product);
+    for (const product of catalogHits) {
+      const current = byId.get(product.productId);
+      byId.set(product.productId, current ? { ...current, ...product } : product);
+    }
+    return [...byId.values()]
+      .sort((left, right) => Number(right.onSalon === false) - Number(left.onSalon === false))
+      .slice(0, 16);
+  }, [catalogHits, localMatches]);
   const selectedLine = selectedProduct
     ? (items.find(
         (item) => item.productId === selectedProduct.productId && item.storeLocationId === locationId,
       ) ?? null)
     : null;
+  const selectedExpected = selectedLine?.expected ?? selectedProduct?.expected;
+  const selectedCounted = selectedLine ? (selectedLine.counted ?? 0) : selectedProduct ? 0 : null;
 
   const summaryRows = useMemo(
     () => sortCountLines(items.filter((item) => item.counted != null)),
@@ -486,7 +549,7 @@ export function CountItemsForm({
   }, [lockedLocationId, locationId, locations]);
 
   function pickMatch(product: CountProduct) {
-    setSelectedProductId(product.productId);
+    setSelectedProduct(product);
     setQuery(product.brand ? `${lineTitle(product)} · ${product.brand}` : lineTitle(product));
     setSearchQty("");
     if (editable) window.setTimeout(() => qtyRef.current?.focus(), 0);
@@ -528,11 +591,7 @@ export function CountItemsForm({
     const target = items.find(
       (item) => item.productId === product.productId && item.storeLocationId === locationId,
     );
-    if (!target) {
-      setError("That product is not in this count for the selected location.");
-      return;
-    }
-    const current = Number(target.counted ?? 0);
+    const current = Number(target?.counted ?? 0);
     if (current + amount < 0) {
       setError(`Cannot deduct ${formatQty(Math.abs(amount))}. Counted is ${formatQty(current)}.`);
       return;
@@ -553,8 +612,12 @@ export function CountItemsForm({
       setMessage(
         `Applied ${signedQty(amount)} to ${lineTitle(product)}. Counted is now ${formatQty(next)}.`,
       );
+      setQuery("");
+      setSelectedProduct(null);
       setSearchQty("");
-      if (editable) window.setTimeout(() => qtyRef.current?.focus(), 0);
+      setCatalogHits([]);
+      setCatalogReady(false);
+      if (editable) window.setTimeout(() => productSearchRef.current?.focus(), 0);
       router.refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not save that count.");
@@ -663,11 +726,12 @@ export function CountItemsForm({
           <label className="relative space-y-1 text-sm">
             <span>Find product</span>
             <input
+              ref={productSearchRef}
               className={fieldClass}
               value={query}
               onChange={(event) => {
                 setQuery(event.target.value);
-                setSelectedProductId(null);
+                setSelectedProduct(null);
               }}
               onKeyDown={(event) => {
                 if (event.key === "Enter") {
@@ -679,7 +743,11 @@ export function CountItemsForm({
               placeholder="Product name, order name, or brand"
               autoComplete="off"
             />
-            {needle && !selectedProduct && matches.length > 0 ? (
+            {needle && !selectedProduct && catalogError ? (
+              <p className="absolute z-20 mt-1 w-full rounded-lg border border-red-200 bg-white px-3 py-2 text-sm text-red-800 shadow-lg">
+                {catalogError}
+              </p>
+            ) : needle && !selectedProduct && matches.length > 0 ? (
               <ul className="absolute z-20 mt-1 max-h-64 w-full overflow-auto rounded-lg border border-border bg-white py-1 shadow-lg">
                 {matches.map((product) => (
                   <li key={product.productId}>
@@ -695,14 +763,19 @@ export function CountItemsForm({
                         <span className="block text-xs text-muted">{product.name}</span>
                       ) : null}
                       <span className="block text-xs text-muted">{product.brand || "No brand"}</span>
+                      {product.onSalon === false ? (
+                        <span className="block text-xs text-muted">
+                          Not on {salonLabel} yet — counting it will add it
+                        </span>
+                      ) : null}
                     </button>
                   </li>
                 ))}
               </ul>
             ) : null}
-            {needle && !selectedProduct && matches.length === 0 ? (
+            {needle && !selectedProduct && !catalogError && catalogReady && matches.length === 0 ? (
               <p className="absolute z-20 mt-1 w-full rounded-lg border border-border bg-white px-3 py-2 text-sm text-muted shadow-lg">
-                No matching products in this count.
+                No matching products in the catalog.
               </p>
             ) : null}
           </label>
@@ -725,13 +798,13 @@ export function CountItemsForm({
           <label className="space-y-1 text-sm">
             <span>Expected</span>
             <p className={cn(fieldClass, "bg-slate-50 text-slate-800")}>
-              {selectedLine ? formatQty(selectedLine.expected) : "—"}
+              {selectedExpected == null ? "—" : formatQty(selectedExpected)}
             </p>
           </label>
           <label className="space-y-1 text-sm">
             <span>Counted</span>
             <p className={cn(fieldClass, "bg-slate-50 text-slate-800")}>
-              {selectedLine ? formatQty(selectedLine.counted ?? 0) : "—"}
+              {selectedCounted == null ? "—" : formatQty(selectedCounted)}
             </p>
           </label>
           <label className="space-y-1 text-sm">

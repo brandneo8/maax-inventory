@@ -1450,6 +1450,22 @@ export type Database = {
       }
       fn_my_company_ids: { Args: never; Returns: string[] }
       fn_recompute_po_status: { Args: { p_po_id: string }; Returns: undefined }
+      search_products_for_count: {
+        Args: {
+          p_branch_id: string
+          p_company_id: string
+          p_limit?: number
+          p_needle: string
+        }
+        Returns: {
+          brand_name: string | null
+          id: string
+          name: string | null
+          on_salon: boolean
+          order_name: string | null
+          sku: string | null
+        }[]
+      }
     }
     Enums: {
       inventory_txn_type:

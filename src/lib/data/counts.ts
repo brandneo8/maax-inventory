@@ -216,6 +216,8 @@ export type CountCatalogHit = {
   sku: string;
   brand: string;
   expected: number;
+  onCount: boolean;
+  onSalon: boolean;
 };
 
 function likeNeedle(raw: string) {
@@ -235,40 +237,23 @@ export async function countLocationId(
   return id;
 }
 
-export async function searchCatalogForCount(
+function likeFilter(needle: string) {
+  return `%${needle}%`;
+}
+
+async function searchCatalogFallback(
   supabase: Client,
   companyId: string,
   branchId: string,
-  countId: string,
-  query: string,
+  needle: string,
 ) {
-  const needle = likeNeedle(query);
-  if (needle.length < 2) return [] as CountCatalogHit[];
-  const like = `%${needle}%`;
-
-  const onCount = new Set<string>();
-  for (let from = 0; ; from += PAGE_SIZE) {
-    const { data, error } = await supabase
-      .from("inventory_count_items")
-      .select("product_id")
-      .eq("inventory_count_id", countId)
-      .range(from, from + PAGE_SIZE - 1);
-    if (error) throw queryError(error, "Could not load count lines.");
-    for (const row of data ?? []) onCount.add(row.product_id);
-    if (!data || data.length < PAGE_SIZE) break;
-  }
-
-  const assigned = new Set<string>();
-  for (let from = 0; ; from += PAGE_SIZE) {
-    const { data, error } = await supabase
-      .from("product_branches")
-      .select("product_id")
-      .eq("branch_id", branchId)
-      .range(from, from + PAGE_SIZE - 1);
-    if (error) throw queryError(error, "Could not load this salon’s product list.");
-    for (const row of data ?? []) assigned.add(row.product_id);
-    if (!data || data.length < PAGE_SIZE) break;
-  }
+  const like = likeFilter(needle);
+  const orFilter = [
+    `name.ilike."${like}"`,
+    `order_name.ilike."${like}"`,
+    `sku.ilike."${like}"`,
+    `brand_sub.ilike."${like}"`,
+  ].join(",");
 
   const { data: brands, error: brandError } = await supabase
     .from("brands")
@@ -284,8 +269,8 @@ export async function searchCatalogForCount(
     .select("id, sku, name, order_name, brands(name)")
     .eq("company_id", companyId)
     .eq("is_active", true)
-    .or(`name.ilike.${like},order_name.ilike.${like},sku.ilike.${like}`)
-    .limit(20);
+    .or(orFilter)
+    .limit(80);
   if (namedError) throw queryError(namedError, "Could not search products.");
 
   const byBrand =
@@ -298,19 +283,89 @@ export async function searchCatalogForCount(
             .eq("company_id", companyId)
             .eq("is_active", true)
             .in("brand_id", brandIds)
-            .limit(20)
+            .limit(80)
         ).data ?? [];
 
-  const found = new Map<string, (typeof named extends (infer T)[] | null ? T : never)>();
+  const found = new Map<
+    string,
+    { id: string; sku: string | null; name: string | null; order_name: string | null; brands: unknown }
+  >();
   for (const product of [...(named ?? []), ...byBrand]) {
-    if (!product || onCount.has(product.id) || assigned.has(product.id)) continue;
+    if (!product) continue;
     found.set(product.id, product);
   }
+  const rows = [...found.values()];
+  if (rows.length === 0) return [];
 
-  const hits = [...found.values()].slice(0, 8);
+  const assigned = new Set<string>();
+  for (const ids of chunkList(rows.map((row) => row.id))) {
+    const { data, error } = await supabase
+      .from("product_branches")
+      .select("product_id")
+      .eq("branch_id", branchId)
+      .in("product_id", ids);
+    if (error) throw queryError(error, "Could not load this salon’s product list.");
+    for (const row of data ?? []) assigned.add(row.product_id);
+  }
+
+  const mapped = rows.map((product) => {
+    const brand = Array.isArray(product.brands) ? product.brands[0] : product.brands;
+    const brandName =
+      brand && typeof brand === "object" && brand && "name" in brand
+        ? String((brand as { name?: string | null }).name ?? "").trim()
+        : "";
+    return {
+      id: product.id,
+      sku: product.sku,
+      name: product.name,
+      order_name: product.order_name,
+      brand_name: brandName,
+      on_salon: assigned.has(product.id),
+    };
+  });
+  const offSalon = mapped.filter((row) => !row.on_salon).slice(0, 8);
+  const onSalon = mapped.filter((row) => row.on_salon).slice(0, 8);
+  return [...offSalon, ...onSalon];
+}
+
+export async function searchCatalogForCount(
+  supabase: Client,
+  companyId: string,
+  branchId: string,
+  countId: string,
+  query: string,
+  storeLocationId?: string | null,
+) {
+  const needle = likeNeedle(query);
+  if (needle.length < 2) return [] as CountCatalogHit[];
+
+  const { data: rpcHits, error: rpcError } = await supabase.rpc("search_products_for_count", {
+    p_company_id: companyId,
+    p_branch_id: branchId,
+    p_needle: needle,
+    p_limit: 8,
+  });
+  let hits = rpcHits ?? [];
+  if (rpcError) {
+    const missing = /search_products_for_count|does not exist|schema cache|PGRST202/i.test(
+      `${rpcError.message ?? ""} ${rpcError.code ?? ""}`,
+    );
+    if (!missing) throw queryError(rpcError, "Could not search products.");
+    hits = await searchCatalogFallback(supabase, companyId, branchId, needle);
+  }
   if (hits.length === 0) return [];
+  const hitIds = hits.map((hit) => hit.id);
 
-  const locationId = await countLocationId(
+  const onCount = new Set<string>();
+  const { data: countRows, error: countRowsError } = await supabase
+    .from("inventory_count_items")
+    .select("product_id")
+    .eq("inventory_count_id", countId)
+    .in("product_id", hitIds);
+  if (countRowsError) throw queryError(countRowsError, "Could not load count lines.");
+  for (const row of countRows ?? []) onCount.add(row.product_id);
+
+  const locationId = storeLocationId || (await countLocationId(
     supabase,
     branchId,
     (
@@ -320,33 +375,29 @@ export async function searchCatalogForCount(
         .eq("id", countId)
         .maybeSingle()
     ).data?.store_location_id ?? null,
-  );
+  ));
 
   const stockMap = new Map<string, number>();
   const { data: stock, error: stockError } = await supabase
     .from("current_stock")
     .select("product_id, quantity_on_hand")
     .eq("store_location_id", locationId)
-    .in(
-      "product_id",
-      hits.map((hit) => hit.id),
-    );
+    .in("product_id", hitIds);
   if (stockError) throw queryError(stockError, "Could not load on-hand quantities.");
   for (const row of stock ?? []) {
     if (row.product_id) stockMap.set(row.product_id, Number(row.quantity_on_hand ?? 0));
   }
 
-  return hits.map((product) => {
-    const brand = Array.isArray(product.brands) ? product.brands[0] : product.brands;
-    return {
-      productId: product.id,
-      orderName: product.order_name?.trim() ?? "",
-      name: product.name?.trim() ?? "",
-      sku: product.sku?.trim() ?? "",
-      brand: brand?.name?.trim() ?? "",
-      expected: stockMap.get(product.id) ?? 0,
-    };
-  });
+  return hits.map((product) => ({
+    productId: product.id,
+    orderName: product.order_name?.trim() ?? "",
+    name: product.name?.trim() ?? "",
+    sku: product.sku?.trim() ?? "",
+    brand: product.brand_name?.trim() ?? "",
+    expected: stockMap.get(product.id) ?? 0,
+    onCount: onCount.has(product.id),
+    onSalon: Boolean(product.on_salon),
+  }));
 }
 
 export async function assignProductsToSalon(supabase: Client, branchId: string, productIds: string[]) {

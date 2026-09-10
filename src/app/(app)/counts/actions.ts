@@ -12,6 +12,7 @@ import {
   getScannedProductIds,
   queryError,
   resolveCountItems,
+  searchCatalogForCount,
   setCountedQuantities,
   syncProductSalonMembership,
   voidCompletedCount,
@@ -174,6 +175,15 @@ export async function addCountEntryAction(formData: FormData) {
   if (locationError) throw queryError(locationError, "Could not check the storage location.");
   if (!location) throw new Error("That storage location is not on this salon.");
 
+  const { data: product, error: productError } = await supabase
+    .from("products")
+    .select("id, is_active")
+    .eq("id", productId)
+    .eq("company_id", companyId)
+    .maybeSingle();
+  if (productError) throw queryError(productError, "Could not check that product.");
+  if (!product || !product.is_active) throw new Error("That product is not in the catalog.");
+
   await addCountEntry(supabase, {
     countId: count.id,
     productId,
@@ -181,9 +191,26 @@ export async function addCountEntryAction(formData: FormData) {
     quantityDelta,
     createdBy: user.email ?? null,
   });
+  await assignProductsToSalon(supabase, branch.id, [productId]);
 
   revalidatePath(`/counts/${count.id}`);
   revalidatePath(`/counts/${count.id}/review`);
+  revalidatePath("/products");
+}
+
+export async function searchCountProductsAction(countId: string, query: string, storeLocationId: string) {
+  const { supabase, companyId, branch } = await requireBranch();
+  const { data: count, error } = await supabase
+    .from("inventory_counts")
+    .select("id, status")
+    .eq("id", countId)
+    .eq("company_id", companyId)
+    .eq("branch_id", branch.id)
+    .maybeSingle();
+  if (error) throw queryError(error, "Count not found.");
+  if (!count) throw new Error("Count not found.");
+  if (count.status !== "in_progress") throw new Error("This count is already closed.");
+  return searchCatalogForCount(supabase, companyId, branch.id, count.id, query, storeLocationId || null);
 }
 
 export async function saveCountQuantities(formData: FormData) {
