@@ -14,6 +14,7 @@ import { keepOnSalonLabel, salonName } from "@/lib/labels";
 import { searchFieldsMatch } from "@/lib/search";
 import type { CountEntryLine, CountLine } from "../count-lines";
 import { signedQty, sortCountLines, varianceTextClass } from "../count-lines";
+import { useCountLive } from "./use-count-live";
 import { btnClass, btnSecondaryClass, checkboxClass, fieldClass, tableClass, tdClass, thClass } from "@/lib/ui";
 import { cn } from "@/lib/utils";
 
@@ -358,6 +359,7 @@ export function CountItemsForm({
   const [uncountedBrandSubFilter, setUncountedBrandSubFilter] = useState("");
   const qtyRef = useRef<HTMLInputElement>(null);
   const productSearchRef = useRef<HTMLInputElement>(null);
+  useCountLive(countId, editable, pending !== null);
 
   useEffect(() => {
     setQuantities(
@@ -438,11 +440,14 @@ export function CountItemsForm({
     for (const product of localMatches) byId.set(product.productId, product);
     for (const product of catalogHits) {
       const current = byId.get(product.productId);
-      byId.set(product.productId, current ? { ...current, ...product } : product);
+      byId.set(
+        product.productId,
+        current ? { ...product, ...current, onSalon: product.onSalon ?? current.onSalon } : product,
+      );
     }
     return [...byId.values()]
       .sort((left, right) => Number(right.onSalon === false) - Number(left.onSalon === false))
-      .slice(0, 16);
+      .slice(0, 24);
   }, [catalogHits, localMatches]);
   const selectedLine = selectedProduct
     ? (items.find((item) => item.productId === selectedProduct.productId) ?? null)

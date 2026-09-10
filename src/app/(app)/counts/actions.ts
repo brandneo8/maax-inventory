@@ -185,17 +185,20 @@ export async function addCountEntryAction(formData: FormData) {
 
 export async function searchCountProductsAction(countId: string, query: string) {
   const { supabase, companyId, branch } = await requireBranch();
-  const { data: count, error } = await supabase
-    .from("inventory_counts")
-    .select("id, status")
-    .eq("id", countId)
-    .eq("company_id", companyId)
-    .eq("branch_id", branch.id)
-    .maybeSingle();
-  if (error) throw queryError(error, "Count not found.");
-  if (!count) throw new Error("Count not found.");
-  if (count.status !== "in_progress") throw new Error("This count is already closed.");
-  return searchCatalogForCount(supabase, companyId, branch.id, count.id, query);
+  const [countResult, hits] = await Promise.all([
+    supabase
+      .from("inventory_counts")
+      .select("id, status")
+      .eq("id", countId)
+      .eq("company_id", companyId)
+      .eq("branch_id", branch.id)
+      .maybeSingle(),
+    searchCatalogForCount(supabase, companyId, branch.id, query),
+  ]);
+  if (countResult.error) throw queryError(countResult.error, "Count not found.");
+  if (!countResult.data) throw new Error("Count not found.");
+  if (countResult.data.status !== "in_progress") throw new Error("This count is already closed.");
+  return hits;
 }
 
 export async function saveCountQuantities(formData: FormData) {

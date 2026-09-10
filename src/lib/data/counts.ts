@@ -234,7 +234,11 @@ export type CountCatalogHit = {
 };
 
 function likeNeedle(raw: string) {
-  return normalizeSearchText(raw).replace(/ /g, "%").slice(0, 80);
+  return normalizeSearchText(raw);
+}
+
+function searchTokens(needle: string) {
+  return needle.split(" ").filter((token) => token.length >= 2);
 }
 
 function catalogDb(fallback: Client) {
@@ -249,7 +253,6 @@ export async function searchCatalogForCount(
   supabase: Client,
   companyId: string,
   branchId: string,
-  countId: string,
   query: string,
 ) {
   const needle = likeNeedle(query);
@@ -260,45 +263,19 @@ export async function searchCatalogForCount(
     p_company_id: companyId,
     p_branch_id: branchId,
     p_needle: needle,
-    p_limit: 8,
+    p_limit: 20,
   });
-  let hits = rpcHits ?? [];
-  if (rpcError) {
-    hits = await searchCatalogFallback(db, companyId, branchId, needle);
-  }
-  if (hits.length === 0) return [];
-  const hitIds = hits.map((hit) => hit.id);
-
-  const onCount = new Set<string>();
-  const { data: countRows } = await db
-    .from("inventory_count_items")
-    .select("product_id")
-    .eq("inventory_count_id", countId)
-    .in("product_id", hitIds);
-  for (const row of countRows ?? []) onCount.add(row.product_id);
-
-  let stockMap = new Map<string, number>();
-  try {
-    const locationIds = await branchLocationIds(db as Client, branchId);
-    stockMap = await salonStockByProduct(db as Client, locationIds, hitIds);
-  } catch {
-    stockMap = new Map();
-  }
-
+  const hits = rpcError ? await searchCatalogFallback(db, companyId, branchId, needle) : (rpcHits ?? []);
   return hits.map((product) => ({
     productId: product.id,
     orderName: product.order_name?.trim() ?? "",
     name: product.name?.trim() ?? "",
     sku: product.sku?.trim() ?? "",
     brand: product.brand_name?.trim() ?? "",
-    expected: stockMap.get(product.id) ?? 0,
-    onCount: onCount.has(product.id),
+    expected: 0,
+    onCount: false,
     onSalon: Boolean(product.on_salon),
   }));
-}
-
-function likeFilter(needle: string) {
-  return `%${needle}%`;
 }
 
 async function searchCatalogFallback(
@@ -307,118 +284,96 @@ async function searchCatalogFallback(
   branchId: string,
   needle: string,
 ) {
-  const like = likeFilter(needle);
+  const tokens = searchTokens(needle);
+  const distinctive = [...tokens].sort((left, right) => right.length - left.length)[0];
+  if (!distinctive) return [];
+  const like = `%${distinctive}%`;
   const orFilter = [
     `name.ilike."${like}"`,
     `order_name.ilike."${like}"`,
     `sku.ilike."${like}"`,
     `brand_sub.ilike."${like}"`,
+    `size_label.ilike."${like}"`,
   ].join(",");
 
-  const assigned = new Set<string>();
-  for (let from = 0; ; from += PAGE_SIZE) {
-    const { data, error } = await supabase
-      .from("product_branches")
-      .select("product_id")
-      .eq("branch_id", branchId)
-      .range(from, from + PAGE_SIZE - 1);
-    if (error) throw queryError(error, "Could not load this salon’s product list.");
-    for (const row of data ?? []) assigned.add(row.product_id);
-    if (!data || data.length < PAGE_SIZE) break;
-  }
-
-  const { data: brands, error: brandError } = await supabase
-    .from("brands")
-    .select("id")
-    .eq("company_id", companyId)
-    .ilike("name", like)
-    .limit(20);
-  if (brandError) throw queryError(brandError, "Could not search brands.");
-  const brandIds = (brands ?? []).map((brand) => brand.id);
-
-  function productQuery() {
-    return supabase
+  const [{ data: named, error: namedError }, { data: brands, error: brandError }] = await Promise.all([
+    supabase
       .from("products")
-      .select("id, sku, name, order_name, brands(name)")
+      .select("id, sku, name, order_name, brand_sub, size_label, brands(name)")
       .eq("company_id", companyId)
       .eq("is_active", true)
-      .or(orFilter);
-  }
-
-  const assignedList = [...assigned];
-  const untaggedQuery =
-    assignedList.length > 0
-      ? productQuery().not("id", "in", `(${assignedList.join(",")})`).limit(8)
-      : productQuery().limit(8);
-  const taggedQuery =
-    assignedList.length > 0
-      ? productQuery().in("id", assignedList.slice(0, 200)).limit(8)
-      : productQuery().limit(8);
-
-  const [{ data: untagged, error: untaggedError }, { data: tagged, error: taggedError }] = await Promise.all([
-    untaggedQuery,
-    taggedQuery,
+      .or(orFilter)
+      .limit(80),
+    supabase.from("brands").select("id").eq("company_id", companyId).ilike("name", like).limit(20),
   ]);
-  if (untaggedError) throw queryError(untaggedError, "Could not search products.");
-  if (taggedError) throw queryError(taggedError, "Could not search products.");
+  if (namedError) throw queryError(namedError, "Could not search products.");
+  if (brandError) throw queryError(brandError, "Could not search brands.");
 
+  const brandIds = (brands ?? []).map((brand) => brand.id);
   const byBrand =
     brandIds.length === 0
       ? []
       : (
           await supabase
             .from("products")
-            .select("id, sku, name, order_name, brands(name)")
+            .select("id, sku, name, order_name, brand_sub, size_label, brands(name)")
             .eq("company_id", companyId)
             .eq("is_active", true)
             .in("brand_id", brandIds)
-            .limit(40)
+            .limit(80)
         ).data ?? [];
 
-  function toHit(
-    product: {
-      id: string;
-      sku: string | null;
-      name: string | null;
-      order_name: string | null;
-      brands: unknown;
-    },
-    onSalon: boolean,
-  ) {
+  const hits: {
+    id: string;
+    sku: string | null;
+    name: string | null;
+    order_name: string | null;
+    brand_name: string;
+    on_salon: boolean;
+  }[] = [];
+  const seen = new Set<string>();
+
+  for (const product of [...(named ?? []), ...byBrand]) {
+    if (!product || seen.has(product.id)) continue;
     const brand = Array.isArray(product.brands) ? product.brands[0] : product.brands;
     const brandName =
       brand && typeof brand === "object" && brand && "name" in brand
         ? String((brand as { name?: string | null }).name ?? "").trim()
         : "";
-    return {
+    const haystack = normalizeSearchText(
+      [product.name, product.order_name, product.sku, product.brand_sub, product.size_label, brandName].join(" "),
+    );
+    if (!tokens.every((token) => haystack.includes(token))) continue;
+    seen.add(product.id);
+    hits.push({
       id: product.id,
       sku: product.sku,
       name: product.name,
       order_name: product.order_name,
       brand_name: brandName,
-      on_salon: onSalon,
-    };
+      on_salon: false,
+    });
   }
 
-  const seen = new Set<string>();
-  const hits: ReturnType<typeof toHit>[] = [];
-  for (const product of untagged ?? []) {
-    if (seen.has(product.id)) continue;
-    seen.add(product.id);
-    hits.push(toHit(product, false));
+  const hitIds = hits.map((hit) => hit.id);
+  if (hitIds.length > 0) {
+    const { data: assignedRows, error: assignedError } = await supabase
+      .from("product_branches")
+      .select("product_id")
+      .eq("branch_id", branchId)
+      .in("product_id", hitIds);
+    if (assignedError) throw queryError(assignedError, "Could not load this salon’s product list.");
+    const assigned = new Set((assignedRows ?? []).map((row) => row.product_id));
+    for (const hit of hits) hit.on_salon = assigned.has(hit.id);
   }
-  for (const product of byBrand) {
-    if (seen.has(product.id) || assigned.has(product.id)) continue;
-    seen.add(product.id);
-    hits.push(toHit(product, false));
-    if (hits.filter((hit) => !hit.on_salon).length >= 8) break;
-  }
-  for (const product of tagged ?? []) {
-    if (seen.has(product.id)) continue;
-    seen.add(product.id);
-    hits.push(toHit(product, true));
-  }
-  return hits.slice(0, 16);
+
+  hits.sort((left, right) => {
+    if (left.on_salon !== right.on_salon) return Number(left.on_salon) - Number(right.on_salon);
+    const leftLabel = left.order_name || left.name || left.sku || "";
+    const rightLabel = right.order_name || right.name || right.sku || "";
+    return leftLabel.length - rightLabel.length || leftLabel.localeCompare(rightLabel);
+  });
+  return hits.slice(0, 24);
 }
 
 export async function assignProductsToSalon(supabase: Client, branchId: string, productIds: string[]) {

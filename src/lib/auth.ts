@@ -45,14 +45,22 @@ export async function requireUser() {
     redirect("/login");
   }
 
-  await grantDefaultAdminAccess(user.id, user.email);
-
   let { data: membership } = await supabase
     .from("company_users")
     .select("company_id, role")
     .eq("user_id", user.id)
     .limit(1)
     .maybeSingle();
+
+  if (!membership) {
+    await grantDefaultAdminAccess(user.id, user.email);
+    ({ data: membership } = await supabase
+      .from("company_users")
+      .select("company_id, role")
+      .eq("user_id", user.id)
+      .limit(1)
+      .maybeSingle());
+  }
 
   if (!membership) {
     const admin = createAdminClient();
