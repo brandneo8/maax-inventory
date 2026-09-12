@@ -101,7 +101,7 @@ export async function getProducts(supabase: Client, companyId: string) {
     const { data, error } = await supabase
       .from("products")
       .select(
-        "id, sku, barcode, name, order_name, unit_cost_price, rrp, default_classification, low_stock_threshold, brand_id, size_label, size_ml, is_set, brand_sub, brands(name), product_tags(tag_id, tags(name)), product_branches(branch_id), product_components!product_components_set_product_id_fkey(component_product_id, quantity, allocated_cost)",
+        "id, sku, barcode, name, order_name, unit_cost_price, rrp, default_classification, low_stock_threshold, brand_id, size_label, size_ml, is_set, brand_sub, picture_url, brands(name), product_tags(tag_id, tags(name)), product_branches(branch_id), product_classifications(classification), product_components!product_components_set_product_id_fkey(component_product_id, quantity, allocated_cost)",
       )
       .eq("company_id", companyId)
       .eq("is_active", true)

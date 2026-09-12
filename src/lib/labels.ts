@@ -40,6 +40,19 @@ export function classificationLabel(value: ProductClassification | null | undefi
   return CLASSIFICATIONS.find((item) => item.value === value)?.label ?? "—";
 }
 
+export function classificationTagsLabel(values: ProductClassification[] | null | undefined) {
+  return (values ?? [])
+    .map((value) => classificationLabel(value))
+    .sort((left, right) => left.localeCompare(right, undefined, { sensitivity: "base" }))
+    .join(", ");
+}
+
+const TUNAI_CLASSIFICATIONS: ProductClassification[] = ["retail", "gwp", "retail_inhouse"];
+
+export function isAvailableInTunai(values: ProductClassification[] | null | undefined) {
+  return (values ?? []).some((value) => TUNAI_CLASSIFICATIONS.includes(value));
+}
+
 export function poStatusLabel(value: PoStatus) {
   return PO_STATUSES.find((item) => item.value === value)?.label ?? value;
 }

@@ -46,7 +46,7 @@ function revalidateSuppliers() {
   revalidatePath("/admin");
   revalidatePath("/admin/suppliers");
   revalidatePath("/admin/products");
-  revalidatePath("/products");
+  revalidatePath("/home/products");
   revalidatePath("/orders/new");
 }
 

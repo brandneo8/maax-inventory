@@ -1,17 +1,22 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { classificationLabel } from "@/lib/labels";
+import { CLASSIFICATIONS, classificationTagsLabel, isAvailableInTunai, type ProductClassification } from "@/lib/labels";
+import { confirmedRetailPrice } from "@/lib/catalog-pricing";
 import { parseSize, sizesMatch } from "@/lib/product-size";
 import { btnSecondaryClass, fieldClass, tableClass, tdClass, thClass } from "@/lib/ui";
-import { formatQty, formatSku, productDisplayName } from "@/lib/format";
+import { formatMoney, formatQty, formatSku, productDisplayName } from "@/lib/format";
 import { searchFieldsMatch } from "@/lib/search";
 import type { CatalogProduct } from "@/lib/data/products";
 import { cn } from "@/lib/utils";
 
 type SalonProduct = CatalogProduct & { onHand: number };
+type GroupBy = "none" | "brand" | "brandSub";
 
-function groupKey(product: SalonProduct) {
+const EDITABLE_CLASSIFICATIONS = CLASSIFICATIONS.filter((item) => item.value !== "retail_inhouse");
+
+function groupKey(product: SalonProduct, groupBy: Exclude<GroupBy, "none">) {
+  if (groupBy === "brand") return product.brand.trim() || "No Brand";
   return product.brandSub.trim() || "No Brand_sub";
 }
 
@@ -24,7 +29,8 @@ export function BranchProductsTable({
   const [sizeQuery, setSizeQuery] = useState("");
   const [brandFilter, setBrandFilter] = useState("");
   const [brandSubFilter, setBrandSubFilter] = useState("");
-  const [groupByBrandSub, setGroupByBrandSub] = useState(true);
+  const [typeFilter, setTypeFilter] = useState("");
+  const [groupBy, setGroupBy] = useState<GroupBy>("brandSub");
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
   const [bundleProduct, setBundleProduct] = useState<SalonProduct | null>(null);
 
@@ -49,6 +55,7 @@ export function BranchProductsTable({
       if (brandFilter && product.brand !== brandFilter) return false;
       if (brandSubFilter === "none" && product.brandSub.trim()) return false;
       if (brandSubFilter && brandSubFilter !== "none" && product.brandSub.trim() !== brandSubFilter) return false;
+      if (typeFilter && !product.classifications.includes(typeFilter as ProductClassification)) return false;
       if (!sizeQuery.trim()) return true;
       if (parsedFilter) {
         return sizesMatch(product.sizeMl, parsedFilter.ml);
@@ -56,21 +63,21 @@ export function BranchProductsTable({
       const label = product.sizeLabel?.toLowerCase() ?? "";
       return label.includes(sizeQuery.trim().toLowerCase());
     });
-  }, [brandFilter, brandSubFilter, parsedFilter, products, searchQuery, sizeQuery]);
+  }, [brandFilter, brandSubFilter, parsedFilter, products, searchQuery, sizeQuery, typeFilter]);
 
   const grouped = useMemo(() => {
-    if (!groupByBrandSub) return [{ key: "", products: visible }];
+    if (groupBy === "none") return [{ key: "", products: visible }];
     const buckets = new Map<string, typeof visible>();
     for (const product of visible) {
-      const key = groupKey(product);
+      const key = groupKey(product, groupBy);
       const list = buckets.get(key) ?? [];
       list.push(product);
       buckets.set(key, list);
     }
     return [...buckets.entries()]
       .sort(([left], [right]) => {
-        if (left === "No Brand_sub") return 1;
-        if (right === "No Brand_sub") return -1;
+        if (left.startsWith("No ")) return 1;
+        if (right.startsWith("No ")) return -1;
         return left.localeCompare(right, undefined, { sensitivity: "base" });
       })
       .map(([key, items]) => ({
@@ -79,16 +86,7 @@ export function BranchProductsTable({
           (left.orderName || left.name).localeCompare(right.orderName || right.name, undefined, { sensitivity: "base" }),
         ),
       }));
-  }, [groupByBrandSub, visible]);
-
-  const sizeHints = useMemo(() => {
-    const seen = new Map<number, string>();
-    for (const product of products) {
-      if (product.sizeMl == null || !product.sizeLabel || seen.has(product.sizeMl)) continue;
-      seen.set(product.sizeMl, product.sizeLabel);
-    }
-    return [...seen.entries()].sort((left, right) => left[0] - right[0]);
-  }, [products]);
+  }, [groupBy, visible]);
 
   function toggleGroup(key: string) {
     setCollapsed((current) => {
@@ -99,7 +97,7 @@ export function BranchProductsTable({
     });
   }
 
-  const columnCount = 9;
+  const columnCount = 12;
 
   return (
     <div className="space-y-3">
@@ -144,13 +142,17 @@ export function BranchProductsTable({
             ))}
           </select>
         </label>
-        <label className="flex items-center gap-2 pb-2 text-sm">
-          <input
-            type="checkbox"
-            checked={groupByBrandSub}
-            onChange={(event) => setGroupByBrandSub(event.target.checked)}
-          />
-          <span>Group by Brand_sub</span>
+        <label className="min-w-40 space-y-1 text-sm">
+          <span>Group by</span>
+          <select
+            className={fieldClass}
+            value={groupBy}
+            onChange={(event) => setGroupBy(event.target.value as GroupBy)}
+          >
+            <option value="none">None</option>
+            <option value="brand">Brand</option>
+            <option value="brandSub">Brand_sub</option>
+          </select>
         </label>
         <label className="min-w-56 flex-1 space-y-1 text-sm">
           <span>Filter by size</span>
@@ -161,31 +163,38 @@ export function BranchProductsTable({
             placeholder="175ml, 1L, 175g"
           />
         </label>
-        {sizeHints.length > 0 ? (
-          <div className="flex flex-wrap gap-2">
-            {sizeHints.map(([ml, label]) => (
-              <button
-                key={ml}
-                type="button"
-                className="rounded-lg border border-border px-3 py-1.5 text-sm hover:bg-slate-50"
-                onClick={() => setSizeQuery(label)}
-              >
-                {label}
-              </button>
-            ))}
-            {sizeQuery ? (
-              <button
-                type="button"
-                className="rounded-lg border border-border px-3 py-1.5 text-sm hover:bg-slate-50"
-                onClick={() => setSizeQuery("")}
-              >
-                All sizes
-              </button>
-            ) : null}
-          </div>
+        <div className="flex basis-full flex-wrap gap-2">
+          {EDITABLE_CLASSIFICATIONS.map((item) => (
+            <button
+              key={item.value}
+              type="button"
+              className={cn(
+                "rounded-lg border px-3 py-1.5 text-sm hover:bg-slate-50",
+                typeFilter === item.value ? "border-sky-400 bg-sky-100 font-medium" : "border-border",
+              )}
+              onClick={() => setTypeFilter((current) => (current === item.value ? "" : item.value))}
+            >
+              {item.label}
+            </button>
+          ))}
+          {typeFilter ? (
+            <button
+              type="button"
+              className="rounded-lg border border-border px-3 py-1.5 text-sm hover:bg-slate-50"
+              onClick={() => setTypeFilter("")}
+            >
+              All types
+            </button>
+          ) : null}
+        </div>
+        {typeFilter ? (
+          <p className="basis-full text-xs text-sky-800">
+            Showing all {visible.length} {CLASSIFICATIONS.find((item) => item.value === typeFilter)?.label}{" "}
+            product{visible.length === 1 ? "" : "s"}.
+          </p>
         ) : null}
         <p className="basis-full text-xs text-muted">
-          Group by Brand_sub to inspect a product line. 175ml, 175ML, and 175 ml match. 1L matches 1000ml.
+          Group by Brand or Brand_sub to inspect a product line. 175ml, 175ML, and 175 ml match. 1L matches 1000ml.
         </p>
       </div>
 
@@ -193,15 +202,18 @@ export function BranchProductsTable({
         <table className={tableClass}>
           <thead>
             <tr>
+              <th className={thClass}>Image</th>
+              <th className={thClass}>Type</th>
+              <th className={thClass}>Available in Tunai</th>
               <th className={thClass}>SKU</th>
               <th className={thClass}>Barcode</th>
-              <th className={thClass}>Order name</th>
               <th className={thClass}>Name</th>
               <th className={thClass}>Brand_sub</th>
               <th className={thClass}>Size</th>
               <th className={thClass}>Kind</th>
-              <th className={thClass}>Type</th>
               <th className={thClass}>On hand</th>
+              <th className={thClass}>RRP</th>
+              <th className={thClass}>CRP</th>
             </tr>
           </thead>
           <tbody>
@@ -216,7 +228,7 @@ export function BranchProductsTable({
             ) : (
               grouped.flatMap((group) => {
                 const rows = [];
-                if (groupByBrandSub && group.key) {
+                if (groupBy !== "none" && group.key) {
                   const isCollapsed = collapsed.has(group.key);
                   rows.push(
                     <tr key={`group-${group.key}`} className="bg-slate-100">
@@ -238,12 +250,22 @@ export function BranchProductsTable({
                 for (const product of group.products) {
                   rows.push(
                     <tr key={product.id}>
+                      <td className={tdClass}>
+                        {product.pictureUrl ? (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img
+                            src={product.pictureUrl}
+                            alt=""
+                            className="h-10 w-10 rounded-md border border-border object-cover"
+                          />
+                        ) : (
+                          <div className="h-10 w-10 rounded-md border border-border bg-slate-50" />
+                        )}
+                      </td>
+                      <td className={tdClass}>{classificationTagsLabel(product.classifications) || "—"}</td>
+                      <td className={tdClass}>{isAvailableInTunai(product.classifications) ? "Yes" : "No"}</td>
                       <td className={tdClass}>{formatSku(product.sku)}</td>
                       <td className={tdClass}>{formatSku(product.barcode)}</td>
-                      <td className={tdClass}>
-                        {product.orderName || "—"}
-                        {product.brand ? <span className="block text-xs text-muted">{product.brand}</span> : null}
-                      </td>
                       <td className={tdClass}>{product.name || "—"}</td>
                       <td className={tdClass}>{product.brandSub || "—"}</td>
                       <td className={tdClass}>{product.sizeLabel || "—"}</td>
@@ -260,8 +282,11 @@ export function BranchProductsTable({
                           "Single"
                         )}
                       </td>
-                      <td className={tdClass}>{classificationLabel(product.defaultClassification)}</td>
                       <td className={tdClass}>{formatQty(product.onHand)}</td>
+                      <td className={tdClass}>{product.rrp == null ? "—" : formatMoney(product.rrp)}</td>
+                      <td className={tdClass}>
+                        {formatMoney(confirmedRetailPrice(product.unitCost, product.rrp))}
+                      </td>
                     </tr>,
                   );
                 }

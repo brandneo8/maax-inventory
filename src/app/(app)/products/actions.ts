@@ -15,17 +15,132 @@ type Client = Awaited<ReturnType<typeof createClient>>;
 function revalidateCatalog() {
   revalidatePath("/admin");
   revalidatePath("/admin/products");
-  revalidatePath("/products");
+  revalidatePath("/home/products");
+  revalidatePath("/home/tunai");
   revalidatePath("/home");
   revalidatePath("/orders");
   revalidatePath("/reports");
 }
 
-function catalogWriteError(error: { code?: string; message?: string }) {
+function catalogWriteError(error: { code?: string; message?: string; details?: string }) {
   if (error.code === "23505") {
+    const detail = `${error.message ?? ""} ${error.details ?? ""}`.toLowerCase();
+    if (detail.includes("barcode")) {
+      return "A product with that barcode already exists.";
+    }
+    if (detail.includes("sku")) {
+      return "A product with that SKU already exists.";
+    }
     return "A product with that SKU or barcode already exists.";
   }
   return error.message || "Could not save products.";
+}
+
+function draftText(value: unknown) {
+  if (value == null) return null;
+  return normalizeOptionalText(String(value));
+}
+
+function catalogConflictLabel(row: { order_name: string; sku: string | null }) {
+  const sku = row.sku?.trim();
+  return sku ? `${row.order_name} (SKU ${sku})` : row.order_name;
+}
+
+type CatalogIdentity = {
+  id: string;
+  order_name: string;
+  sku: string | null;
+  barcode: string | null;
+};
+
+async function findByBarcode(supabase: Client, companyId: string, barcode: string) {
+  const { data, error } = await supabase
+    .from("products")
+    .select("id, order_name, sku, barcode")
+    .eq("company_id", companyId)
+    .eq("barcode", barcode)
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  return (data as CatalogIdentity | null) ?? null;
+}
+
+async function findBySku(supabase: Client, companyId: string, sku: string) {
+  const { data, error } = await supabase
+    .from("products")
+    .select("id, order_name, sku, barcode")
+    .eq("company_id", companyId)
+    .eq("sku", sku)
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  return (data as CatalogIdentity | null) ?? null;
+}
+
+function namesMatch(left: string, right: string) {
+  return left.trim().toLowerCase() === right.trim().toLowerCase();
+}
+
+async function resolveSavedProductId(
+  supabase: Client,
+  companyId: string,
+  draft: { id?: string; orderName: string; sku: string | null; barcode: string | null },
+) {
+  if (draft.id) return draft.id;
+
+  if (draft.barcode) {
+    const existing = await findByBarcode(supabase, companyId, draft.barcode);
+    if (existing) {
+      if (namesMatch(existing.order_name, draft.orderName) && (existing.sku ?? null) === (draft.sku ?? null)) {
+        return existing.id;
+      }
+      throw new Error(`Barcode ${draft.barcode} is already used by ${catalogConflictLabel(existing)}.`);
+    }
+  }
+
+  if (draft.sku) {
+    const existing = await findBySku(supabase, companyId, draft.sku);
+    if (existing) {
+      if (namesMatch(existing.order_name, draft.orderName) && (existing.barcode ?? null) === (draft.barcode ?? null)) {
+        return existing.id;
+      }
+      throw new Error(`SKU ${draft.sku} is already used by ${catalogConflictLabel(existing)}.`);
+    }
+  }
+
+  if (!draft.barcode && !draft.sku) return undefined;
+
+  const { data: sameName, error } = await supabase
+    .from("products")
+    .select("id, order_name, sku, barcode")
+    .eq("company_id", companyId)
+    .eq("order_name", draft.orderName.trim());
+  if (error) throw new Error(error.message);
+
+  const candidates = (sameName ?? []).filter((row) => {
+    if ((row.sku ?? null) !== (draft.sku ?? null)) return false;
+    return row.barcode == null || row.barcode === draft.barcode;
+  });
+  if (candidates.length === 1) return candidates[0].id;
+  return undefined;
+}
+
+async function assertUniqueCodes(
+  supabase: Client,
+  companyId: string,
+  productId: string | undefined,
+  draft: { sku: string | null; barcode: string | null },
+) {
+  if (draft.barcode) {
+    const existing = await findByBarcode(supabase, companyId, draft.barcode);
+    if (existing && existing.id !== productId) {
+      throw new Error(`Barcode ${draft.barcode} is already used by ${catalogConflictLabel(existing)}.`);
+    }
+  }
+  if (draft.sku) {
+    const existing = await findBySku(supabase, companyId, draft.sku);
+    if (existing && existing.id !== productId) {
+      throw new Error(`SKU ${draft.sku} is already used by ${catalogConflictLabel(existing)}.`);
+    }
+  }
 }
 
 async function stampCatalogSaved(companyId: string, email: string | undefined) {
@@ -155,7 +270,7 @@ export type ProductDraft = {
   brand: string;
   brandSub: string;
   size: string;
-  classification: ProductClassification | "";
+  classifications: ProductClassification[];
   unitCost: string;
   rrp: string;
   threshold: string;
@@ -237,6 +352,17 @@ async function syncProductTags(supabase: Client, companyId: string, productId: s
   if (insertError) throw insertError;
 }
 
+async function syncProductClassifications(supabase: Client, productId: string, requested: ProductClassification[]) {
+  const wanted = [...new Set(requested.filter((value) => CLASSIFICATION_VALUES.has(value) && value !== "retail_inhouse"))];
+  const { error: deleteError } = await supabase.from("product_classifications").delete().eq("product_id", productId);
+  if (deleteError) throw deleteError;
+  if (wanted.length === 0) return;
+  const { error: insertError } = await supabase
+    .from("product_classifications")
+    .insert(wanted.map((classification) => ({ product_id: productId, classification })));
+  if (insertError) throw insertError;
+}
+
 export async function saveProducts(drafts: ProductDraft[]) {
   const { supabase, companyId, user } = await requireAdmin();
   const rows = drafts.filter((draft) => draft.orderName.trim());
@@ -253,29 +379,47 @@ export async function saveProducts(drafts: ProductDraft[]) {
   const validBranchIds = await companyBranchIds(supabase, companyId);
   const validSupplierIds = await companySupplierIds(supabase, companyId);
   const saved: { clientKey: string | null; id: string }[] = [];
+  const seenBarcodes = new Map<string, string>();
+  const seenSkus = new Map<string, string>();
 
   for (const draft of rows) {
     const size = catalogSize(draft.size);
+    const sku = draftText(draft.sku);
+    const barcode = draftText(draft.barcode);
+    const orderName = draft.orderName.trim();
+    if (barcode) {
+      const other = seenBarcodes.get(barcode);
+      if (other) throw new Error(`Barcode ${barcode} is used more than once in this save (${other} and ${orderName}).`);
+      seenBarcodes.set(barcode, orderName);
+    }
+    if (sku) {
+      const other = seenSkus.get(sku);
+      if (other) throw new Error(`SKU ${sku} is used more than once in this save (${other} and ${orderName}).`);
+      seenSkus.set(sku, orderName);
+    }
     const payload = {
-      sku: normalizeOptionalText(draft.sku),
-      barcode: normalizeOptionalText(draft.barcode),
-      order_name: draft.orderName.trim(),
-      name: normalizeOptionalText(draft.name),
+      sku,
+      barcode,
+      order_name: orderName,
+      name: draftText(draft.name),
       brand_id: await resolveBrandId(supabase, companyId, draft.brand),
-      brand_sub: normalizeOptionalText(draft.brandSub),
+      brand_sub: draftText(draft.brandSub),
       unit_cost_price: parseMoney(draft.unitCost) ?? 0,
       rrp: parseMoney(draft.rrp),
       low_stock_threshold: parseMoney(draft.threshold),
-      default_classification:
-        draft.classification && CLASSIFICATION_VALUES.has(draft.classification)
-          ? draft.classification
-          : null,
       size_label: size.sizeLabel,
       size_ml: size.sizeMl,
       is_set: draft.isSet,
     };
 
-    let productId = draft.id;
+    let productId = await resolveSavedProductId(supabase, companyId, {
+      id: draft.id,
+      orderName,
+      sku,
+      barcode,
+    });
+    await assertUniqueCodes(supabase, companyId, productId, { sku, barcode });
+
     if (productId) {
       const { error } = await supabase
         .from("products")
@@ -299,6 +443,7 @@ export async function saveProducts(drafts: ProductDraft[]) {
 
     await syncProductBranches(supabase, productId, draft.branchIds ?? [], validBranchIds);
     await syncProductSuppliers(supabase, productId, draft.supplierIds ?? [], validSupplierIds);
+    await syncProductClassifications(supabase, productId, draft.classifications ?? []);
     if (draft.id || draft.isSet) {
       await persistProductComponents(supabase, companyId, {
         productId,
@@ -618,4 +763,56 @@ export async function bulkUpdateProductBranches(input: { productIds: string[]; b
   }
 
   revalidateCatalog();
+}
+
+const MAX_PICTURE_BYTES = 5 * 1024 * 1024;
+const PICTURE_MIME_EXTENSIONS: Record<string, string> = {
+  "image/png": "png",
+  "image/jpeg": "jpg",
+  "image/webp": "webp",
+  "image/gif": "gif",
+};
+
+export async function uploadProductPicture(productId: string, formData: FormData) {
+  const { supabase, companyId } = await requireAdmin();
+  const file = formData.get("file");
+  if (!(file instanceof File)) {
+    throw new Error("Choose an image to upload.");
+  }
+  const extension = PICTURE_MIME_EXTENSIONS[file.type];
+  if (!extension) {
+    throw new Error("Images must be PNG, JPEG, WEBP, or GIF.");
+  }
+  if (file.size > MAX_PICTURE_BYTES) {
+    throw new Error("Image must be smaller than 5 MB.");
+  }
+
+  const { data: product, error: lookupError } = await supabase
+    .from("products")
+    .select("id")
+    .eq("id", productId)
+    .eq("company_id", companyId)
+    .maybeSingle();
+  if (lookupError) throw new Error(lookupError.message || "Could not find that product.");
+  if (!product) throw new Error("Could not find that product.");
+
+  const admin = createAdminClient();
+  const path = `${companyId}/${productId}.${extension}`;
+  const { error: uploadError } = await admin.storage
+    .from("product-images")
+    .upload(path, file, { upsert: true, contentType: file.type });
+  if (uploadError) throw new Error(uploadError.message || "Could not upload the image.");
+
+  const { data: publicUrlData } = admin.storage.from("product-images").getPublicUrl(path);
+  const pictureUrl = `${publicUrlData.publicUrl}?v=${Date.now()}`;
+
+  const { error: updateError } = await supabase
+    .from("products")
+    .update({ picture_url: pictureUrl })
+    .eq("id", productId)
+    .eq("company_id", companyId);
+  if (updateError) throw new Error(updateError.message || "Could not save the image.");
+
+  revalidateCatalog();
+  return { pictureUrl };
 }

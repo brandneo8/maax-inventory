@@ -21,12 +21,14 @@ export type CatalogProduct = {
   brand: string;
   brandSub: string;
   defaultClassification: ProductClassification | null;
+  classifications: ProductClassification[];
   unitCost: number;
   rrp: number | null;
   threshold: number | null;
   sizeLabel: string | null;
   sizeMl: number | null;
   isSet: boolean;
+  pictureUrl: string | null;
   tagIds: string[];
   tagNames: string[];
   branchIds: string[];
@@ -106,12 +108,14 @@ export async function getCatalogProducts(supabase: Client, companyId: string): P
       brand: brand?.name ?? "",
       brandSub: product.brand_sub?.trim() ?? "",
       defaultClassification: product.default_classification,
+      classifications: (product.product_classifications ?? []).map((row) => row.classification),
       unitCost: Number(product.unit_cost_price),
       rrp: product.rrp == null ? null : Number(product.rrp),
       threshold: product.low_stock_threshold == null ? null : Number(product.low_stock_threshold),
       sizeLabel: product.size_label,
       sizeMl: product.size_ml == null ? null : Number(product.size_ml),
       isSet: Boolean(product.is_set),
+      pictureUrl: product.picture_url,
       tagIds: assigned.map((tag) => tag.id),
       tagNames: assigned.map((tag) => tag.name).filter(Boolean),
       branchIds: (product.product_branches ?? []).map((row) => row.branch_id),

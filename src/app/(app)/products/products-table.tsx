@@ -1,10 +1,11 @@
 "use client";
 
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type ReactNode } from "react";
 import { unstable_rethrow, useRouter } from "next/navigation";
 import {
   deleteProduct,
   saveProducts,
+  uploadProductPicture,
   type DeleteProductResult,
   type ProductDeleteBlockGroup,
   type ProductDeleteBlockItem,
@@ -17,7 +18,7 @@ import { formatCatalogSavedLabel, formatMoney, formatPercent, formatQty, product
 import { searchFieldsMatch, searchTextMatches } from "@/lib/search";
 import { SalonChipField } from "@/components/salon-chip-field";
 import { BrandSubFilter, NO_BRAND_SUB } from "@/components/brand-sub-filter";
-import { CLASSIFICATIONS, classificationLabel, salonChipLabel, type ProductClassification } from "@/lib/labels";
+import { CLASSIFICATIONS, classificationTagsLabel, isAvailableInTunai, salonChipLabel, type ProductClassification } from "@/lib/labels";
 import { parseSize, sizesMatch } from "@/lib/product-size";
 import { btnClass, btnDangerClass, btnSecondaryClass, checkboxClass, fieldClass, tableClass, tdClass, thClass } from "@/lib/ui";
 import { cn } from "@/lib/utils";
@@ -34,6 +35,7 @@ export type ProductRow = {
   brand: string;
   brandSub: string;
   defaultClassification: ProductClassification | null;
+  classifications: ProductClassification[];
   unitCost: number;
   rrp: number | null;
   threshold: number | null;
@@ -42,6 +44,7 @@ export type ProductRow = {
   sizeLabel: string | null;
   sizeMl: number | null;
   isSet: boolean;
+  pictureUrl: string | null;
   branchIds: string[];
   supplierIds: string[];
   supplierName: string;
@@ -55,6 +58,7 @@ type TableDraft = ProductDraft & {
   supplierName: string;
   gstRegistered: boolean;
   componentLabels: BundleDraft[];
+  pictureUrl: string | null;
 };
 
 const SELECT_COL_REM = 9;
@@ -62,6 +66,7 @@ const SALON_TAGS_REM = 11;
 const wCheck = "w-36 min-w-36";
 const wSalons = "w-44 min-w-44";
 const wField = "min-w-28";
+const wImage = "w-16 min-w-16";
 const wName = "w-72 min-w-72";
 const wFriendly = "min-w-44";
 const wType = "min-w-44";
@@ -90,11 +95,12 @@ function toDraft(product: ProductRow): TableDraft {
     brand: product.brand,
     brandSub: product.brandSub,
     size: product.sizeLabel ?? "",
-    classification: product.defaultClassification ?? "",
+    classifications: product.classifications ?? [],
     unitCost: moneyInput(product.unitCost),
     rrp: moneyInput(product.rrp),
     threshold: moneyInput(product.threshold),
     isSet: product.isSet,
+    pictureUrl: product.pictureUrl,
     tagIds: product.tagIds,
     tagNames: product.tagNames,
     sizeMl: product.sizeMl,
@@ -123,9 +129,12 @@ function toDraft(product: ProductRow): TableDraft {
 
 const PAGE_SIZES = [50, 100, 500, 1000] as const;
 
-const UNGROUPED = "Ungrouped";
+const EDITABLE_CLASSIFICATIONS = CLASSIFICATIONS.filter((item) => item.value !== "retail_inhouse");
 
-type GroupBy = "none" | "brandSub" | "brand" | "salon" | "tags" | "type" | "supplier";
+const UNGROUPED = "Ungrouped";
+const NEW_PRODUCTS = "New products";
+
+type GroupBy = "none" | "brandSub" | "brand" | "salon" | "tags" | "type" | "supplier" | "size";
 
 const GROUP_BY_OPTIONS: { value: GroupBy; label: string }[] = [
   { value: "none", label: "None" },
@@ -135,6 +144,7 @@ const GROUP_BY_OPTIONS: { value: GroupBy; label: string }[] = [
   { value: "tags", label: "Tags" },
   { value: "type", label: "Type" },
   { value: "supplier", label: "Suppliers" },
+  { value: "size", label: "Size" },
 ];
 
 function salonGroupLabel(row: TableDraft, branches: { id: string; name: string }[]) {
@@ -164,12 +174,78 @@ function rowGroupKey(
       .sort((left, right) => left.localeCompare(right, undefined, { sensitivity: "base" }));
     return names.length > 0 ? names.join(", ") : "No tag";
   }
-  if (groupBy === "type") return row.classification ? classificationLabel(row.classification) : "No type";
+  if (groupBy === "type") return classificationTagsLabel(row.classifications) || "No type";
+  if (groupBy === "size") return row.size.trim() || "No size";
   const supplier = row.supplierName.trim();
   return supplier || "No supplier";
 }
 
+type SortColumn =
+  | "orderName"
+  | "name"
+  | "sku"
+  | "barcode"
+  | "brand"
+  | "brandSub"
+  | "size"
+  | "type"
+  | "tags"
+  | "supplier"
+  | "unitCost"
+  | "rrp"
+  | "threshold";
+type SortDirection = "asc" | "desc";
+
+function sortValue(row: TableDraft, column: SortColumn): string | number {
+  switch (column) {
+    case "orderName":
+      return row.orderName;
+    case "name":
+      return row.name;
+    case "sku":
+      return row.sku;
+    case "barcode":
+      return row.barcode;
+    case "brand":
+      return row.brand;
+    case "brandSub":
+      return row.brandSub;
+    case "size":
+      return row.size;
+    case "type":
+      return classificationTagsLabel(row.classifications);
+    case "tags":
+      return row.tagNames.filter(Boolean).join(", ");
+    case "supplier":
+      return row.supplierName;
+    case "unitCost":
+      return row.unitCost === "" ? -Infinity : Number(row.unitCost);
+    case "rrp":
+      return row.rrp === "" ? -Infinity : Number(row.rrp);
+    case "threshold":
+      return row.threshold === "" ? -Infinity : Number(row.threshold);
+    default:
+      return "";
+  }
+}
+
+function compareBySortColumn(
+  left: TableDraft,
+  right: TableDraft,
+  column: SortColumn,
+  direction: SortDirection,
+) {
+  const a = sortValue(left, column);
+  const b = sortValue(right, column);
+  const cmp =
+    typeof a === "number" && typeof b === "number"
+      ? a - b
+      : String(a).localeCompare(String(b), undefined, { sensitivity: "base" });
+  return direction === "desc" ? -cmp : cmp;
+}
+
 function groupSortPrefix(key: string) {
+  if (key === NEW_PRODUCTS) return `00:${key}`;
   if (key === UNGROUPED || key.startsWith("No ")) return `0:${key}`;
   return `1:${key}`;
 }
@@ -223,6 +299,110 @@ function ViewValue({ children }: { children: ReactNode }) {
   return <span className="block text-sm">{children}</span>;
 }
 
+function SortableHeader({
+  column,
+  active,
+  direction,
+  onSort,
+  children,
+  title,
+}: {
+  column: SortColumn;
+  active: boolean;
+  direction: SortDirection;
+  onSort: (column: SortColumn) => void;
+  children: ReactNode;
+  title?: string;
+}) {
+  return (
+    <button
+      type="button"
+      className="inline-flex items-center gap-1 whitespace-nowrap hover:underline"
+      onClick={() => onSort(column)}
+      title={title}
+    >
+      {children}
+      {active ? <span aria-hidden="true">{direction === "asc" ? "▲" : "▼"}</span> : null}
+    </button>
+  );
+}
+
+const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+
+function ProductImageCell({
+  productId,
+  pictureUrl,
+  label,
+  onUploaded,
+}: {
+  productId: string | undefined;
+  pictureUrl: string | null;
+  label: string;
+  onUploaded: (url: string) => void;
+}) {
+  const [uploading, setUploading] = useState(false);
+  const [localError, setLocalError] = useState<string | null>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  async function handleFile(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file || !productId) return;
+    if (!file.type.startsWith("image/")) {
+      setLocalError("Choose an image file.");
+      return;
+    }
+    if (file.size > MAX_IMAGE_BYTES) {
+      setLocalError("Image must be under 5 MB.");
+      return;
+    }
+    setLocalError(null);
+    setUploading(true);
+    try {
+      const uploadForm = new FormData();
+      uploadForm.set("file", file);
+      const result = await uploadProductPicture(productId, uploadForm);
+      onUploaded(result.pictureUrl);
+    } catch (err) {
+      setLocalError(err instanceof Error ? err.message : "Could not upload image.");
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  return (
+    <div className="flex flex-col items-center gap-1">
+      <button
+        type="button"
+        className="group relative flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-md border border-border bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+        onClick={() => inputRef.current?.click()}
+        disabled={uploading || !productId}
+        title={!productId ? "Save the product first" : `Upload an image for ${label || "this product"}`}
+      >
+        {pictureUrl ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img src={pictureUrl} alt="" className="h-full w-full object-cover" />
+        ) : (
+          <span className="text-[9px] leading-tight text-muted">No image</span>
+        )}
+        {productId ? (
+          <span className="absolute inset-0 hidden items-center justify-center bg-black/45 text-[10px] font-medium text-white group-hover:flex">
+            {uploading ? "…" : "Upload"}
+          </span>
+        ) : null}
+      </button>
+      <input
+        ref={inputRef}
+        type="file"
+        accept="image/png,image/jpeg,image/webp,image/gif"
+        hidden
+        onChange={(event) => void handleFile(event)}
+      />
+      {localError ? <span className="w-16 text-center text-[10px] text-red-600">{localError}</span> : null}
+    </div>
+  );
+}
+
 function withParentContents(row: TableDraft, contents: BundleDraft[]): TableDraft {
   const allocated = autoAllocateBundleCosts(Number(row.unitCost) || 0, contents);
   return {
@@ -242,11 +422,12 @@ function emptyRow(branchIds: string[]): TableDraft {
     brand: "",
     brandSub: "",
     size: "",
-    classification: "",
+    classifications: [],
     unitCost: "0",
     rrp: "",
     threshold: "",
     isSet: false,
+    pictureUrl: null,
     tagIds: [],
     tagNames: [],
     sizeMl: null,
@@ -308,7 +489,7 @@ function catalogCsvRow(
     Brand: row.brand,
     Brand_sub: row.brandSub,
     Size: row.size,
-    Type: row.classification ? classificationLabel(row.classification) : "",
+    Type: classificationTagsLabel(row.classifications),
     Tags: row.tagNames.filter(Boolean).join(", "),
     Supplier: supplier,
     "Unit cost": csvNumber(unitCost),
@@ -338,7 +519,7 @@ function sameIdList(left: string[] = [], right: string[] = []) {
 }
 
 function overrideCaughtUp(product: ProductRow, override: Partial<TableDraft>) {
-  if (override.classification != null && (product.defaultClassification ?? "") !== override.classification) {
+  if (override.classifications && !sameIdList(product.classifications, override.classifications)) {
     return false;
   }
   if (override.tagIds && !sameIdList(product.tagIds, override.tagIds)) return false;
@@ -399,7 +580,9 @@ function bulkFieldsToPatch(
   suppliers: { id: string; name: string; gstRegistered: boolean }[],
 ): Partial<TableDraft> {
   const patch: Partial<TableDraft> = {};
-  if (fields.classification !== undefined) patch.classification = fields.classification;
+  if (fields.classification !== undefined) {
+    patch.classifications = fields.classification ? [fields.classification] : [];
+  }
   if (fields.branchIds !== undefined) patch.branchIds = fields.branchIds;
   if (fields.tagIds !== undefined) {
     const tag = tags.find((item) => item.id === fields.tagIds?.[0]);
@@ -467,6 +650,8 @@ export function ProductsTable({
   const [supplierFilter, setSupplierFilter] = useState("");
   const [typeFilter, setTypeFilter] = useState("");
   const [tagFilter, setTagFilter] = useState("");
+  const [sortColumn, setSortColumn] = useState<SortColumn>("orderName");
+  const [sortDirection, setSortDirection] = useState<SortDirection>("asc");
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
@@ -580,8 +765,10 @@ export function ProductsTable({
       if (supplierFilter && supplierFilter !== "none" && !current.supplierIds.includes(supplierFilter)) return false;
       if (salonFilter === "none" && current.branchIds.length > 0) return false;
       if (salonFilter && salonFilter !== "none" && !current.branchIds.includes(salonFilter)) return false;
-      if (typeFilter === "none" && current.classification) return false;
-      if (typeFilter && typeFilter !== "none" && current.classification !== typeFilter) return false;
+      if (typeFilter === "none" && current.classifications.length > 0) return false;
+      if (typeFilter && typeFilter !== "none" && !current.classifications.includes(typeFilter as ProductClassification)) {
+        return false;
+      }
       if (tagFilter === "none" && current.tagIds.length > 0) return false;
       if (tagFilter && tagFilter !== "none" && !current.tagIds.includes(tagFilter)) return false;
       const needle = query.trim();
@@ -674,13 +861,14 @@ export function ProductsTable({
   }, [overlayTick, rowMatchesFilters, rows]);
 
   const groupKeyFor = useCallback(
-    (row: TableDraft) => rowGroupKey(row, groupBy, branches),
+    (row: TableDraft, index = 0) => {
+      if (index >= 0 && !row.id) return NEW_PRODUCTS;
+      return rowGroupKey(row, groupBy, branches);
+    },
     [branches, groupBy],
   );
 
   const grouped = useMemo(() => {
-    const byName = (left: { row: TableDraft }, right: { row: TableDraft }) =>
-      left.row.orderName.localeCompare(right.row.orderName, undefined, { sensitivity: "base" });
     const items = [...filtered];
     if (groupBy === "brandSub") {
       const present = new Set(
@@ -709,8 +897,8 @@ export function ProductsTable({
     }
     items.sort((left, right) => {
       if (groupBy !== "none") {
-        const cmp = groupSortPrefix(groupKeyFor(left.row)).localeCompare(
-          groupSortPrefix(groupKeyFor(right.row)),
+        const cmp = groupSortPrefix(groupKeyFor(left.row, left.index)).localeCompare(
+          groupSortPrefix(groupKeyFor(right.row, right.index)),
           undefined,
           { sensitivity: "base" },
         );
@@ -718,10 +906,20 @@ export function ProductsTable({
       }
       if (!left.row.id && right.row.id) return -1;
       if (left.row.id && !right.row.id) return 1;
-      return byName(left, right);
+      return compareBySortColumn(left.row, right.row, sortColumn, sortDirection);
     });
     return items;
-  }, [brandFilter, brandSubFilter, branches, customBrandSubs, filtered, groupBy, groupKeyFor]);
+  }, [
+    brandFilter,
+    brandSubFilter,
+    branches,
+    customBrandSubs,
+    filtered,
+    groupBy,
+    groupKeyFor,
+    sortColumn,
+    sortDirection,
+  ]);
 
   const listedProductCount = grouped.filter((item) => item.index >= 0).length;
   const exportRows = useMemo(
@@ -734,7 +932,7 @@ export function ProductsTable({
     const seen = new Set<string>();
     const next: typeof grouped = [];
     for (const item of grouped) {
-      const key = groupKeyFor(item.row);
+      const key = groupKeyFor(item.row, item.index);
       if (!collapsedGroups.has(key)) {
         next.push(item);
         continue;
@@ -749,7 +947,7 @@ export function ProductsTable({
   const pageCount = Math.max(1, Math.ceil(displayGrouped.length / pageSize));
   const currentPage = Math.min(page, pageCount - 1);
   const visible = displayGrouped.slice(currentPage * pageSize, currentPage * pageSize + pageSize);
-  const columnCount = 24;
+  const columnCount = 26;
   const usedInBundles = useMemo(() => {
     const byChild = new Map<string, string[]>();
     for (const row of rows) {
@@ -784,6 +982,7 @@ export function ProductsTable({
   }, [columnCount]);
 
   function toggleGroupCollapse(groupKey: string) {
+    if (groupKey === NEW_PRODUCTS) return;
     setCollapsedGroups((current) => {
       const next = new Set(current);
       if (next.has(groupKey)) next.delete(groupKey);
@@ -793,13 +992,15 @@ export function ProductsTable({
   }
 
   const allGroupKeys = useMemo(
-    () => [...new Set(grouped.map((item) => groupKeyFor(item.row)))],
+    () => [...new Set(grouped.map((item) => groupKeyFor(item.row, item.index)))],
     [groupKeyFor, grouped],
   );
-  const allGroupsCollapsed = allGroupKeys.length > 0 && allGroupKeys.every((key) => collapsedGroups.has(key));
+  const collapsibleGroupKeys = allGroupKeys.filter((key) => key !== NEW_PRODUCTS);
+  const allGroupsCollapsed =
+    collapsibleGroupKeys.length > 0 && collapsibleGroupKeys.every((key) => collapsedGroups.has(key));
 
   function collapseAllGroups() {
-    setCollapsedGroups(new Set(allGroupKeys));
+    setCollapsedGroups(new Set(allGroupKeys.filter((key) => key !== NEW_PRODUCTS)));
     setPage(0);
   }
 
@@ -843,7 +1044,7 @@ export function ProductsTable({
     const counts = new Map<string, number>();
     for (const item of grouped) {
       if (item.index < 0) continue;
-      const key = groupKeyFor(item.row);
+      const key = groupKeyFor(item.row, item.index);
       counts.set(key, (counts.get(key) ?? 0) + 1);
     }
     return counts;
@@ -911,6 +1112,12 @@ export function ProductsTable({
     setRows((current) => [emptyRow(branches.map((branch) => branch.id)), ...current]);
     setDirty((current) => new Set([...current].map((index) => index + 1)));
     setBundleIndex((current) => (current == null ? null : current + 1));
+    setCollapsedGroups((current) => {
+      if (!current.has(NEW_PRODUCTS)) return current;
+      const next = new Set(current);
+      next.delete(NEW_PRODUCTS);
+      return next;
+    });
     setPage(0);
     setError(null);
     setMessage(null);
@@ -918,7 +1125,7 @@ export function ProductsTable({
 
   function groupProductIds(groupKey: string) {
     return grouped
-      .filter((item) => groupKeyFor(item.row) === groupKey)
+      .filter((item) => groupKeyFor(item.row, item.index) === groupKey)
       .map((item) => item.row.id)
       .filter((id): id is string => Boolean(id));
   }
@@ -1035,12 +1242,29 @@ export function ProductsTable({
     try {
       const result = await saveProducts(
         drafts.map((row) => ({
-          ...row,
+          id: row.id,
+          clientKey: row.clientKey,
+          sku: row.sku,
+          barcode: row.barcode,
+          name: row.name,
+          orderName: row.orderName,
+          brand: row.brand,
+          brandSub: row.brandSub,
+          size: row.size,
+          classifications: row.classifications,
+          unitCost: row.unitCost,
+          rrp: row.rrp,
+          threshold: row.threshold,
+          isSet: row.isSet,
+          branchIds: row.branchIds,
+          tagIds: row.tagIds,
+          supplierIds: row.supplierIds,
           components: row.componentLabels.length > 0 ? contentsPayload(row.componentLabels) : row.components,
         })),
       );
       const leftover = [...(result.saved ?? [])];
       dirtyIdsRef.current.clear();
+      skipProductSync.current = true;
       setRows((current) =>
         current
           .map((row) => {
@@ -1103,6 +1327,28 @@ export function ProductsTable({
 
   function setRowBranches(index: number, branchIds: string[]) {
     updateRow(index, { branchIds });
+  }
+
+  function setRowPicture(index: number, pictureUrl: string | null) {
+    setRows((current) => current.map((row, rowIndex) => (rowIndex === index ? { ...row, pictureUrl } : row)));
+  }
+
+  function toggleRowClassification(index: number, value: ProductClassification) {
+    const current = rows[index];
+    if (!current) return;
+    const classifications = current.classifications.includes(value)
+      ? current.classifications.filter((item) => item !== value)
+      : [...current.classifications, value];
+    updateRow(index, { classifications });
+  }
+
+  function toggleSort(column: SortColumn) {
+    if (sortColumn === column) {
+      setSortDirection((direction) => (direction === "asc" ? "desc" : "asc"));
+    } else {
+      setSortColumn(column);
+      setSortDirection("asc");
+    }
   }
 
   function setBundleContents(index: number, contents: BundleDraft[]) {
@@ -1228,7 +1474,7 @@ export function ProductsTable({
       </div>
 
       <div className="grid grid-cols-1 items-start gap-3 lg:grid-cols-[minmax(0,1fr)_auto]">
-      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+      <div className="grid gap-3 rounded-xl border border-border bg-card p-4 md:grid-cols-2 xl:grid-cols-4">
         <label className="space-y-1 text-sm">
           <span>Find product</span>
           <input
@@ -1340,7 +1586,7 @@ export function ProductsTable({
             }}
           >
             <option value="">All types</option>
-            {CLASSIFICATIONS.map((item) => (
+            {EDITABLE_CLASSIFICATIONS.map((item) => (
               <option key={item.value} value={item.value}>
                 {item.label}
               </option>
@@ -1367,6 +1613,36 @@ export function ProductsTable({
             <option value="none">No tag</option>
           </select>
         </label>
+        <div className="flex flex-wrap items-center gap-2 md:col-span-2 xl:col-span-4">
+          {EDITABLE_CLASSIFICATIONS.map((item) => (
+            <button
+              key={item.value}
+              type="button"
+              className={cn(
+                "rounded-lg border px-3 py-1.5 text-sm hover:bg-slate-50",
+                typeFilter === item.value ? "border-sky-400 bg-sky-100 font-medium" : "border-border",
+              )}
+              onClick={() => {
+                setTypeFilter((current) => (current === item.value ? "" : item.value));
+                setPage(0);
+              }}
+            >
+              {item.label}
+            </button>
+          ))}
+          {typeFilter ? (
+            <button
+              type="button"
+              className="rounded-lg border border-border px-3 py-1.5 text-sm hover:bg-slate-50"
+              onClick={() => {
+                setTypeFilter("");
+                setPage(0);
+              }}
+            >
+              All types
+            </button>
+          ) : null}
+        </div>
       </div>
       <div className="flex items-end gap-3 self-start rounded-xl border border-sky-300 bg-sky-200 px-4 py-3">
         <label className="min-w-40 space-y-1 text-sm">
@@ -1483,22 +1759,74 @@ export function ProductsTable({
                 Salons
               </th>
               <th className={cn(thClass, wName, stickyNameHead)} style={{ left: nameLeft }}>
-                Order name
+                <SortableHeader column="orderName" active={sortColumn === "orderName"} direction={sortDirection} onSort={toggleSort}>
+                  Order name
+                </SortableHeader>
               </th>
-              <th className={cn(thClass, wFriendly, stickyHead)}>Name</th>
-              <th className={cn(thClass, wField, stickyHead)}>SKU</th>
-              <th className={cn(thClass, wField, stickyHead)}>Barcode</th>
-              <th className={cn(thClass, wField, stickyHead)}>Brand</th>
-              <th className={cn(thClass, wField, stickyHead)}>Brand_sub</th>
-              <th className={cn(thClass, wField, stickyHead)}>Size</th>
-              <th className={cn(thClass, wType, stickyHead)}>Type</th>
-              <th className={cn(thClass, wContents, stickyHead)}>Tags</th>
-              <th className={cn(thClass, wSupplier, stickyHead)}>Supplier</th>
-              <th className={cn(thClass, wField, stickyHead)}>Unit cost</th>
+              <th className={cn(thClass, wImage, stickyHead)}>Image</th>
+              <th className={cn(thClass, wFriendly, stickyHead)}>
+                <SortableHeader column="name" active={sortColumn === "name"} direction={sortDirection} onSort={toggleSort}>
+                  Name
+                </SortableHeader>
+              </th>
+              <th className={cn(thClass, wField, stickyHead)}>
+                <SortableHeader column="sku" active={sortColumn === "sku"} direction={sortDirection} onSort={toggleSort}>
+                  SKU
+                </SortableHeader>
+              </th>
+              <th className={cn(thClass, wField, stickyHead)}>
+                <SortableHeader column="barcode" active={sortColumn === "barcode"} direction={sortDirection} onSort={toggleSort}>
+                  Barcode
+                </SortableHeader>
+              </th>
+              <th className={cn(thClass, wField, stickyHead)}>
+                <SortableHeader column="brand" active={sortColumn === "brand"} direction={sortDirection} onSort={toggleSort}>
+                  Brand
+                </SortableHeader>
+              </th>
+              <th className={cn(thClass, wField, stickyHead)}>
+                <SortableHeader column="brandSub" active={sortColumn === "brandSub"} direction={sortDirection} onSort={toggleSort}>
+                  Brand_sub
+                </SortableHeader>
+              </th>
+              <th className={cn(thClass, wField, stickyHead)}>
+                <SortableHeader column="size" active={sortColumn === "size"} direction={sortDirection} onSort={toggleSort}>
+                  Size
+                </SortableHeader>
+              </th>
+              <th className={cn(thClass, wType, stickyHead)}>
+                <SortableHeader column="type" active={sortColumn === "type"} direction={sortDirection} onSort={toggleSort}>
+                  Type
+                </SortableHeader>
+              </th>
+              <th className={cn(thClass, wField, stickyHead)}>Available in Tunai</th>
+              <th className={cn(thClass, wContents, stickyHead)}>
+                <SortableHeader column="tags" active={sortColumn === "tags"} direction={sortDirection} onSort={toggleSort}>
+                  Tags
+                </SortableHeader>
+              </th>
+              <th className={cn(thClass, wSupplier, stickyHead)}>
+                <SortableHeader column="supplier" active={sortColumn === "supplier"} direction={sortDirection} onSort={toggleSort}>
+                  Supplier
+                </SortableHeader>
+              </th>
+              <th className={cn(thClass, wField, stickyHead)}>
+                <SortableHeader column="unitCost" active={sortColumn === "unitCost"} direction={sortDirection} onSort={toggleSort}>
+                  Unit cost
+                </SortableHeader>
+              </th>
               <th className={cn(thClass, wField, stickyHead)}>Tax amount</th>
               <th className={cn(thClass, wField, stickyHead)}>Unit cost with tax</th>
               <th className={cn(thClass, wField, stickyHead)} title="Recommended retail price from the supplier">
-                RRP
+                <SortableHeader
+                  column="rrp"
+                  active={sortColumn === "rrp"}
+                  direction={sortDirection}
+                  onSort={toggleSort}
+                  title="Recommended retail price from the supplier"
+                >
+                  RRP
+                </SortableHeader>
               </th>
               <th className={cn(thClass, wField, stickyHead)} title="Confirmed retail price. Uses RRP when RRP is above 0, otherwise unit cost × 2.">
                 CRP
@@ -1509,7 +1837,11 @@ export function ProductsTable({
               <th className={cn(thClass, wField, stickyHead)} title="(CRP − unit cost with tax) ÷ CRP">
                 Gross margin 2
               </th>
-              <th className={cn(thClass, wField, stickyHead)}>Threshold</th>
+              <th className={cn(thClass, wField, stickyHead)}>
+                <SortableHeader column="threshold" active={sortColumn === "threshold"} direction={sortDirection} onSort={toggleSort}>
+                  Threshold
+                </SortableHeader>
+              </th>
               <th className={cn(thClass, wCheck, stickyHead)} title="This SKU is a bundle of other products, not a salon assignment.">
                 Bundle
               </th>
@@ -1542,13 +1874,13 @@ export function ProductsTable({
                 const crp = confirmedRetailPrice(unitCost, row.rrp === "" ? null : Number(row.rrp));
                 const margin = grossMarginPercent(crp, unitCost);
                 const marginWithTax = grossMarginPercent(crp, pricing.unitCostWithTax);
-                const groupKey = groupKeyFor(row);
+                const groupKey = groupKeyFor(row, index);
                 const previous = visible[visibleIndex - 1];
-                const previousKey = previous ? groupKeyFor(previous.row) : null;
+                const previousKey = previous ? groupKeyFor(previous.row, previous.index) : null;
                 const showGroup = groupBy !== "none" && previousKey !== groupKey;
                 const groupIds = showGroup ? groupProductIds(groupKey) : [];
                 const groupSelectedCount = groupIds.filter((id) => selected.includes(id)).length;
-                const groupCollapsed = collapsedGroups.has(groupKey);
+                const groupCollapsed = groupKey !== NEW_PRODUCTS && collapsedGroups.has(groupKey);
                 const justUpdated = Boolean(row.id && recentBulkIds.has(row.id));
                 const updatedCell = justUpdated ? "ring-2 ring-emerald-400 ring-inset" : "";
                 const inBundles = row.id ? usedInBundles.get(row.id) ?? [] : [];
@@ -1604,21 +1936,29 @@ export function ProductsTable({
                                 aria-label={`Select ${groupKey}`}
                               />
                             ) : null}
-                            <button
-                              className="inline-flex items-center gap-2 text-left"
-                              type="button"
-                              onClick={() => toggleGroupCollapse(groupKey)}
-                              aria-expanded={!groupCollapsed}
-                              aria-label={`${groupCollapsed ? "Expand" : "Collapse"} ${groupKey}`}
-                            >
-                              <span aria-hidden="true" className="w-3 text-xs text-muted">
-                                {groupCollapsed ? "▸" : "▾"}
-                              </span>
+                            {groupKey === NEW_PRODUCTS ? (
                               <span>
                                 {groupKey} · {groupCounts.get(groupKey) ?? 0} product
-                                {(groupCounts.get(groupKey) ?? 0) === 1 ? "" : "s"}
+                                {(groupCounts.get(groupKey) ?? 0) === 1 ? "" : "s"} · set brand, type, and
+                                tags here
                               </span>
-                            </button>
+                            ) : (
+                              <button
+                                className="inline-flex items-center gap-2 text-left"
+                                type="button"
+                                onClick={() => toggleGroupCollapse(groupKey)}
+                                aria-expanded={!groupCollapsed}
+                                aria-label={`${groupCollapsed ? "Expand" : "Collapse"} ${groupKey}`}
+                              >
+                                <span aria-hidden="true" className="w-3 text-xs text-muted">
+                                  {groupCollapsed ? "▸" : "▾"}
+                                </span>
+                                <span>
+                                  {groupKey} · {groupCounts.get(groupKey) ?? 0} product
+                                  {(groupCounts.get(groupKey) ?? 0) === 1 ? "" : "s"}
+                                </span>
+                              </button>
+                            )}
                           </div>
                         </td>
                       </tr>
@@ -1666,6 +2006,14 @@ export function ProductsTable({
                         <ViewValue>{dash(row.orderName)}</ViewValue>
                       )}
                     </td>
+                    <td className={cn(tdClass, wImage)}>
+                      <ProductImageCell
+                        productId={row.id}
+                        pictureUrl={row.pictureUrl}
+                        label={productDisplayName(row) || row.orderName}
+                        onUploaded={(url) => setRowPicture(index, url)}
+                      />
+                    </td>
                     <td className={cn(tdClass, wFriendly)}>
                       {editing ? (
                         <input
@@ -1684,6 +2032,9 @@ export function ProductsTable({
                         <input
                           className={cn(fieldClass, wField)}
                           value={row.sku}
+                          autoComplete="off"
+                          autoCorrect="off"
+                          spellCheck={false}
                           onChange={(event) => updateRow(index, { sku: event.target.value })}
                         />
                       ) : (
@@ -1695,6 +2046,9 @@ export function ProductsTable({
                         <input
                           className={cn(fieldClass, wField)}
                           value={row.barcode}
+                          autoComplete="off"
+                          autoCorrect="off"
+                          spellCheck={false}
                           onChange={(event) => updateRow(index, { barcode: event.target.value })}
                         />
                       ) : (
@@ -1737,26 +2091,24 @@ export function ProductsTable({
                     </td>
                     <td className={cn(tdClass, wType)}>
                       {editing ? (
-                        <select
-                          key={`type-${row.id ?? index}-${row.classification || "none"}`}
-                          className={cn(fieldClass, wType, updatedCell)}
-                          value={row.classification || ""}
-                          onChange={(event) =>
-                            updateRow(index, { classification: event.target.value as ProductClassification | "" })
-                          }
-                        >
-                          <option value="">None</option>
-                          {CLASSIFICATIONS.map((item) => (
-                            <option key={item.value} value={item.value}>
+                        <div className={cn("flex flex-col gap-1 p-1", updatedCell)}>
+                          {EDITABLE_CLASSIFICATIONS.map((item) => (
+                            <label key={item.value} className="flex items-center gap-1.5 text-xs">
+                              <input
+                                type="checkbox"
+                                checked={row.classifications.includes(item.value)}
+                                onChange={() => toggleRowClassification(index, item.value)}
+                              />
                               {item.label}
-                            </option>
+                            </label>
                           ))}
-                        </select>
+                        </div>
                       ) : (
-                        <ViewValue>
-                          {row.classification ? classificationLabel(row.classification) : "—"}
-                        </ViewValue>
+                        <ViewValue>{classificationTagsLabel(row.classifications) || "—"}</ViewValue>
                       )}
+                    </td>
+                    <td className={cn(tdClass, wField)}>
+                      <ViewValue>{isAvailableInTunai(row.classifications) ? "Yes" : "No"}</ViewValue>
                     </td>
                     <td className={cn(tdClass, wContents)}>
                       {editing ? (

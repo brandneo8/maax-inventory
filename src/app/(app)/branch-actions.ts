@@ -11,7 +11,7 @@ const BRANCH_PATHS = [
   "/invoices",
   "/counts",
   "/reports",
-  "/products",
+  "/home/products",
   "/admin",
   "/admin/users",
   "/admin/products",

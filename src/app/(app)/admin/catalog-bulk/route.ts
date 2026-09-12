@@ -39,7 +39,8 @@ function asString(value: unknown) {
 function revalidateCatalog() {
   revalidatePath("/admin");
   revalidatePath("/admin/products");
-  revalidatePath("/products");
+  revalidatePath("/home/products");
+  revalidatePath("/home/tunai");
   revalidatePath("/home");
   revalidatePath("/orders");
   revalidatePath("/reports");
@@ -80,23 +81,16 @@ async function ownedProductIds(supabase: Client, companyId: string, productIds: 
   return ownedIds;
 }
 
-async function applyClassification(
-  supabase: Client,
-  companyId: string,
-  productIds: string[],
-  requested: string,
-) {
-  const classification: ProductClassification | null = CLASSIFICATION_VALUES.has(
-    requested as ProductClassification,
-  )
-    ? (requested as ProductClassification)
-    : null;
-  for (const ids of chunkIds(productIds)) {
+async function applyProductClassifications(supabase: Client, ownedIds: string[], classification: ProductClassification | null) {
+  for (const ids of chunkIds(ownedIds)) {
+    const { error } = await supabase.from("product_classifications").delete().in("product_id", ids);
+    if (error) throw new Error(error.message);
+  }
+  if (!classification) return;
+  for (const ids of chunkIds(ownedIds)) {
     const { error } = await supabase
-      .from("products")
-      .update({ default_classification: classification })
-      .eq("company_id", companyId)
-      .in("id", ids);
+      .from("product_classifications")
+      .insert(ids.map((productId) => ({ product_id: productId, classification })));
     if (error) throw new Error(error.message);
   }
 }
@@ -196,9 +190,10 @@ async function applyEdit(
 
   if (hasField(fields, "classification")) {
     const requested = asString(fields.classification);
-    productPatch.default_classification = CLASSIFICATION_VALUES.has(requested as ProductClassification)
-      ? requested
+    const classification = CLASSIFICATION_VALUES.has(requested as ProductClassification)
+      ? (requested as ProductClassification)
       : null;
+    await applyProductClassifications(supabase, ownedIds, classification);
   }
   if (hasField(fields, "brand")) {
     productPatch.brand_id = await resolveBrandId(supabase, companyId, asString(fields.brand));
@@ -235,7 +230,6 @@ async function applyEdit(
 
   if (Object.keys(productPatch).length > 0) {
     const payload = productPatch as {
-      default_classification?: ProductClassification | null;
       brand_id?: string | null;
       brand_sub?: string | null;
       size_label?: string | null;
@@ -293,7 +287,15 @@ export async function POST(request: Request) {
       }
       await applyEdit(supabase, companyId, productIds, fields);
     } else if (body?.kind === "type") {
-      await applyClassification(supabase, companyId, productIds, asString(body.classification));
+      const ownedIds = await ownedProductIds(supabase, companyId, productIds);
+      if (ownedIds.length === 0) {
+        return NextResponse.json({ error: "No matching products to update." }, { status: 400 });
+      }
+      const requested = asString(body.classification);
+      const classification = CLASSIFICATION_VALUES.has(requested as ProductClassification)
+        ? (requested as ProductClassification)
+        : null;
+      await applyProductClassifications(supabase, ownedIds, classification);
     } else if (body?.kind === "tags") {
       const ownedIds = await ownedProductIds(supabase, companyId, productIds);
       if (ownedIds.length === 0) {

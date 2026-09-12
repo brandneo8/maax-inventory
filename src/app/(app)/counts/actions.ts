@@ -180,7 +180,7 @@ export async function addCountEntryAction(formData: FormData) {
 
   revalidatePath(`/counts/${count.id}`);
   revalidatePath(`/counts/${count.id}/review`);
-  revalidatePath("/products");
+  revalidatePath("/home/products");
 }
 
 export async function searchCountProductsAction(countId: string, query: string) {
@@ -247,7 +247,7 @@ export async function saveCountQuantities(formData: FormData) {
 
   revalidatePath(`/counts/${count.id}`);
   revalidatePath(`/counts/${count.id}/review`);
-  revalidatePath("/products");
+  revalidatePath("/home/products");
 }
 
 export async function fillUncountedCountItems(formData: FormData) {
@@ -399,7 +399,7 @@ export async function completeInventoryCount(formData: FormData) {
   revalidatePath("/counts");
   revalidatePath("/reports");
   revalidatePath("/admin/products");
-  revalidatePath("/products");
+  revalidatePath("/home/products");
   redirect(`/counts/${count.id}`);
 }
 
@@ -455,5 +455,5 @@ export async function voidInventoryCount(formData: FormData) {
   revalidatePath(`/counts/${count.id}/review`);
   revalidatePath("/counts");
   revalidatePath("/reports");
-  revalidatePath("/products");
+  revalidatePath("/home/products");
 }

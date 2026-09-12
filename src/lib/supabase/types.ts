@@ -1,4 +1,4 @@
-﻿export type Json =
+export type Json =
   | string
   | number
   | boolean
@@ -11,6 +11,31 @@ export type Database = {
   // instead of createClient<Database, { PostgrestVersion: 'XX' }>(URL, KEY)
   __InternalSupabase: {
     PostgrestVersion: "14.5"
+  }
+  graphql_public: {
+    Tables: {
+      [_ in never]: never
+    }
+    Views: {
+      [_ in never]: never
+    }
+    Functions: {
+      graphql: {
+        Args: {
+          extensions?: Json
+          operationName?: string
+          query?: string
+          variables?: Json
+        }
+        Returns: Json
+      }
+    }
+    Enums: {
+      [_ in never]: never
+    }
+    CompositeTypes: {
+      [_ in never]: never
+    }
   }
   public: {
     Tables: {
@@ -740,42 +765,6 @@ export type Database = {
           },
         ]
       }
-      product_components: {
-        Row: {
-          allocated_cost: number | null
-          component_product_id: string
-          quantity: number
-          set_product_id: string
-        }
-        Insert: {
-          allocated_cost?: number | null
-          component_product_id: string
-          quantity?: number
-          set_product_id: string
-        }
-        Update: {
-          allocated_cost?: number | null
-          component_product_id?: string
-          quantity?: number
-          set_product_id?: string
-        }
-        Relationships: [
-          {
-            foreignKeyName: "product_components_component_product_id_fkey"
-            columns: ["component_product_id"]
-            isOneToOne: false
-            referencedRelation: "products"
-            referencedColumns: ["id"]
-          },
-          {
-            foreignKeyName: "product_components_set_product_id_fkey"
-            columns: ["set_product_id"]
-            isOneToOne: false
-            referencedRelation: "products"
-            referencedColumns: ["id"]
-          },
-        ]
-      }
       product_branches: {
         Row: {
           branch_id: string
@@ -800,6 +789,93 @@ export type Database = {
           {
             foreignKeyName: "product_branches_product_id_fkey"
             columns: ["product_id"]
+            isOneToOne: false
+            referencedRelation: "low_stock_alerts"
+            referencedColumns: ["product_id"]
+          },
+          {
+            foreignKeyName: "product_branches_product_id_fkey"
+            columns: ["product_id"]
+            isOneToOne: false
+            referencedRelation: "products"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      product_classifications: {
+        Row: {
+          classification: Database["public"]["Enums"]["product_classification"]
+          product_id: string
+        }
+        Insert: {
+          classification: Database["public"]["Enums"]["product_classification"]
+          product_id: string
+        }
+        Update: {
+          classification?: Database["public"]["Enums"]["product_classification"]
+          product_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "product_classifications_product_id_fkey"
+            columns: ["product_id"]
+            isOneToOne: false
+            referencedRelation: "low_stock_alerts"
+            referencedColumns: ["product_id"]
+          },
+          {
+            foreignKeyName: "product_classifications_product_id_fkey"
+            columns: ["product_id"]
+            isOneToOne: false
+            referencedRelation: "products"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      product_components: {
+        Row: {
+          allocated_cost: number | null
+          component_product_id: string
+          quantity: number
+          set_product_id: string
+        }
+        Insert: {
+          allocated_cost?: number | null
+          component_product_id: string
+          quantity?: number
+          set_product_id: string
+        }
+        Update: {
+          allocated_cost?: number | null
+          component_product_id?: string
+          quantity?: number
+          set_product_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "product_components_component_product_id_fkey"
+            columns: ["component_product_id"]
+            isOneToOne: false
+            referencedRelation: "low_stock_alerts"
+            referencedColumns: ["product_id"]
+          },
+          {
+            foreignKeyName: "product_components_component_product_id_fkey"
+            columns: ["component_product_id"]
+            isOneToOne: false
+            referencedRelation: "products"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "product_components_set_product_id_fkey"
+            columns: ["set_product_id"]
+            isOneToOne: false
+            referencedRelation: "low_stock_alerts"
+            referencedColumns: ["product_id"]
+          },
+          {
+            foreignKeyName: "product_components_set_product_id_fkey"
+            columns: ["set_product_id"]
             isOneToOne: false
             referencedRelation: "products"
             referencedColumns: ["id"]
@@ -845,12 +921,13 @@ export type Database = {
       }
       products: {
         Row: {
+          available_in_tunai: boolean
           barcode: string | null
           brand_id: string | null
           brand_sub: string | null
           company_id: string
           created_at: string
-          crp: number
+          crp: number | null
           default_classification:
             | Database["public"]["Enums"]["product_classification"]
             | null
@@ -870,11 +947,13 @@ export type Database = {
           unit_cost_price: number
         }
         Insert: {
+          available_in_tunai?: boolean
           barcode?: string | null
           brand_id?: string | null
           brand_sub?: string | null
           company_id: string
           created_at?: string
+          crp?: number | null
           default_classification?:
             | Database["public"]["Enums"]["product_classification"]
             | null
@@ -894,11 +973,13 @@ export type Database = {
           unit_cost_price?: number
         }
         Update: {
+          available_in_tunai?: boolean
           barcode?: string | null
           brand_id?: string | null
           brand_sub?: string | null
           company_id?: string
           created_at?: string
+          crp?: number | null
           default_classification?:
             | Database["public"]["Enums"]["product_classification"]
             | null
@@ -1468,12 +1549,12 @@ export type Database = {
           p_needle: string
         }
         Returns: {
-          brand_name: string | null
+          brand_name: string
           id: string
-          name: string | null
+          name: string
           on_salon: boolean
-          order_name: string | null
-          sku: string | null
+          order_name: string
+          sku: string
         }[]
       }
     }
@@ -1495,7 +1576,12 @@ export type Database = {
         | "partially_received"
         | "received"
         | "cancelled"
-      product_classification: "retail" | "inhouse" | "gwp" | "retail_inhouse" | "bundle"
+      product_classification:
+        | "retail"
+        | "inhouse"
+        | "gwp"
+        | "retail_inhouse"
+        | "bundle"
     }
     CompositeTypes: {
       [_ in never]: never
@@ -1621,6 +1707,9 @@ export type CompositeTypes<
     : never
 
 export const Constants = {
+  graphql_public: {
+    Enums: {},
+  },
   public: {
     Enums: {
       inventory_txn_type: [
@@ -1642,7 +1731,13 @@ export const Constants = {
         "received",
         "cancelled",
       ],
-      product_classification: ["retail", "inhouse", "gwp", "retail_inhouse", "bundle"],
+      product_classification: [
+        "retail",
+        "inhouse",
+        "gwp",
+        "retail_inhouse",
+        "bundle",
+      ],
     },
   },
 } as const

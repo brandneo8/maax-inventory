@@ -145,6 +145,7 @@ create table products (
   size_ml                numeric(12, 3),
   is_set                 boolean not null default false,
   brand_sub              text,
+  available_in_tunai     boolean not null default false,
   unique (company_id, sku),
   check (sku is null or length(btrim(sku)) > 0),
   check (barcode is null or length(btrim(barcode)) > 0)
@@ -155,12 +156,21 @@ comment on column products.name is 'Optional short name staff use to recognize t
 comment on column products.crp is 'Confirmed retail price. Uses RRP when RRP > 0, otherwise unit_cost_price × 2.';
 comment on column products.sku is 'Optional. Unique per company when present. Blank SKUs are stored as NULL.';
 comment on column products.barcode is 'Optional. Unique per company when present. Blank barcodes are stored as NULL.';
+comment on column products.default_classification is 'Suggested default type; mirrors one of product_classifications for legacy single-value consumers (PO line defaulting, count filter, CSV/report Type column). Maintained by trg_sync_product_classification_summary — the AUTHORITATIVE classification for a purchase is set per purchase_order_item (see below).';
+comment on column products.available_in_tunai is 'True when product_classifications includes retail or gwp for this product. Maintained by trg_sync_product_classification_summary; do not write to it directly.';
 
 create table product_tags (
   product_id  uuid not null references products(id) on delete cascade,
   tag_id      uuid not null references tags(id) on delete cascade,
   primary key (product_id, tag_id)
 );
+
+create table product_classifications (
+  product_id      uuid not null references products(id) on delete cascade,
+  classification  product_classification not null,
+  primary key (product_id, classification)
+);
+comment on table product_classifications is 'Multi-tag product type. A product can carry more than one classification (e.g. retail and inhouse together). products.default_classification and products.available_in_tunai are kept in sync from this table by trigger (see trg_sync_product_classification_summary near the bottom of this file).';
 
 create table product_branches (
   product_id  uuid not null references products(id) on delete cascade,
@@ -578,6 +588,42 @@ create trigger trg_default_receipt_item_classification
 before insert on goods_receipt_items
 for each row execute function fn_default_receipt_item_classification();
 
+create or replace function fn_sync_product_classification_summary()
+returns trigger language plpgsql as $$
+declare
+  pid uuid;
+  has_retail boolean;
+  has_gwp boolean;
+  has_inhouse boolean;
+begin
+  pid := coalesce(new.product_id, old.product_id);
+  select
+    bool_or(classification = 'retail'),
+    bool_or(classification = 'gwp'),
+    bool_or(classification = 'inhouse')
+  into has_retail, has_gwp, has_inhouse
+  from product_classifications
+  where product_id = pid;
+
+  update products
+  set
+    default_classification = case
+      when has_retail then 'retail'::product_classification
+      when has_gwp then 'gwp'::product_classification
+      when has_inhouse then 'inhouse'::product_classification
+      else null
+    end,
+    available_in_tunai = coalesce(has_retail or has_gwp, false)
+  where id = pid;
+
+  return null;
+end;
+$$;
+
+create trigger trg_sync_product_classification_summary
+after insert or update or delete on product_classifications
+for each row execute function fn_sync_product_classification_summary();
+
 create or replace function fn_after_goods_receipt_item_insert()
 returns trigger language plpgsql as $$
 declare
@@ -778,6 +824,11 @@ create policy store_locations_company_isolation on store_locations
 
 alter table product_tags enable row level security;
 create policy product_tags_company_isolation on product_tags
+  for all using (product_id in (select id from products where company_id in (select fn_my_company_ids())))
+  with check (product_id in (select id from products where company_id in (select fn_my_company_ids())));
+
+alter table product_classifications enable row level security;
+create policy product_classifications_company_isolation on product_classifications
   for all using (product_id in (select id from products where company_id in (select fn_my_company_ids())))
   with check (product_id in (select id from products where company_id in (select fn_my_company_ids())));
 
