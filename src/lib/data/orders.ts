@@ -54,7 +54,15 @@ export async function getPurchaseOrder(
 
   if (itemsError) throw itemsError;
 
-  return { ...data, items: items ?? [] };
+  const { data: receipts, error: receiptsError } = await supabase
+    .from("goods_receipts")
+    .select("id, received_date, received_by, notes, invoice_reference, invoice_attachment_url")
+    .eq("purchase_order_id", id)
+    .order("received_date");
+
+  if (receiptsError) throw receiptsError;
+
+  return { ...data, items: items ?? [], receipts: receipts ?? [] };
 }
 
 export async function nextPoNumber(supabase: Client, companyId: string) {

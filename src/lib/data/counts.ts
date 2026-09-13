@@ -149,9 +149,6 @@ export async function resolveCountItems(
       .order("id")
       .range(from, from + PAGE_SIZE - 1);
     if (filters.filter_brand_id) query = query.eq("brand_id", filters.filter_brand_id);
-    if (filters.filter_classification) {
-      query = query.eq("default_classification", filters.filter_classification);
-    }
     const { data, error } = await query;
     if (error) throw queryError(error, "Could not load products for this count.");
     for (const product of data ?? []) {
@@ -161,6 +158,21 @@ export async function resolveCountItems(
   }
 
   let scopedIds = productIds;
+  if (filters.filter_classification) {
+    const classified = new Set<string>();
+    const lookupIds = scopedIds.length > 0 ? scopedIds : ["00000000-0000-0000-0000-000000000000"];
+    for (const ids of chunkList(lookupIds)) {
+      const { data, error } = await supabase
+        .from("product_branch_classifications")
+        .select("product_id")
+        .eq("branch_id", branchId)
+        .eq("classification", filters.filter_classification)
+        .in("product_id", ids);
+      if (error) throw queryError(error, "Could not apply the type filter.");
+      for (const row of data ?? []) classified.add(row.product_id);
+    }
+    scopedIds = scopedIds.filter((id) => classified.has(id));
+  }
   if (filters.filter_tag_id) {
     const tagged = new Set<string>();
     const lookupIds = scopedIds.length > 0 ? scopedIds : ["00000000-0000-0000-0000-000000000000"];

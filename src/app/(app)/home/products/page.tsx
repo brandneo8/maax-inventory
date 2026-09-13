@@ -31,6 +31,7 @@ export default async function HomeProductsPage() {
           products={products.map((product) => ({
             ...product,
             onHand: onHand.get(product.id) ?? 0,
+            classifications: product.classificationsByBranch[branch.id] ?? [],
           }))}
         />
       </section>

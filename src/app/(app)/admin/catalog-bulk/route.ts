@@ -2,18 +2,10 @@ import { revalidatePath } from "next/cache";
 import { NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/auth";
 import { normalizeOptionalText, parseMoney } from "@/lib/catalog-import";
-import type { ProductClassification } from "@/lib/labels";
 import { parseSize } from "@/lib/product-size";
 import type { createClient } from "@/lib/supabase/server";
 
 type Client = Awaited<ReturnType<typeof createClient>>;
-
-const CLASSIFICATION_VALUES = new Set<ProductClassification>([
-  "retail",
-  "inhouse",
-  "gwp",
-  "retail_inhouse",
-]);
 
 function asIdList(value: unknown) {
   if (!Array.isArray(value)) return [];
@@ -79,20 +71,6 @@ async function ownedProductIds(supabase: Client, companyId: string, productIds: 
     ownedIds.push(...(data ?? []).map((product) => product.id));
   }
   return ownedIds;
-}
-
-async function applyProductClassifications(supabase: Client, ownedIds: string[], classification: ProductClassification | null) {
-  for (const ids of chunkIds(ownedIds)) {
-    const { error } = await supabase.from("product_classifications").delete().in("product_id", ids);
-    if (error) throw new Error(error.message);
-  }
-  if (!classification) return;
-  for (const ids of chunkIds(ownedIds)) {
-    const { error } = await supabase
-      .from("product_classifications")
-      .insert(ids.map((productId) => ({ product_id: productId, classification })));
-    if (error) throw new Error(error.message);
-  }
 }
 
 async function applyTags(supabase: Client, companyId: string, ownedIds: string[], requestedTagIds: string[]) {
@@ -188,13 +166,6 @@ async function applyEdit(
 
   const productPatch: Record<string, unknown> = {};
 
-  if (hasField(fields, "classification")) {
-    const requested = asString(fields.classification);
-    const classification = CLASSIFICATION_VALUES.has(requested as ProductClassification)
-      ? (requested as ProductClassification)
-      : null;
-    await applyProductClassifications(supabase, ownedIds, classification);
-  }
   if (hasField(fields, "brand")) {
     productPatch.brand_id = await resolveBrandId(supabase, companyId, asString(fields.brand));
   }
@@ -262,7 +233,6 @@ export async function POST(request: Request) {
     | {
         kind?: unknown;
         productIds?: unknown;
-        classification?: unknown;
         tagIds?: unknown;
         branchIds?: unknown;
         fields?: unknown;
@@ -286,16 +256,6 @@ export async function POST(request: Request) {
         return NextResponse.json({ error: "Add at least one field to apply." }, { status: 400 });
       }
       await applyEdit(supabase, companyId, productIds, fields);
-    } else if (body?.kind === "type") {
-      const ownedIds = await ownedProductIds(supabase, companyId, productIds);
-      if (ownedIds.length === 0) {
-        return NextResponse.json({ error: "No matching products to update." }, { status: 400 });
-      }
-      const requested = asString(body.classification);
-      const classification = CLASSIFICATION_VALUES.has(requested as ProductClassification)
-        ? (requested as ProductClassification)
-        : null;
-      await applyProductClassifications(supabase, ownedIds, classification);
     } else if (body?.kind === "tags") {
       const ownedIds = await ownedProductIds(supabase, companyId, productIds);
       if (ownedIds.length === 0) {

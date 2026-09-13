@@ -34,8 +34,7 @@ export type ProductRow = {
   orderName: string;
   brand: string;
   brandSub: string;
-  defaultClassification: ProductClassification | null;
-  classifications: ProductClassification[];
+  classificationsByBranch: Record<string, ProductClassification[]>;
   unitCost: number;
   rrp: number | null;
   threshold: number | null;
@@ -59,6 +58,7 @@ type TableDraft = ProductDraft & {
   gstRegistered: boolean;
   componentLabels: BundleDraft[];
   pictureUrl: string | null;
+  classificationsByBranch: Record<string, ProductClassification[]>;
 };
 
 const SELECT_COL_REM = 9;
@@ -95,12 +95,12 @@ function toDraft(product: ProductRow): TableDraft {
     brand: product.brand,
     brandSub: product.brandSub,
     size: product.sizeLabel ?? "",
-    classifications: product.classifications ?? [],
     unitCost: moneyInput(product.unitCost),
     rrp: moneyInput(product.rrp),
     threshold: moneyInput(product.threshold),
     isSet: product.isSet,
     pictureUrl: product.pictureUrl,
+    classificationsByBranch: product.classificationsByBranch ?? {},
     tagIds: product.tagIds,
     tagNames: product.tagNames,
     sizeMl: product.sizeMl,
@@ -129,7 +129,24 @@ function toDraft(product: ProductRow): TableDraft {
 
 const PAGE_SIZES = [50, 100, 500, 1000] as const;
 
-const EDITABLE_CLASSIFICATIONS = CLASSIFICATIONS.filter((item) => item.value !== "retail_inhouse");
+const FILTERABLE_CLASSIFICATIONS = CLASSIFICATIONS.filter((item) => item.value !== "retail_inhouse");
+
+function flattenClassifications(byBranch: Record<string, ProductClassification[]>) {
+  return [...new Set(Object.values(byBranch).flat())];
+}
+
+function branchClassificationsSummary(
+  byBranch: Record<string, ProductClassification[]>,
+  branches: { id: string; name: string }[],
+) {
+  return branches
+    .map((branch) => {
+      const label = classificationTagsLabel(byBranch[branch.id] ?? []);
+      return label ? `${branch.name}: ${label}` : null;
+    })
+    .filter(Boolean)
+    .join("; ");
+}
 
 const UNGROUPED = "Ungrouped";
 const NEW_PRODUCTS = "New products";
@@ -174,7 +191,7 @@ function rowGroupKey(
       .sort((left, right) => left.localeCompare(right, undefined, { sensitivity: "base" }));
     return names.length > 0 ? names.join(", ") : "No tag";
   }
-  if (groupBy === "type") return classificationTagsLabel(row.classifications) || "No type";
+  if (groupBy === "type") return classificationTagsLabel(flattenClassifications(row.classificationsByBranch)) || "No type";
   if (groupBy === "size") return row.size.trim() || "No size";
   const supplier = row.supplierName.trim();
   return supplier || "No supplier";
@@ -213,7 +230,7 @@ function sortValue(row: TableDraft, column: SortColumn): string | number {
     case "size":
       return row.size;
     case "type":
-      return classificationTagsLabel(row.classifications);
+      return classificationTagsLabel(flattenClassifications(row.classificationsByBranch));
     case "tags":
       return row.tagNames.filter(Boolean).join(", ");
     case "supplier":
@@ -422,12 +439,12 @@ function emptyRow(branchIds: string[]): TableDraft {
     brand: "",
     brandSub: "",
     size: "",
-    classifications: [],
     unitCost: "0",
     rrp: "",
     threshold: "",
     isSet: false,
     pictureUrl: null,
+    classificationsByBranch: {},
     tagIds: [],
     tagNames: [],
     sizeMl: null,
@@ -489,7 +506,7 @@ function catalogCsvRow(
     Brand: row.brand,
     Brand_sub: row.brandSub,
     Size: row.size,
-    Type: classificationTagsLabel(row.classifications),
+    Type: branchClassificationsSummary(row.classificationsByBranch, options.branches),
     Tags: row.tagNames.filter(Boolean).join(", "),
     Supplier: supplier,
     "Unit cost": csvNumber(unitCost),
@@ -519,9 +536,6 @@ function sameIdList(left: string[] = [], right: string[] = []) {
 }
 
 function overrideCaughtUp(product: ProductRow, override: Partial<TableDraft>) {
-  if (override.classifications && !sameIdList(product.classifications, override.classifications)) {
-    return false;
-  }
   if (override.tagIds && !sameIdList(product.tagIds, override.tagIds)) return false;
   if (override.branchIds && !sameIdList(product.branchIds, override.branchIds)) return false;
   if (override.brand != null && product.brand !== override.brand) return false;
@@ -580,9 +594,6 @@ function bulkFieldsToPatch(
   suppliers: { id: string; name: string; gstRegistered: boolean }[],
 ): Partial<TableDraft> {
   const patch: Partial<TableDraft> = {};
-  if (fields.classification !== undefined) {
-    patch.classifications = fields.classification ? [fields.classification] : [];
-  }
   if (fields.branchIds !== undefined) patch.branchIds = fields.branchIds;
   if (fields.tagIds !== undefined) {
     const tag = tags.find((item) => item.id === fields.tagIds?.[0]);
@@ -765,8 +776,9 @@ export function ProductsTable({
       if (supplierFilter && supplierFilter !== "none" && !current.supplierIds.includes(supplierFilter)) return false;
       if (salonFilter === "none" && current.branchIds.length > 0) return false;
       if (salonFilter && salonFilter !== "none" && !current.branchIds.includes(salonFilter)) return false;
-      if (typeFilter === "none" && current.classifications.length > 0) return false;
-      if (typeFilter && typeFilter !== "none" && !current.classifications.includes(typeFilter as ProductClassification)) {
+      const currentClassifications = flattenClassifications(current.classificationsByBranch);
+      if (typeFilter === "none" && currentClassifications.length > 0) return false;
+      if (typeFilter && typeFilter !== "none" && !currentClassifications.includes(typeFilter as ProductClassification)) {
         return false;
       }
       if (tagFilter === "none" && current.tagIds.length > 0) return false;
@@ -1251,7 +1263,6 @@ export function ProductsTable({
           brand: row.brand,
           brandSub: row.brandSub,
           size: row.size,
-          classifications: row.classifications,
           unitCost: row.unitCost,
           rrp: row.rrp,
           threshold: row.threshold,
@@ -1331,15 +1342,6 @@ export function ProductsTable({
 
   function setRowPicture(index: number, pictureUrl: string | null) {
     setRows((current) => current.map((row, rowIndex) => (rowIndex === index ? { ...row, pictureUrl } : row)));
-  }
-
-  function toggleRowClassification(index: number, value: ProductClassification) {
-    const current = rows[index];
-    if (!current) return;
-    const classifications = current.classifications.includes(value)
-      ? current.classifications.filter((item) => item !== value)
-      : [...current.classifications, value];
-    updateRow(index, { classifications });
   }
 
   function toggleSort(column: SortColumn) {
@@ -1586,7 +1588,7 @@ export function ProductsTable({
             }}
           >
             <option value="">All types</option>
-            {EDITABLE_CLASSIFICATIONS.map((item) => (
+            {FILTERABLE_CLASSIFICATIONS.map((item) => (
               <option key={item.value} value={item.value}>
                 {item.label}
               </option>
@@ -1614,7 +1616,7 @@ export function ProductsTable({
           </select>
         </label>
         <div className="flex flex-wrap items-center gap-2 md:col-span-2 xl:col-span-4">
-          {EDITABLE_CLASSIFICATIONS.map((item) => (
+          {FILTERABLE_CLASSIFICATIONS.map((item) => (
             <button
               key={item.value}
               type="button"
@@ -2089,26 +2091,13 @@ export function ProductsTable({
                         <ViewValue>{dash(row.size)}</ViewValue>
                       )}
                     </td>
-                    <td className={cn(tdClass, wType)}>
-                      {editing ? (
-                        <div className={cn("flex flex-col gap-1 p-1", updatedCell)}>
-                          {EDITABLE_CLASSIFICATIONS.map((item) => (
-                            <label key={item.value} className="flex items-center gap-1.5 text-xs">
-                              <input
-                                type="checkbox"
-                                checked={row.classifications.includes(item.value)}
-                                onChange={() => toggleRowClassification(index, item.value)}
-                              />
-                              {item.label}
-                            </label>
-                          ))}
-                        </div>
-                      ) : (
-                        <ViewValue>{classificationTagsLabel(row.classifications) || "—"}</ViewValue>
-                      )}
+                    <td className={cn(tdClass, wType)} title="Set per salon on Home &gt; Products">
+                      <ViewValue>{branchClassificationsSummary(row.classificationsByBranch, branches) || "—"}</ViewValue>
                     </td>
                     <td className={cn(tdClass, wField)}>
-                      <ViewValue>{isAvailableInTunai(row.classifications) ? "Yes" : "No"}</ViewValue>
+                      <ViewValue>
+                        {isAvailableInTunai(flattenClassifications(row.classificationsByBranch)) ? "Yes" : "No"}
+                      </ViewValue>
                     </td>
                     <td className={cn(tdClass, wContents)}>
                       {editing ? (

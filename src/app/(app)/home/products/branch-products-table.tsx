@@ -1,16 +1,17 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { CLASSIFICATIONS, classificationTagsLabel, isAvailableInTunai, type ProductClassification } from "@/lib/labels";
+import { CLASSIFICATIONS, classificationLabel, isAvailableInTunai, type ProductClassification } from "@/lib/labels";
 import { confirmedRetailPrice } from "@/lib/catalog-pricing";
 import { parseSize, sizesMatch } from "@/lib/product-size";
-import { btnSecondaryClass, fieldClass, tableClass, tdClass, thClass } from "@/lib/ui";
+import { btnClass, btnSecondaryClass, checkboxClass, fieldClass, tableClass, tdClass, thClass } from "@/lib/ui";
 import { formatMoney, formatQty, formatSku, productDisplayName } from "@/lib/format";
 import { searchFieldsMatch } from "@/lib/search";
 import type { CatalogProduct } from "@/lib/data/products";
 import { cn } from "@/lib/utils";
+import { bulkUpdateBranchProductClassifications, updateBranchProductClassifications } from "./actions";
 
-type SalonProduct = CatalogProduct & { onHand: number };
+type SalonProduct = CatalogProduct & { onHand: number; classifications: ProductClassification[] };
 type GroupBy = "none" | "brand" | "brandSub";
 
 const EDITABLE_CLASSIFICATIONS = CLASSIFICATIONS.filter((item) => item.value !== "retail_inhouse");
@@ -18,6 +19,176 @@ const EDITABLE_CLASSIFICATIONS = CLASSIFICATIONS.filter((item) => item.value !==
 function groupKey(product: SalonProduct, groupBy: Exclude<GroupBy, "none">) {
   if (groupBy === "brand") return product.brand.trim() || "No Brand";
   return product.brandSub.trim() || "No Brand_sub";
+}
+
+function matchClassification(raw: string) {
+  const needle = raw.trim().toLowerCase();
+  if (!needle) return null;
+  return (
+    EDITABLE_CLASSIFICATIONS.find(
+      (item) => item.label.toLowerCase() === needle || item.value.toLowerCase() === needle,
+    ) ?? null
+  );
+}
+
+function TypeCell({
+  productId,
+  classifications,
+  onSaved,
+}: {
+  productId: string;
+  classifications: ProductClassification[];
+  onSaved: (next: ProductClassification[]) => void;
+}) {
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [inputValue, setInputValue] = useState("");
+  const datalistId = `type-options-${productId}`;
+
+  async function save(next: ProductClassification[]) {
+    setPending(true);
+    setError(null);
+    try {
+      await updateBranchProductClassifications(productId, next);
+      onSaved(next);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not save.");
+    } finally {
+      setPending(false);
+    }
+  }
+
+  function addFromInput() {
+    const match = matchClassification(inputValue);
+    if (!match) return;
+    setInputValue("");
+    if (classifications.includes(match.value)) return;
+    void save([...classifications, match.value]);
+  }
+
+  function removeTag(value: ProductClassification) {
+    void save(classifications.filter((item) => item !== value));
+  }
+
+  const remainingOptions = EDITABLE_CLASSIFICATIONS.filter((item) => !classifications.includes(item.value));
+
+  return (
+    <div className="flex min-w-32 flex-col gap-1">
+      {classifications.length > 0 ? (
+        <div className="flex flex-wrap gap-1">
+          {classifications.map((value) => (
+            <span
+              key={value}
+              className="inline-flex items-center gap-1 rounded bg-slate-100 px-1.5 py-0.5 text-xs"
+            >
+              {classificationLabel(value)}
+              <button
+                type="button"
+                className="text-muted hover:text-slate-900"
+                disabled={pending}
+                onClick={() => removeTag(value)}
+                aria-label={`Remove ${classificationLabel(value)}`}
+              >
+                ×
+              </button>
+            </span>
+          ))}
+        </div>
+      ) : null}
+      {remainingOptions.length > 0 ? (
+        <>
+          <input
+            list={datalistId}
+            className="w-full rounded border border-border px-1.5 py-0.5 text-xs"
+            placeholder="Type to add…"
+            value={inputValue}
+            disabled={pending}
+            onChange={(event) => setInputValue(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                event.preventDefault();
+                addFromInput();
+              }
+            }}
+            onBlur={addFromInput}
+          />
+          <datalist id={datalistId}>
+            {remainingOptions.map((item) => (
+              <option key={item.value} value={item.label} />
+            ))}
+          </datalist>
+        </>
+      ) : null}
+      {error ? <span className="text-[10px] text-red-600">{error}</span> : null}
+    </div>
+  );
+}
+
+function BulkTypeModal({
+  count,
+  onClose,
+  onApply,
+}: {
+  count: number;
+  onClose: () => void;
+  onApply: (classifications: ProductClassification[]) => Promise<void>;
+}) {
+  const [selected, setSelected] = useState<ProductClassification[]>([]);
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  function toggle(value: ProductClassification) {
+    setSelected((current) =>
+      current.includes(value) ? current.filter((item) => item !== value) : [...current, value],
+    );
+  }
+
+  async function apply() {
+    setPending(true);
+    setError(null);
+    try {
+      await onApply(selected);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not update products.");
+      setPending(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={onClose}>
+      <div
+        className="w-full max-w-sm rounded-xl border border-border bg-white p-4 shadow-lg"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <h3 className="text-base font-semibold">Set type for {count} product{count === 1 ? "" : "s"}</h3>
+        <p className="mt-1 text-sm text-muted">
+          This replaces the type tags on the selected products for this salon.
+        </p>
+        <div className="mt-3 space-y-2">
+          {EDITABLE_CLASSIFICATIONS.map((item) => (
+            <label key={item.value} className="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                className={checkboxClass}
+                checked={selected.includes(item.value)}
+                onChange={() => toggle(item.value)}
+              />
+              {item.label}
+            </label>
+          ))}
+        </div>
+        {error ? <p className="mt-3 text-sm text-red-600">{error}</p> : null}
+        <div className="mt-4 flex justify-end gap-2">
+          <button className={btnSecondaryClass} type="button" onClick={onClose} disabled={pending}>
+            Cancel
+          </button>
+          <button className={btnClass} type="button" onClick={() => void apply()} disabled={pending}>
+            {pending ? "Applying…" : "Apply"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 export function BranchProductsTable({
@@ -33,22 +204,56 @@ export function BranchProductsTable({
   const [groupBy, setGroupBy] = useState<GroupBy>("brandSub");
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
   const [bundleProduct, setBundleProduct] = useState<SalonProduct | null>(null);
+  const [prevProducts, setPrevProducts] = useState(products);
+  const [localProducts, setLocalProducts] = useState(products);
+  const [selected, setSelected] = useState<string[]>([]);
+  const [bulkOpen, setBulkOpen] = useState(false);
+
+  if (products !== prevProducts) {
+    setPrevProducts(products);
+    setLocalProducts(products);
+  }
+
+  function updateLocalClassifications(productId: string, next: ProductClassification[]) {
+    setLocalProducts((current) =>
+      current.map((product) => (product.id === productId ? { ...product, classifications: next } : product)),
+    );
+  }
+
+  function updateLocalClassificationsMany(productIds: string[], next: ProductClassification[]) {
+    const ids = new Set(productIds);
+    setLocalProducts((current) =>
+      current.map((product) => (ids.has(product.id) ? { ...product, classifications: next } : product)),
+    );
+  }
+
+  function toggleSelected(id: string) {
+    setSelected((current) => (current.includes(id) ? current.filter((item) => item !== id) : [...current, id]));
+  }
+
+  async function applyBulkClassifications(classifications: ProductClassification[]) {
+    const productIds = [...selected];
+    await bulkUpdateBranchProductClassifications(productIds, classifications);
+    updateLocalClassificationsMany(productIds, classifications);
+    setSelected([]);
+    setBulkOpen(false);
+  }
 
   const parsedFilter = useMemo(() => parseSize(sizeQuery), [sizeQuery]);
   const brands = useMemo(
-    () => [...new Set(products.map((product) => product.brand.trim()).filter(Boolean))].sort((left, right) => left.localeCompare(right)),
-    [products],
+    () => [...new Set(localProducts.map((product) => product.brand.trim()).filter(Boolean))].sort((left, right) => left.localeCompare(right)),
+    [localProducts],
   );
   const brandSubs = useMemo(
     () =>
-      [...new Set(products.map((product) => product.brandSub.trim()).filter(Boolean))].sort((left, right) =>
+      [...new Set(localProducts.map((product) => product.brandSub.trim()).filter(Boolean))].sort((left, right) =>
         left.localeCompare(right),
       ),
-    [products],
+    [localProducts],
   );
 
   const visible = useMemo(() => {
-    return products.filter((product) => {
+    return localProducts.filter((product) => {
       if (!searchFieldsMatch([product.name, product.orderName, product.brand], searchQuery)) {
         return false;
       }
@@ -63,7 +268,14 @@ export function BranchProductsTable({
       const label = product.sizeLabel?.toLowerCase() ?? "";
       return label.includes(sizeQuery.trim().toLowerCase());
     });
-  }, [brandFilter, brandSubFilter, parsedFilter, products, searchQuery, sizeQuery, typeFilter]);
+  }, [brandFilter, brandSubFilter, localProducts, parsedFilter, searchQuery, sizeQuery, typeFilter]);
+
+  const selectableIds = useMemo(() => visible.map((product) => product.id), [visible]);
+  const allSelected = selectableIds.length > 0 && selectableIds.every((id) => selected.includes(id));
+
+  function toggleAll() {
+    setSelected(allSelected ? [] : [...selectableIds]);
+  }
 
   const grouped = useMemo(() => {
     if (groupBy === "none") return [{ key: "", products: visible }];
@@ -97,10 +309,25 @@ export function BranchProductsTable({
     });
   }
 
-  const columnCount = 12;
+  const columnCount = 13;
 
   return (
     <div className="space-y-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p className="text-sm text-muted">
+          {selected.length > 0
+            ? `${selected.length} product${selected.length === 1 ? "" : "s"} selected.`
+            : "Select rows to bulk-tag their type."}
+        </p>
+        <button
+          className={btnSecondaryClass}
+          type="button"
+          disabled={selected.length === 0}
+          onClick={() => setBulkOpen(true)}
+        >
+          Bulk tag type
+        </button>
+      </div>
       <div className="flex flex-wrap items-end gap-3 rounded-xl border border-border bg-card p-4">
         <label className="min-w-64 flex-1 space-y-1 text-sm">
           <span>Search</span>
@@ -202,6 +429,15 @@ export function BranchProductsTable({
         <table className={tableClass}>
           <thead>
             <tr>
+              <th className={thClass}>
+                <input
+                  type="checkbox"
+                  className={checkboxClass}
+                  checked={allSelected}
+                  onChange={toggleAll}
+                  aria-label="Select all products"
+                />
+              </th>
               <th className={thClass}>Image</th>
               <th className={thClass}>Type</th>
               <th className={thClass}>Available in Tunai</th>
@@ -251,6 +487,15 @@ export function BranchProductsTable({
                   rows.push(
                     <tr key={product.id}>
                       <td className={tdClass}>
+                        <input
+                          type="checkbox"
+                          className={checkboxClass}
+                          checked={selected.includes(product.id)}
+                          onChange={() => toggleSelected(product.id)}
+                          aria-label={`Select ${product.orderName || product.name || "product"}`}
+                        />
+                      </td>
+                      <td className={tdClass}>
                         {product.pictureUrl ? (
                           // eslint-disable-next-line @next/next/no-img-element
                           <img
@@ -262,7 +507,13 @@ export function BranchProductsTable({
                           <div className="h-10 w-10 rounded-md border border-border bg-slate-50" />
                         )}
                       </td>
-                      <td className={tdClass}>{classificationTagsLabel(product.classifications) || "—"}</td>
+                      <td className={tdClass}>
+                        <TypeCell
+                          productId={product.id}
+                          classifications={product.classifications}
+                          onSaved={(next) => updateLocalClassifications(product.id, next)}
+                        />
+                      </td>
                       <td className={tdClass}>{isAvailableInTunai(product.classifications) ? "Yes" : "No"}</td>
                       <td className={tdClass}>{formatSku(product.sku)}</td>
                       <td className={tdClass}>{formatSku(product.barcode)}</td>
@@ -296,6 +547,14 @@ export function BranchProductsTable({
           </tbody>
         </table>
       </div>
+
+      {bulkOpen ? (
+        <BulkTypeModal
+          count={selected.length}
+          onClose={() => setBulkOpen(false)}
+          onApply={applyBulkClassifications}
+        />
+      ) : null}
 
       {bundleProduct ? (
         <div

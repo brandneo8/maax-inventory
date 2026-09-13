@@ -1,0 +1,53 @@
+import { notFound } from "next/navigation";
+import { requireBranch } from "@/lib/auth";
+import { getStockOutReport } from "@/lib/data/stock-out";
+import { getCatalogProducts } from "@/lib/data/products";
+import { isAvailableInTunai } from "@/lib/labels";
+import { productDisplayName, productLabel } from "@/lib/format";
+import { StockOutDetailPanel } from "./stock-out-detail-panel";
+
+export default async function StockOutDetailPage({
+  params,
+}: {
+  params: Promise<{ id: string }>;
+}) {
+  const { id } = await params;
+  const { supabase, companyId, branch } = await requireBranch();
+  const report = await getStockOutReport(supabase, companyId, branch.id, id).catch(() => null);
+
+  if (!report) notFound();
+
+  const catalog = await getCatalogProducts(supabase, companyId);
+  const branchProducts = catalog.filter((product) => product.branchIds.includes(branch.id));
+  const retailProducts = branchProducts.filter((product) =>
+    isAvailableInTunai(product.classificationsByBranch[branch.id] ?? []),
+  );
+  const inhouseProducts = branchProducts.filter((product) =>
+    (product.classificationsByBranch[branch.id] ?? []).includes("inhouse"),
+  );
+
+  const lines = report.lines.map((line) => {
+    const product = Array.isArray(line.products) ? line.products[0] : line.products;
+    return {
+      id: line.id,
+      productId: line.product_id,
+      label: productDisplayName(product) || "—",
+      quantityUsed: Number(line.quantity_used),
+    };
+  });
+
+  return (
+    <StockOutDetailPanel
+      reportId={report.id}
+      branchName={branch.displayName}
+      type={report.channel === "inhouse" ? "inhouse" : "retail"}
+      entryDate={report.entry_date}
+      notes={report.notes}
+      keyedInBy={report.keyed_in_by}
+      createdAt={report.created_at}
+      lines={lines}
+      retailProducts={retailProducts.map((product) => ({ id: product.id, label: productLabel(product) }))}
+      inhouseProducts={inhouseProducts.map((product) => ({ id: product.id, label: productLabel(product) }))}
+    />
+  );
+}

@@ -39,18 +39,23 @@ export function ReceiveForm({
     setPending(true);
     setError(null);
     try {
-      await receivePurchaseOrder({
-        purchase_order_id: purchaseOrderId,
-        received_date: String(formData.get("received_date") ?? ""),
-        notes: String(formData.get("notes") ?? ""),
-        lines: lines.map((line) => ({
-          purchase_order_item_id: line.purchase_order_item_id,
-          product_id: line.product_id,
-          store_location_id: defaultLocationId,
-          quantity_received: line.quantity_received,
-          unit_cost: line.unit_cost,
-        })),
-      });
+      const invoiceFile = formData.get("invoice_attachment");
+      await receivePurchaseOrder(
+        {
+          purchase_order_id: purchaseOrderId,
+          received_date: String(formData.get("received_date") ?? ""),
+          notes: String(formData.get("notes") ?? ""),
+          invoice_reference: String(formData.get("invoice_reference") ?? ""),
+          lines: lines.map((line) => ({
+            purchase_order_item_id: line.purchase_order_item_id,
+            product_id: line.product_id,
+            store_location_id: defaultLocationId,
+            quantity_received: line.quantity_received,
+            unit_cost: line.unit_cost,
+          })),
+        },
+        invoiceFile instanceof File && invoiceFile.size > 0 ? invoiceFile : null,
+      );
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not receive this order.");
       setPending(false);
@@ -71,6 +76,14 @@ export function ReceiveForm({
         <label className="space-y-1 text-sm">
           <span>Notes</span>
           <input className={fieldClass} name="notes" />
+        </label>
+        <label className="space-y-1 text-sm">
+          <span>Invoice reference</span>
+          <input className={fieldClass} name="invoice_reference" placeholder="Invoice number" />
+        </label>
+        <label className="space-y-1 text-sm">
+          <span>Invoice attachment</span>
+          <input className={fieldClass} type="file" name="invoice_attachment" accept="application/pdf,image/png,image/jpeg,image/webp" />
         </label>
       </div>
 

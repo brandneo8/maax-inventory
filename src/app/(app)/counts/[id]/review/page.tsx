@@ -5,6 +5,7 @@ import { getInventoryCount, getSalonProductIds } from "@/lib/data/counts";
 import { formatDate } from "@/lib/format";
 import { classificationLabel } from "@/lib/labels";
 import { toCountEntry, toCountLine } from "../../count-lines";
+import { CountCsvButton } from "../../count-csv-button";
 import { CountItemsForm } from "../count-items-form";
 
 export default async function CountReviewPage({
@@ -36,24 +37,27 @@ export default async function CountReviewPage({
 
   return (
     <div className="space-y-6">
-      <div>
-        <Link href={`/counts/${id}`} className="text-sm text-muted underline">
-          Back to counting
-        </Link>
-        <h1 className="mt-2 text-2xl font-semibold tracking-tight">
-          Review count {formatDate(count.count_date)}
-        </h1>
-        <p className="mt-1 text-sm text-muted">
-          {[
-            brand?.name,
-            classificationLabel(count.filter_classification),
-            tag?.name,
-            missing > 0 ? `${missing} uncounted` : "All products counted",
-            `${changed} variance${changed === 1 ? "" : "s"} to post`,
-          ]
-            .filter((part) => part && part !== "—")
-            .join(" · ")}
-        </p>
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <Link href={`/counts/${id}`} className="text-sm text-muted underline">
+            Back to counting
+          </Link>
+          <h1 className="mt-2 text-2xl font-semibold tracking-tight">
+            Review count {formatDate(count.count_date)}
+          </h1>
+          <p className="mt-1 text-sm text-muted">
+            {[
+              brand?.name,
+              classificationLabel(count.filter_classification),
+              tag?.name,
+              missing > 0 ? `${missing} uncounted` : "All products counted",
+              `${changed} variance${changed === 1 ? "" : "s"} to post`,
+            ]
+              .filter((part) => part && part !== "—")
+              .join(" · ")}
+          </p>
+        </div>
+        <CountCsvButton lines={lines} branchName={branch.name} countDate={count.count_date} />
       </div>
 
       <CountItemsForm

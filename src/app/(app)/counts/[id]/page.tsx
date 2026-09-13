@@ -5,6 +5,7 @@ import { getInventoryCount } from "@/lib/data/counts";
 import { formatDate } from "@/lib/format";
 import { classificationLabel, countStatusLabel } from "@/lib/labels";
 import { toCountEntry, toCountLine } from "../count-lines";
+import { CountCsvButton } from "../count-csv-button";
 import { CountItemsForm } from "./count-items-form";
 import { CountRecordAction } from "../delete-count-button";
 
@@ -47,11 +48,14 @@ export default async function CountDetailPage({
               .join(" · ")}
           </p>
         </div>
-        {count.status === "in_progress" ? (
-          <CountRecordAction countId={count.id} kind="delete" />
-        ) : count.status === "completed" ? (
-          <CountRecordAction countId={count.id} kind="void" />
-        ) : null}
+        <div className="flex items-center gap-2">
+          <CountCsvButton lines={lines} branchName={branch.name} countDate={count.count_date} />
+          {count.status === "in_progress" ? (
+            <CountRecordAction countId={count.id} kind="delete" />
+          ) : count.status === "completed" ? (
+            <CountRecordAction countId={count.id} kind="void" />
+          ) : null}
+        </div>
       </div>
 
       <CountItemsForm

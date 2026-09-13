@@ -3,7 +3,6 @@ import type { Database } from "@/lib/supabase/types";
 export type ProductClassification = Database["public"]["Enums"]["product_classification"];
 export type PoStatus = Database["public"]["Enums"]["po_status"];
 export type OrderChannel = Database["public"]["Enums"]["order_channel"];
-export type InvoiceStatus = Database["public"]["Enums"]["invoice_status"];
 
 export const CLASSIFICATIONS: { value: ProductClassification; label: string }[] = [
   { value: "retail", label: "Retail" },
@@ -19,13 +18,6 @@ export const PO_STATUSES: { value: PoStatus; label: string }[] = [
   { value: "partially_received", label: "Partially received" },
   { value: "received", label: "Received" },
   { value: "cancelled", label: "Cancelled" },
-];
-
-export const INVOICE_STATUSES: { value: InvoiceStatus; label: string }[] = [
-  { value: "unpaid", label: "Unpaid" },
-  { value: "partial", label: "Partial" },
-  { value: "paid", label: "Paid" },
-  { value: "disputed", label: "Disputed" },
 ];
 
 export const ORDER_CHANNELS: { value: OrderChannel; label: string }[] = [
@@ -55,10 +47,6 @@ export function isAvailableInTunai(values: ProductClassification[] | null | unde
 
 export function poStatusLabel(value: PoStatus) {
   return PO_STATUSES.find((item) => item.value === value)?.label ?? value;
-}
-
-export function invoiceStatusLabel(value: InvoiceStatus) {
-  return INVOICE_STATUSES.find((item) => item.value === value)?.label ?? value;
 }
 
 export function salonName(name: string) {

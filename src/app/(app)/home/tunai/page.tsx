@@ -9,7 +9,7 @@ export default async function HomeTunaiPage() {
   const catalog = await getCatalogProducts(supabase, companyId);
   const products = catalog
     .filter((product) => product.branchIds.includes(branch.id))
-    .filter((product) => isAvailableInTunai(product.classifications));
+    .filter((product) => isAvailableInTunai(product.classificationsByBranch[branch.id] ?? []));
   const onHand = await getBranchOnHand(
     supabase,
     companyId,
@@ -19,6 +19,7 @@ export default async function HomeTunaiPage() {
   const withOnHand = products.map((product) => ({
     ...product,
     onHand: onHand.get(product.id) ?? 0,
+    classifications: product.classificationsByBranch[branch.id] ?? [],
   }));
 
   const retailProducts = withOnHand.filter((product) => product.classifications.includes("retail"));

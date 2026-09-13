@@ -2,13 +2,11 @@
 
 import { useMemo, useState } from "react";
 import { SalonChipField } from "@/components/salon-chip-field";
-import { CLASSIFICATIONS, type ProductClassification } from "@/lib/labels";
 import { parseSize } from "@/lib/product-size";
 import { btnClass, btnSecondaryClass, fieldClass } from "@/lib/ui";
 import { cn } from "@/lib/utils";
 
 export type BulkEditFieldKey =
-  | "classification"
   | "branchIds"
   | "tagIds"
   | "brand"
@@ -18,7 +16,6 @@ export type BulkEditFieldKey =
   | "threshold";
 
 export type BulkEditFields = {
-  classification?: ProductClassification | "";
   branchIds?: string[];
   tagIds?: string[];
   brand?: string;
@@ -29,7 +26,6 @@ export type BulkEditFields = {
 };
 
 const FIELD_LABELS: Record<BulkEditFieldKey, string> = {
-  classification: "Default type",
   branchIds: "Salons",
   tagIds: "Tag",
   brand: "Brand",
@@ -39,9 +35,8 @@ const FIELD_LABELS: Record<BulkEditFieldKey, string> = {
   threshold: "Threshold",
 };
 
-const DEFAULT_FIELDS: BulkEditFieldKey[] = ["classification", "branchIds", "tagIds"];
+const DEFAULT_FIELDS: BulkEditFieldKey[] = ["branchIds", "tagIds"];
 const ALL_FIELDS: BulkEditFieldKey[] = [
-  "classification",
   "branchIds",
   "tagIds",
   "brand",
@@ -80,7 +75,6 @@ export function BulkEditModal({
 }) {
   const [fieldKeys, setFieldKeys] = useState<BulkEditFieldKey[]>(DEFAULT_FIELDS);
   const [addKey, setAddKey] = useState<BulkEditFieldKey | "">("");
-  const [classification, setClassification] = useState<ProductClassification | "">("");
   const [branchIds, setBranchIds] = useState<string[]>([]);
   const [tagId, setTagId] = useState("");
   const [brand, setBrand] = useState("");
@@ -98,7 +92,6 @@ export function BulkEditModal({
   function reset() {
     setFieldKeys(DEFAULT_FIELDS);
     setAddKey("");
-    setClassification("");
     setBranchIds([]);
     setTagId("");
     setBrand("");
@@ -136,7 +129,6 @@ export function BulkEditModal({
 
     const fields: BulkEditFields = {};
     for (const key of fieldKeys) {
-      if (key === "classification") fields.classification = classification;
       if (key === "branchIds") fields.branchIds = [...branchIds];
       if (key === "tagIds") fields.tagIds = tagId ? [tagId] : [];
       if (key === "brand") fields.brand = brand;
@@ -194,23 +186,6 @@ export function BulkEditModal({
             <div key={key} className="flex items-start gap-2">
               <label className="min-w-0 flex-1 space-y-1 text-sm">
                 <span className="font-medium">{FIELD_LABELS[key]}</span>
-                {key === "classification" ? (
-                  <select
-                    className={fieldClass}
-                    value={classification}
-                    onChange={(event) =>
-                      setClassification(event.target.value as ProductClassification | "")
-                    }
-                    disabled={pending}
-                  >
-                    <option value="">None</option>
-                    {CLASSIFICATIONS.map((item) => (
-                      <option key={item.value} value={item.value}>
-                        {item.label}
-                      </option>
-                    ))}
-                  </select>
-                ) : null}
                 {key === "branchIds" ? (
                   <SalonChipField
                     branches={branches}

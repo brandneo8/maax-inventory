@@ -20,8 +20,7 @@ export type CatalogProduct = {
   orderName: string;
   brand: string;
   brandSub: string;
-  defaultClassification: ProductClassification | null;
-  classifications: ProductClassification[];
+  classificationsByBranch: Record<string, ProductClassification[]>;
   unitCost: number;
   rrp: number | null;
   threshold: number | null;
@@ -37,6 +36,49 @@ export type CatalogProduct = {
   gstRegistered: boolean;
   components: BundleComponent[];
 };
+
+function groupClassificationsByBranch(
+  rows: { branch_id: string; classification: ProductClassification }[] | null | undefined,
+) {
+  const byBranch: Record<string, ProductClassification[]> = {};
+  for (const row of rows ?? []) {
+    const list = byBranch[row.branch_id] ?? [];
+    list.push(row.classification);
+    byBranch[row.branch_id] = list;
+  }
+  return byBranch;
+}
+
+const CLASSIFICATION_PRIORITY: ProductClassification[] = ["retail", "gwp", "inhouse"];
+
+export function pickPrimaryClassification(
+  tags: ProductClassification[] | null | undefined,
+): ProductClassification | null {
+  for (const candidate of CLASSIFICATION_PRIORITY) {
+    if ((tags ?? []).includes(candidate)) return candidate;
+  }
+  return (tags ?? [])[0] ?? null;
+}
+
+export async function getBranchClassifications(supabase: Client, branchId: string) {
+  const byProduct = new Map<string, ProductClassification[]>();
+  const pageSize = 1000;
+  for (let from = 0; ; from += pageSize) {
+    const { data, error } = await supabase
+      .from("product_branch_classifications")
+      .select("product_id, classification")
+      .eq("branch_id", branchId)
+      .range(from, from + pageSize - 1);
+    if (error) throw new Error(error.message || "Could not load product types for this salon.");
+    for (const row of data ?? []) {
+      const list = byProduct.get(row.product_id) ?? [];
+      list.push(row.classification);
+      byProduct.set(row.product_id, list);
+    }
+    if (!data || data.length < pageSize) break;
+  }
+  return byProduct;
+}
 
 function pickSupplier(
   links: { supplier_id: string; is_preferred: boolean }[],
@@ -107,8 +149,7 @@ export async function getCatalogProducts(supabase: Client, companyId: string): P
       orderName: product.order_name,
       brand: brand?.name ?? "",
       brandSub: product.brand_sub?.trim() ?? "",
-      defaultClassification: product.default_classification,
-      classifications: (product.product_classifications ?? []).map((row) => row.classification),
+      classificationsByBranch: groupClassificationsByBranch(product.product_branch_classifications),
       unitCost: Number(product.unit_cost_price),
       rrp: product.rrp == null ? null : Number(product.rrp),
       threshold: product.low_stock_threshold == null ? null : Number(product.low_stock_threshold),

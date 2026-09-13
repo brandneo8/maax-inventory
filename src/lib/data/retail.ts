@@ -4,8 +4,6 @@ import { productDisplayName } from "@/lib/format";
 
 type Client = Awaited<ReturnType<typeof createClient>>;
 
-const RETAIL_TYPES = new Set(["retail", "retail_inhouse"]);
-
 export async function getRecentRetailUse(supabase: Client, companyId: string, branchId?: string) {
   let query = supabase
     .from("retail_use_entries")
@@ -27,11 +25,11 @@ export async function getRecentRetailUse(supabase: Client, companyId: string, br
 }
 
 export async function getRetailExportRows(supabase: Client, companyId: string, branchId?: string) {
-  const [{ data: products, error: productError }, { data: poItems, error: poError }, stock] =
+  const [{ data: products, error: productError }, { data: poItems, error: poError }, stock, branchTags] =
     await Promise.all([
       supabase
         .from("products")
-        .select("id, sku, name, order_name, default_classification, brands(name)")
+        .select("id, sku, name, order_name, brands(name)")
         .eq("company_id", companyId)
         .eq("is_active", true),
       supabase
@@ -40,14 +38,25 @@ export async function getRetailExportRows(supabase: Client, companyId: string, b
         .eq("purchase_orders.company_id", companyId)
         .in("classification", ["retail", "retail_inhouse"]),
       getCurrentStock(supabase),
+      branchId
+        ? supabase.from("product_branch_classifications").select("product_id, classification").eq("branch_id", branchId)
+        : Promise.resolve({ data: [] as { product_id: string; classification: string }[], error: null }),
     ]);
 
   if (productError) throw productError;
   if (poError) throw poError;
+  if (branchTags.error) throw branchTags.error;
+
+  const classificationsByProduct = new Map<string, string[]>();
+  for (const row of branchTags.data ?? []) {
+    const list = classificationsByProduct.get(row.product_id) ?? [];
+    list.push(row.classification);
+    classificationsByProduct.set(row.product_id, list);
+  }
 
   const retailIds = new Set<string>();
   for (const product of products ?? []) {
-    if (product.default_classification && RETAIL_TYPES.has(product.default_classification)) {
+    if ((classificationsByProduct.get(product.id) ?? []).includes("retail")) {
       retailIds.add(product.id);
     }
   }
@@ -78,7 +87,7 @@ export async function getRetailExportRows(supabase: Client, companyId: string, b
         sku: product.sku,
         name: productDisplayName(product),
         brand: brand?.name ?? "",
-        classification: product.default_classification ?? "",
+        classification: (classificationsByProduct.get(product.id) ?? []).join(","),
         branch: branchName,
         quantity_on_hand: quantity,
       },

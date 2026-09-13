@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { requireBranch } from "@/lib/auth";
 import { getProducts, getSuppliers } from "@/lib/data/lookups";
+import { pickPrimaryClassification } from "@/lib/data/products";
 import { productLabel } from "@/lib/format";
 import { OrderForm } from "./order-form";
 
@@ -47,7 +48,11 @@ export default async function NewOrderPage() {
           products={products.map((product) => ({
             id: product.id,
             label: productLabel(product),
-            defaultClassification: product.default_classification,
+            defaultClassification: pickPrimaryClassification(
+              (product.product_branch_classifications ?? [])
+                .filter((row) => row.branch_id === branch.id)
+                .map((row) => row.classification),
+            ),
             unitCost: Number(product.unit_cost_price),
           }))}
         />

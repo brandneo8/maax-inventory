@@ -1,24 +1,10 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { createPurchaseOrder, type OrderLineInput } from "../actions";
-import { CLASSIFICATIONS, type ProductClassification } from "@/lib/labels";
+import { createPurchaseOrder } from "../actions";
 import { btnClass, btnSecondaryClass, fieldClass } from "@/lib/ui";
-
-type Option = { id: string; label: string };
-type ProductOption = Option & { defaultClassification: ProductClassification | null; unitCost: number };
-
-type Line = OrderLineInput & { key: string };
-
-function emptyLine(product?: ProductOption): Line {
-  return {
-    key: crypto.randomUUID(),
-    product_id: product?.id ?? "",
-    classification: product?.defaultClassification ?? "retail",
-    quantity_ordered: 1,
-    unit_price: product?.unitCost ?? 0,
-  };
-}
+import { emptyLine, OrderLineRow, type EditableLine } from "../order-line-row";
+import type { Option, ProductOption } from "@/components/product-picker";
 
 export function OrderForm({
   branchId,
@@ -30,11 +16,11 @@ export function OrderForm({
   products: ProductOption[];
 }) {
   const today = useMemo(() => new Date().toISOString().slice(0, 10), []);
-  const [lines, setLines] = useState<Line[]>([emptyLine()]);
+  const [lines, setLines] = useState<EditableLine[]>([emptyLine()]);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
 
-  function updateLine(key: string, patch: Partial<Line>) {
+  function updateLine(key: string, patch: Partial<EditableLine>) {
     setLines((current) => current.map((line) => (line.key === key ? { ...line, ...patch } : line)));
   }
 
@@ -48,7 +34,12 @@ export function OrderForm({
         order_date: String(formData.get("order_date") ?? ""),
         expected_delivery_date: String(formData.get("expected_delivery_date") ?? ""),
         notes: String(formData.get("notes") ?? ""),
-        lines: lines.map(({ key: _key, ...line }) => line),
+        lines: lines.map((line) => ({
+          product_id: line.product_id,
+          classification: line.classification,
+          quantity_ordered: line.quantity_ordered,
+          unit_price: line.unit_price,
+        })),
       });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not create the order.");
@@ -104,82 +95,14 @@ export function OrderForm({
 
         <div className="space-y-3">
           {lines.map((line) => (
-            <div key={line.key} className="grid gap-3 rounded-xl border border-border bg-card p-4 md:grid-cols-4">
-              <label className="space-y-1 text-sm md:col-span-2">
-                <span>Product</span>
-                <select
-                  className={fieldClass}
-                  value={line.product_id}
-                  onChange={(event) => {
-                    const product = products.find((item) => item.id === event.target.value);
-                    updateLine(line.key, {
-                      product_id: event.target.value,
-                      classification: product?.defaultClassification ?? line.classification,
-                      unit_price: product?.unitCost ?? line.unit_price,
-                    });
-                  }}
-                  required
-                >
-                  <option value="">Select product</option>
-                  {products.map((product) => (
-                    <option key={product.id} value={product.id}>
-                      {product.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="space-y-1 text-sm">
-                <span>Type</span>
-                <select
-                  className={fieldClass}
-                  value={line.classification}
-                  onChange={(event) =>
-                    updateLine(line.key, {
-                      classification: event.target.value as ProductClassification,
-                    })
-                  }
-                >
-                  {CLASSIFICATIONS.map((item) => (
-                    <option key={item.value} value={item.value}>
-                      {item.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="space-y-1 text-sm">
-                <span>Qty</span>
-                <input
-                  className={fieldClass}
-                  type="number"
-                  min="0.01"
-                  step="0.01"
-                  value={line.quantity_ordered}
-                  onChange={(event) =>
-                    updateLine(line.key, { quantity_ordered: Number(event.target.value) })
-                  }
-                />
-              </label>
-              <label className="space-y-1 text-sm">
-                <span>Unit price</span>
-                <input
-                  className={fieldClass}
-                  type="number"
-                  min="0"
-                  step="0.01"
-                  value={line.unit_price}
-                  onChange={(event) => updateLine(line.key, { unit_price: Number(event.target.value) })}
-                />
-              </label>
-              {lines.length > 1 ? (
-                <button
-                  className="text-left text-sm text-muted underline md:col-span-3"
-                  type="button"
-                  onClick={() => setLines((current) => current.filter((item) => item.key !== line.key))}
-                >
-                  Remove line
-                </button>
-              ) : null}
-            </div>
+            <OrderLineRow
+              key={line.key}
+              line={line}
+              products={products}
+              onChange={(patch) => updateLine(line.key, patch)}
+              onRemove={() => setLines((current) => current.filter((item) => item.key !== line.key))}
+              removable={lines.length > 1}
+            />
           ))}
         </div>
       </div>

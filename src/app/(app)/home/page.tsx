@@ -9,7 +9,9 @@ export default async function HomePage() {
   const catalog = await getCatalogProducts(supabase, companyId);
   const branchProducts = catalog.filter((product) => product.branchIds.includes(branch.id));
   const productCount = branchProducts.length;
-  const tunaiCount = branchProducts.filter((product) => isAvailableInTunai(product.classifications)).length;
+  const tunaiCount = branchProducts.filter((product) =>
+    isAvailableInTunai(product.classificationsByBranch[branch.id] ?? []),
+  ).length;
 
   return (
     <div className="space-y-10">

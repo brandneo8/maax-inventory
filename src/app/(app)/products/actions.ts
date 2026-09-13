@@ -270,7 +270,6 @@ export type ProductDraft = {
   brand: string;
   brandSub: string;
   size: string;
-  classifications: ProductClassification[];
   unitCost: string;
   rrp: string;
   threshold: string;
@@ -349,17 +348,6 @@ async function syncProductTags(supabase: Client, companyId: string, productId: s
   const { error: insertError } = await supabase
     .from("product_tags")
     .insert(tagIds.map((tagId) => ({ product_id: productId, tag_id: tagId })));
-  if (insertError) throw insertError;
-}
-
-async function syncProductClassifications(supabase: Client, productId: string, requested: ProductClassification[]) {
-  const wanted = [...new Set(requested.filter((value) => CLASSIFICATION_VALUES.has(value) && value !== "retail_inhouse"))];
-  const { error: deleteError } = await supabase.from("product_classifications").delete().eq("product_id", productId);
-  if (deleteError) throw deleteError;
-  if (wanted.length === 0) return;
-  const { error: insertError } = await supabase
-    .from("product_classifications")
-    .insert(wanted.map((classification) => ({ product_id: productId, classification })));
   if (insertError) throw insertError;
 }
 
@@ -443,7 +431,6 @@ export async function saveProducts(drafts: ProductDraft[]) {
 
     await syncProductBranches(supabase, productId, draft.branchIds ?? [], validBranchIds);
     await syncProductSuppliers(supabase, productId, draft.supplierIds ?? [], validSupplierIds);
-    await syncProductClassifications(supabase, productId, draft.classifications ?? []);
     if (draft.id || draft.isSet) {
       await persistProductComponents(supabase, companyId, {
         productId,
@@ -469,7 +456,6 @@ async function productHasRows(
     | "inventory_transactions"
     | "purchase_order_items"
     | "goods_receipt_items"
-    | "invoice_items"
     | "retail_use_entries",
   productId: string,
 ) {
@@ -598,7 +584,6 @@ export async function deleteProduct(id: string): Promise<DeleteProductResult> {
     productHasRows(supabase, "inventory_transactions", id),
     productHasRows(supabase, "purchase_order_items", id),
     productHasRows(supabase, "goods_receipt_items", id),
-    productHasRows(supabase, "invoice_items", id),
     productHasRows(supabase, "retail_use_entries", id),
   ]);
   const checkError = checks.find((check) => check.error)?.error;
@@ -615,7 +600,6 @@ export async function deleteProduct(id: string): Promise<DeleteProductResult> {
   const purchasing: ProductDeleteBlockItem[] = [];
   if (checks[1].exists) purchasing.push({ label: "Purchase order" });
   if (checks[2].exists) purchasing.push({ label: "Goods receipt" });
-  if (checks[3].exists) purchasing.push({ label: "Invoice" });
   if (purchasing.length > 0) {
     groups.push({
       title: "Open purchasing",
@@ -623,7 +607,7 @@ export async function deleteProduct(id: string): Promise<DeleteProductResult> {
       items: purchasing,
     });
   }
-  if (checks[4].exists) {
+  if (checks[3].exists) {
     groups.push({
       title: "Retail use",
       hint: "This product has retail-use records, so it cannot be hard-deleted.",

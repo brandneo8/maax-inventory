@@ -10,7 +10,7 @@ import { fieldClass, tableClass, tdClass, thClass } from "@/lib/ui";
 import { cn } from "@/lib/utils";
 import type { CatalogProduct } from "@/lib/data/products";
 
-export type TunaiProduct = CatalogProduct & { onHand: number };
+export type TunaiProduct = CatalogProduct & { onHand: number; classifications: ProductClassification[] };
 
 type SortColumn = "type" | "brand" | "sku" | "barcode" | "name" | "size" | "onHand";
 type SortDirection = "asc" | "desc";

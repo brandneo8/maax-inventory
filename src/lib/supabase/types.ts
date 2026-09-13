@@ -278,7 +278,8 @@ export type Database = {
           company_id: string
           created_at: string
           id: string
-          invoice_id: string | null
+          invoice_attachment_url: string | null
+          invoice_reference: string | null
           notes: string | null
           purchase_order_id: string | null
           received_by: string | null
@@ -289,7 +290,8 @@ export type Database = {
           company_id: string
           created_at?: string
           id?: string
-          invoice_id?: string | null
+          invoice_attachment_url?: string | null
+          invoice_reference?: string | null
           notes?: string | null
           purchase_order_id?: string | null
           received_by?: string | null
@@ -300,7 +302,8 @@ export type Database = {
           company_id?: string
           created_at?: string
           id?: string
-          invoice_id?: string | null
+          invoice_attachment_url?: string | null
+          invoice_reference?: string | null
           notes?: string | null
           purchase_order_id?: string | null
           received_by?: string | null
@@ -319,20 +322,6 @@ export type Database = {
             columns: ["company_id"]
             isOneToOne: false
             referencedRelation: "companies"
-            referencedColumns: ["id"]
-          },
-          {
-            foreignKeyName: "goods_receipts_invoice_id_fkey"
-            columns: ["invoice_id"]
-            isOneToOne: false
-            referencedRelation: "invoice_reconciliation"
-            referencedColumns: ["invoice_id"]
-          },
-          {
-            foreignKeyName: "goods_receipts_invoice_id_fkey"
-            columns: ["invoice_id"]
-            isOneToOne: false
-            referencedRelation: "invoices"
             referencedColumns: ["id"]
           },
           {
@@ -616,151 +605,42 @@ export type Database = {
           },
         ]
       }
-      invoice_items: {
-        Row: {
-          goods_receipt_item_id: string | null
-          id: string
-          invoice_id: string
-          line_total: number | null
-          product_id: string
-          purchase_discount_amount: number
-          quantity: number
-          tax_amount: number
-          unit_price: number
-        }
-        Insert: {
-          goods_receipt_item_id?: string | null
-          id?: string
-          invoice_id: string
-          line_total?: number | null
-          product_id: string
-          purchase_discount_amount?: number
-          quantity: number
-          tax_amount?: number
-          unit_price: number
-        }
-        Update: {
-          goods_receipt_item_id?: string | null
-          id?: string
-          invoice_id?: string
-          line_total?: number | null
-          product_id?: string
-          purchase_discount_amount?: number
-          quantity?: number
-          tax_amount?: number
-          unit_price?: number
-        }
-        Relationships: [
-          {
-            foreignKeyName: "invoice_items_goods_receipt_item_id_fkey"
-            columns: ["goods_receipt_item_id"]
-            isOneToOne: false
-            referencedRelation: "goods_receipt_items"
-            referencedColumns: ["id"]
-          },
-          {
-            foreignKeyName: "invoice_items_invoice_id_fkey"
-            columns: ["invoice_id"]
-            isOneToOne: false
-            referencedRelation: "invoice_reconciliation"
-            referencedColumns: ["invoice_id"]
-          },
-          {
-            foreignKeyName: "invoice_items_invoice_id_fkey"
-            columns: ["invoice_id"]
-            isOneToOne: false
-            referencedRelation: "invoices"
-            referencedColumns: ["id"]
-          },
-          {
-            foreignKeyName: "invoice_items_product_id_fkey"
-            columns: ["product_id"]
-            isOneToOne: false
-            referencedRelation: "low_stock_alerts"
-            referencedColumns: ["product_id"]
-          },
-          {
-            foreignKeyName: "invoice_items_product_id_fkey"
-            columns: ["product_id"]
-            isOneToOne: false
-            referencedRelation: "products"
-            referencedColumns: ["id"]
-          },
-        ]
-      }
-      invoices: {
+      product_branch_classifications: {
         Row: {
           branch_id: string
-          company_id: string
-          created_at: string
-          id: string
-          invoice_date: string
-          invoice_number: string
-          purchase_discount_amount: number
-          purchase_order_id: string | null
-          status: Database["public"]["Enums"]["invoice_status"]
-          supplier_id: string
-          total_amount: number | null
-          total_gross_amount: number | null
-          total_tax_amount: number | null
+          classification: Database["public"]["Enums"]["product_classification"]
+          product_id: string
         }
         Insert: {
           branch_id: string
-          company_id: string
-          created_at?: string
-          id?: string
-          invoice_date: string
-          invoice_number: string
-          purchase_discount_amount?: number
-          purchase_order_id?: string | null
-          status?: Database["public"]["Enums"]["invoice_status"]
-          supplier_id: string
-          total_amount?: number | null
-          total_gross_amount?: number | null
-          total_tax_amount?: number | null
+          classification: Database["public"]["Enums"]["product_classification"]
+          product_id: string
         }
         Update: {
           branch_id?: string
-          company_id?: string
-          created_at?: string
-          id?: string
-          invoice_date?: string
-          invoice_number?: string
-          purchase_discount_amount?: number
-          purchase_order_id?: string | null
-          status?: Database["public"]["Enums"]["invoice_status"]
-          supplier_id?: string
-          total_amount?: number | null
-          total_gross_amount?: number | null
-          total_tax_amount?: number | null
+          classification?: Database["public"]["Enums"]["product_classification"]
+          product_id?: string
         }
         Relationships: [
           {
-            foreignKeyName: "invoices_branch_id_fkey"
+            foreignKeyName: "product_branch_classifications_branch_id_fkey"
             columns: ["branch_id"]
             isOneToOne: false
             referencedRelation: "branches"
             referencedColumns: ["id"]
           },
           {
-            foreignKeyName: "invoices_company_id_fkey"
-            columns: ["company_id"]
+            foreignKeyName: "product_branch_classifications_product_id_fkey"
+            columns: ["product_id"]
             isOneToOne: false
-            referencedRelation: "companies"
-            referencedColumns: ["id"]
+            referencedRelation: "low_stock_alerts"
+            referencedColumns: ["product_id"]
           },
           {
-            foreignKeyName: "invoices_purchase_order_id_fkey"
-            columns: ["purchase_order_id"]
+            foreignKeyName: "product_branch_classifications_product_id_fkey"
+            columns: ["product_id"]
             isOneToOne: false
-            referencedRelation: "purchase_orders"
-            referencedColumns: ["id"]
-          },
-          {
-            foreignKeyName: "invoices_supplier_id_fkey"
-            columns: ["supplier_id"]
-            isOneToOne: false
-            referencedRelation: "suppliers"
+            referencedRelation: "products"
             referencedColumns: ["id"]
           },
         ]
@@ -1214,6 +1094,7 @@ export type Database = {
           notes: string | null
           product_id: string
           quantity_used: number
+          stock_out_report_id: string | null
           store_location_id: string | null
         }
         Insert: {
@@ -1227,6 +1108,7 @@ export type Database = {
           notes?: string | null
           product_id: string
           quantity_used: number
+          stock_out_report_id?: string | null
           store_location_id?: string | null
         }
         Update: {
@@ -1240,6 +1122,7 @@ export type Database = {
           notes?: string | null
           product_id?: string
           quantity_used?: number
+          stock_out_report_id?: string | null
           store_location_id?: string | null
         }
         Relationships: [
@@ -1272,10 +1155,65 @@ export type Database = {
             referencedColumns: ["id"]
           },
           {
+            foreignKeyName: "retail_use_entries_stock_out_report_id_fkey"
+            columns: ["stock_out_report_id"]
+            isOneToOne: false
+            referencedRelation: "stock_out_reports"
+            referencedColumns: ["id"]
+          },
+          {
             foreignKeyName: "retail_use_entries_store_location_id_fkey"
             columns: ["store_location_id"]
             isOneToOne: false
             referencedRelation: "store_locations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      stock_out_reports: {
+        Row: {
+          branch_id: string
+          channel: string
+          company_id: string
+          created_at: string
+          entry_date: string
+          id: string
+          keyed_in_by: string | null
+          notes: string | null
+        }
+        Insert: {
+          branch_id: string
+          channel: string
+          company_id: string
+          created_at?: string
+          entry_date: string
+          id?: string
+          keyed_in_by?: string | null
+          notes?: string | null
+        }
+        Update: {
+          branch_id?: string
+          channel?: string
+          company_id?: string
+          created_at?: string
+          entry_date?: string
+          id?: string
+          keyed_in_by?: string | null
+          notes?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "stock_out_reports_branch_id_fkey"
+            columns: ["branch_id"]
+            isOneToOne: false
+            referencedRelation: "branches"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "stock_out_reports_company_id_fkey"
+            columns: ["company_id"]
+            isOneToOne: false
+            referencedRelation: "companies"
             referencedColumns: ["id"]
           },
         ]
@@ -1505,16 +1443,6 @@ export type Database = {
           },
         ]
       }
-      invoice_reconciliation: {
-        Row: {
-          invoice_id: string | null
-          invoice_number: string | null
-          invoice_stated_total: number | null
-          line_items_total: number | null
-          variance: number | null
-        }
-        Relationships: []
-      }
       low_stock_alerts: {
         Row: {
           low_stock_threshold: number | null
@@ -1530,10 +1458,6 @@ export type Database = {
       fn_fill_uncounted_count_items: {
         Args: { p_count_id: string; p_mode: string }
         Returns: undefined
-      }
-      fn_generate_invoice_items_from_receipt: {
-        Args: { p_goods_receipt_id: string; p_invoice_id: string }
-        Returns: number
       }
       fn_grant_default_admin_access: {
         Args: { p_email: string; p_user_id: string }
@@ -1567,7 +1491,6 @@ export type Database = {
         | "waste"
         | "gwp_use"
         | "initial_stock"
-      invoice_status: "unpaid" | "partial" | "paid" | "disputed"
       order_channel: "email" | "phone" | "portal" | "whatsapp" | "other"
       po_status:
         | "draft"
@@ -1721,7 +1644,6 @@ export const Constants = {
         "gwp_use",
         "initial_stock",
       ],
-      invoice_status: ["unpaid", "partial", "paid", "disputed"],
       order_channel: ["email", "phone", "portal", "whatsapp", "other"],
       po_status: [
         "draft",

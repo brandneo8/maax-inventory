@@ -5,9 +5,9 @@ import { usePathname } from "next/navigation";
 import {
   BarChart3,
   ClipboardList,
-  FileText,
   Home,
   Package,
+  PackageMinus,
   ShieldCheck,
   ShoppingBag,
 } from "lucide-react";
@@ -17,7 +17,7 @@ const links = [
   { href: "/home", label: "Home", icon: Home },
   { href: "/home/products", label: "Products", icon: Package },
   { href: "/orders", label: "Orders", icon: ShoppingBag },
-  { href: "/invoices", label: "Invoices", icon: FileText },
+  { href: "/stock-out", label: "Stock-out", icon: PackageMinus },
   { href: "/counts", label: "Counts", icon: ClipboardList },
   { href: "/reports", label: "Reports", icon: BarChart3 },
   { href: "/admin", label: "Admin", icon: ShieldCheck, adminOnly: true },
