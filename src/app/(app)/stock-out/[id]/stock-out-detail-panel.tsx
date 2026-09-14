@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { updateStockOutReport, type StockOutType } from "../actions";
 import { formatDate } from "@/lib/format";
 import { btnClass, btnSecondaryClass, fieldClass, tableClass, tdClass, thClass } from "@/lib/ui";
@@ -20,7 +20,7 @@ function typeLabel(value: StockOutType) {
   return TYPE_OPTIONS.find((option) => option.value === value)?.label ?? value;
 }
 
-type DisplayLine = { id: string; productId: string; label: string; quantityUsed: number };
+type DisplayLine = { id: string; productId: string; label: string; quantityUsed: number; entryDate: string };
 
 export function StockOutDetailPanel({
   reportId,
@@ -30,6 +30,7 @@ export function StockOutDetailPanel({
   notes: initialNotes,
   keyedInBy,
   createdAt,
+  attachmentUrl,
   lines,
   retailProducts,
   inhouseProducts,
@@ -41,6 +42,7 @@ export function StockOutDetailPanel({
   notes: string | null;
   keyedInBy: string | null;
   createdAt: string;
+  attachmentUrl: string | null;
   lines: DisplayLine[];
   retailProducts: Option[];
   inhouseProducts: Option[];
@@ -53,6 +55,7 @@ export function StockOutDetailPanel({
   const [editLines, setEditLines] = useState<StockOutLine[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
+  const attachmentInputRef = useRef<HTMLInputElement>(null);
 
   const products = type === "retail" ? retailProducts : inhouseProducts;
 
@@ -60,8 +63,16 @@ export function StockOutDetailPanel({
     setType(initialType);
     setEntryDate(initialEntryDate);
     setNotes(initialNotes ?? "");
-    setEditLines(lines.map((line) => ({ key: line.id, product_id: line.productId, quantity_used: line.quantityUsed })));
+    setEditLines(
+      lines.map((line) => ({
+        key: line.id,
+        product_id: line.productId,
+        quantity_used: line.quantityUsed,
+        entry_date: line.entryDate,
+      })),
+    );
     setError(null);
+    if (attachmentInputRef.current) attachmentInputRef.current.value = "";
     setEditing(true);
   }
 
@@ -75,16 +86,21 @@ export function StockOutDetailPanel({
     setPending(true);
     setError(null);
     try {
-      await updateStockOutReport({
-        report_id: reportId,
-        type,
-        entry_date: entryDate,
-        notes,
-        lines: editLines.map((line) => ({
-          product_id: line.product_id,
-          quantity_used: line.quantity_used,
-        })),
-      });
+      const attachmentFile = attachmentInputRef.current?.files?.[0];
+      await updateStockOutReport(
+        {
+          report_id: reportId,
+          type,
+          entry_date: entryDate,
+          notes,
+          lines: editLines.map((line) => ({
+            product_id: line.product_id,
+            quantity_used: line.quantity_used,
+            entry_date: line.entry_date,
+          })),
+        },
+        attachmentFile && attachmentFile.size > 0 ? attachmentFile : null,
+      );
       setEditing(false);
       router.refresh();
     } catch (err) {
@@ -167,7 +183,7 @@ export function StockOutDetailPanel({
             </div>
           </div>
 
-          <div className="grid gap-3 rounded-xl border border-border bg-card p-4 md:grid-cols-2">
+          <div className="grid gap-3 rounded-xl border border-border bg-card p-4 md:grid-cols-3">
             <label className="space-y-1 text-sm">
               <span>Entry date</span>
               <input
@@ -182,11 +198,20 @@ export function StockOutDetailPanel({
               <span>Notes</span>
               <input className={fieldClass} value={notes} onChange={(event) => setNotes(event.target.value)} />
             </label>
+            <label className="space-y-1 text-sm">
+              <span>Attachment {attachmentUrl ? "(replace)" : "(optional)"}</span>
+              <input
+                ref={attachmentInputRef}
+                className={fieldClass}
+                type="file"
+                accept="image/png,image/jpeg,image/webp"
+              />
+            </label>
           </div>
 
           <div className="space-y-3">
             <h2 className="text-lg font-semibold">Lines</h2>
-            <StockOutLinesEditor products={products} lines={editLines} onLinesChange={setEditLines} />
+            <StockOutLinesEditor products={products} reportDate={entryDate} lines={editLines} onLinesChange={setEditLines} />
           </div>
         </>
       ) : (
@@ -206,25 +231,45 @@ export function StockOutDetailPanel({
             </div>
           </dl>
 
-          <div className="overflow-x-auto rounded-xl border border-border bg-card">
-            <table className={tableClass}>
-              <thead>
-                <tr>
-                  <th className={thClass}>Product</th>
-                  <th className={cn(thClass, "w-1/5 text-right")}>Quantity used</th>
-                </tr>
-              </thead>
-              <tbody>
-                {lines.map((line) => (
-                  <tr key={line.id}>
-                    <td className={tdClass}>{line.label}</td>
-                    <td className={cn(tdClass, "w-1/5 text-right")}>
-                      <StockOutQuantityDisplay quantityUsed={line.quantityUsed} />
-                    </td>
+          <div className="grid gap-4 lg:grid-cols-2">
+            <div className="overflow-x-auto rounded-xl border border-border bg-card">
+              <table className={tableClass}>
+                <thead>
+                  <tr>
+                    <th className={thClass}>Product</th>
+                    <th className={thClass}>Use date</th>
+                    <th className={cn(thClass, "w-1/5 text-right")}>Quantity used</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {lines.map((line) => (
+                    <tr key={line.id}>
+                      <td className={tdClass}>{line.label}</td>
+                      <td className={tdClass}>{formatDate(line.entryDate)}</td>
+                      <td className={cn(tdClass, "w-1/5 text-right")}>
+                        <StockOutQuantityDisplay quantityUsed={line.quantityUsed} />
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="rounded-xl border border-border bg-card p-4">
+              <p className="text-sm font-medium text-muted">Reference image</p>
+              {attachmentUrl ? (
+                <a href={attachmentUrl} target="_blank" rel="noreferrer" className="mt-2 block">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={attachmentUrl}
+                    alt="Stock-out reference"
+                    className="max-h-80 w-full rounded-lg border border-border bg-white object-contain"
+                  />
+                </a>
+              ) : (
+                <p className="mt-2 text-sm text-muted">No image attached. Click Edit to add one.</p>
+              )}
+            </div>
           </div>
         </>
       )}

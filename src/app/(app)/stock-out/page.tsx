@@ -38,12 +38,13 @@ export default async function StockOutPage() {
               <th className={thClass}>Lines</th>
               <th className={thClass}>Total quantity</th>
               <th className={thClass}>Keyed in by</th>
+              <th className={thClass} />
             </tr>
           </thead>
           <tbody>
             {reports.length === 0 ? (
               <tr>
-                <td className={tdClass} colSpan={5}>
+                <td className={tdClass} colSpan={6}>
                   No stock-outs recorded yet.
                 </td>
               </tr>
@@ -59,6 +60,9 @@ export default async function StockOutPage() {
                   <td className={tdClass}>{report.lineCount}</td>
                   <td className={cn(tdClass, "text-red-600")}>{formatQty(report.totalQuantity)}</td>
                   <td className={tdClass}>{report.keyed_in_by || "—"}</td>
+                  <td className={tdClass}>
+                    <DeleteStockOutButton reportId={report.id} compact />
+                  </td>
                 </tr>
               ))
             )}

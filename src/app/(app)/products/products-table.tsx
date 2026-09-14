@@ -16,7 +16,6 @@ import { catalogTax, confirmedRetailPrice, grossMarginPercent, allocatedBundleTo
 import { downloadCsv } from "@/lib/csv";
 import { formatCatalogSavedLabel, formatMoney, formatPercent, formatQty, productDisplayName, productLabel } from "@/lib/format";
 import { searchFieldsMatch, searchTextMatches } from "@/lib/search";
-import { SalonChipField } from "@/components/salon-chip-field";
 import { BrandSubFilter, NO_BRAND_SUB } from "@/components/brand-sub-filter";
 import { CLASSIFICATIONS, classificationTagsLabel, isAvailableInTunai, salonChipLabel, type ProductClassification } from "@/lib/labels";
 import { parseSize, sizesMatch } from "@/lib/product-size";
@@ -62,9 +61,7 @@ type TableDraft = ProductDraft & {
 };
 
 const SELECT_COL_REM = 9;
-const SALON_TAGS_REM = 11;
 const wCheck = "w-36 min-w-36";
-const wSalons = "w-44 min-w-44";
 const wField = "min-w-28";
 const wImage = "w-16 min-w-16";
 const wName = "w-72 min-w-72";
@@ -74,10 +71,8 @@ const wSupplier = "min-w-52";
 const wContents = "min-w-56";
 const stickyHead = "sticky top-0 z-20 bg-card";
 const stickyCheck = "sticky left-0 z-10";
-const stickySalons = "sticky z-10";
 const stickyName = "sticky z-10 shadow-[2px_0_4px_-2px_rgba(15,23,42,0.15)]";
 const stickyCheckHead = "sticky top-0 left-0 z-30 bg-card";
-const stickySalonsHead = "sticky top-0 z-30 bg-card";
 const stickyNameHead = "sticky top-0 z-30 bg-card shadow-[2px_0_4px_-2px_rgba(15,23,42,0.15)]";
 
 function moneyInput(value: number | null | undefined) {
@@ -631,6 +626,7 @@ export function ProductsTable({
   gstRate = 9,
   catalogSavedAt = null,
   catalogSavedByEmail = null,
+  branchCosts = {},
 }: {
   products: ProductRow[];
   tags: { id: string; name: string }[];
@@ -639,6 +635,7 @@ export function ProductsTable({
   gstRate?: number;
   catalogSavedAt?: string | null;
   catalogSavedByEmail?: string | null;
+  branchCosts?: Record<string, Record<string, number>>;
 }) {
   const router = useRouter();
   const [rows, setRows] = useState(() =>
@@ -959,7 +956,7 @@ export function ProductsTable({
   const pageCount = Math.max(1, Math.ceil(displayGrouped.length / pageSize));
   const currentPage = Math.min(page, pageCount - 1);
   const visible = displayGrouped.slice(currentPage * pageSize, currentPage * pageSize + pageSize);
-  const columnCount = 26;
+  const columnCount = 25 + branches.length;
   const usedInBundles = useMemo(() => {
     const byChild = new Map<string, string[]>();
     for (const row of rows) {
@@ -980,7 +977,7 @@ export function ProductsTable({
     }
     return byChild;
   }, [overlayTick, rows]);
-  const nameLeft = `${SELECT_COL_REM + SALON_TAGS_REM}rem`;
+  const nameLeft = `${SELECT_COL_REM}rem`;
   const rowBg = (selectedRow: boolean) => (selectedRow ? "bg-slate-50" : "bg-card");
 
   useEffect(() => {
@@ -1334,10 +1331,6 @@ export function ProductsTable({
       supplierName: supplier?.name ?? "",
       gstRegistered: supplier?.gstRegistered ?? false,
     });
-  }
-
-  function setRowBranches(index: number, branchIds: string[]) {
-    updateRow(index, { branchIds });
   }
 
   function setRowPicture(index: number, pictureUrl: string | null) {
@@ -1754,12 +1747,6 @@ export function ProductsTable({
                   </button>
                 </div>
               </th>
-              <th
-                className={cn(thClass, wSalons, stickySalonsHead)}
-                style={{ left: `${SELECT_COL_REM}rem` }}
-              >
-                Salons
-              </th>
               <th className={cn(thClass, wName, stickyNameHead)} style={{ left: nameLeft }}>
                 <SortableHeader column="orderName" active={sortColumn === "orderName"} direction={sortDirection} onSort={toggleSort}>
                   Order name
@@ -1819,6 +1806,15 @@ export function ProductsTable({
               </th>
               <th className={cn(thClass, wField, stickyHead)}>Tax amount</th>
               <th className={cn(thClass, wField, stickyHead)}>Unit cost with tax</th>
+              {branches.map((branch) => (
+                <th
+                  key={branch.id}
+                  className={cn(thClass, wField, stickyHead)}
+                  title="Running weighted-average cost from actual receipts at this salon"
+                >
+                  {salonChipLabel(branch.name)} avg cost
+                </th>
+              ))}
               <th className={cn(thClass, wField, stickyHead)} title="Recommended retail price from the supplier">
                 <SortableHeader
                   column="rrp"
@@ -1886,13 +1882,6 @@ export function ProductsTable({
                 const justUpdated = Boolean(row.id && recentBulkIds.has(row.id));
                 const updatedCell = justUpdated ? "ring-2 ring-emerald-400 ring-inset" : "";
                 const inBundles = row.id ? usedInBundles.get(row.id) ?? [] : [];
-                const salonLabels = row.branchIds
-                  .map((id) => {
-                    const branch = branches.find((item) => item.id === id);
-                    return branch ? salonChipLabel(branch.name) : "";
-                  })
-                  .filter(Boolean)
-                  .join(", ");
                 const contentsLabel = row.isSet
                   ? row.componentLabels.length === 0
                     ? "Choose products"
@@ -1977,23 +1966,6 @@ export function ProductsTable({
                           aria-label={`Select ${productDisplayName(row) || row.orderName || "product"}`}
                         />
                       ) : null}
-                    </td>
-                    <td
-                      className={cn(tdClass, wSalons, stickySalons, rowBg(isSelected), updatedCell)}
-                      style={{ left: `${SELECT_COL_REM}rem` }}
-                    >
-                      {editing ? (
-                        <SalonChipField
-                          compact
-                          branches={branches}
-                          selectedIds={row.branchIds}
-                          onChange={(ids) => setRowBranches(index, ids)}
-                          disabled={pending}
-                          ariaLabel={`Salons for ${productDisplayName(row) || row.orderName || "product"}`}
-                        />
-                      ) : (
-                        <ViewValue>{dash(salonLabels)}</ViewValue>
-                      )}
                     </td>
                     <td className={cn(tdClass, wName, stickyName, rowBg(isSelected))} style={{ left: nameLeft }}>
                       {editing ? (
@@ -2175,6 +2147,15 @@ export function ProductsTable({
                     <td className={cn(tdClass, wField)}>
                       <span className="block min-w-28 text-sm">{formatMoney(pricing.unitCostWithTax)}</span>
                     </td>
+                    {branches.map((branch) => (
+                      <td key={branch.id} className={cn(tdClass, wField)}>
+                        <span className="block min-w-28 text-sm">
+                          {row.id && branchCosts[row.id]?.[branch.id] !== undefined
+                            ? formatMoney(branchCosts[row.id][branch.id])
+                            : "—"}
+                        </span>
+                      </td>
+                    ))}
                     <td className={cn(tdClass, wField)}>
                       {editing ? (
                         <input

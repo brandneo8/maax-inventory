@@ -13,6 +13,11 @@ const sections = [
     body: "Edit the company catalog, salon lists, tags, and suppliers on each SKU.",
   },
   {
+    href: "/admin/branches",
+    title: "Branches",
+    body: "Decide which products belong at Min and Kin, series by series, and see unique SKU counts by tag and type.",
+  },
+  {
     href: "/admin/suppliers",
     title: "Suppliers",
     body: "Maintain supplier contacts, channels, and GST registration.",

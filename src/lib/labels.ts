@@ -17,8 +17,10 @@ export const PO_STATUSES: { value: PoStatus; label: string }[] = [
   { value: "confirmed", label: "Confirmed" },
   { value: "partially_received", label: "Partially received" },
   { value: "received", label: "Received" },
-  { value: "cancelled", label: "Cancelled" },
+  { value: "cancelled", label: "Voided" },
 ];
+
+export const ORDER_SENDER_NAMES = ["Brandon Neo", "Ethan Neo", "Oey Shui Ling", "Jimmy Lim", "Kin Leong"];
 
 export const ORDER_CHANNELS: { value: OrderChannel; label: string }[] = [
   { value: "email", label: "Email" },

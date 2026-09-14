@@ -1,16 +1,19 @@
 import Link from "next/link";
 import { requireBranch } from "@/lib/auth";
-import { getProducts, getSuppliers } from "@/lib/data/lookups";
-import { pickPrimaryClassification } from "@/lib/data/products";
-import { productLabel } from "@/lib/format";
+import { getProducts, getSuppliers, getTaxRates } from "@/lib/data/lookups";
+import { getProductBranchCosts, pickPrimaryClassification } from "@/lib/data/products";
+import { productDisplayName } from "@/lib/format";
 import { OrderForm } from "./order-form";
 
 export default async function NewOrderPage() {
   const { supabase, companyId, branch } = await requireBranch();
-  const [suppliers, products] = await Promise.all([
+  const [suppliers, products, taxRates, branchCosts] = await Promise.all([
     getSuppliers(supabase, companyId),
     getProducts(supabase, companyId),
+    getTaxRates(supabase, companyId),
+    getProductBranchCosts(supabase, companyId),
   ]);
+  const gstRate = Number(taxRates.find((rate) => rate.is_default)?.rate_percentage ?? 9);
 
   return (
     <div className="space-y-6">
@@ -41,19 +44,25 @@ export default async function NewOrderPage() {
         <OrderForm
           key={branch.id}
           branchId={branch.id}
+          gstRate={gstRate}
           suppliers={suppliers.map((supplier) => ({
             id: supplier.id,
             label: supplier.supplier_name,
+            gstRegistered: supplier.gst_registered,
           }))}
           products={products.map((product) => ({
             id: product.id,
-            label: productLabel(product),
+            label: productDisplayName(product) || product.sku || product.id,
             defaultClassification: pickPrimaryClassification(
               (product.product_branch_classifications ?? [])
                 .filter((row) => row.branch_id === branch.id)
                 .map((row) => row.classification),
             ),
             unitCost: Number(product.unit_cost_price),
+            sku: product.sku,
+            sizeLabel: product.size_label,
+            barcode: product.barcode,
+            branchAvgCost: branchCosts[product.id]?.[branch.id] ?? null,
           }))}
         />
       )}

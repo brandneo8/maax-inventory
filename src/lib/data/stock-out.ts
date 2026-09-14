@@ -47,7 +47,7 @@ export async function getStockOutReport(
 ) {
   const { data: report, error } = await supabase
     .from("stock_out_reports")
-    .select("id, channel, entry_date, notes, keyed_in_by, created_at")
+    .select("id, channel, entry_date, notes, keyed_in_by, created_at, attachment_url")
     .eq("company_id", companyId)
     .eq("branch_id", branchId)
     .eq("id", id)
@@ -56,7 +56,7 @@ export async function getStockOutReport(
 
   const { data: lines, error: linesError } = await supabase
     .from("retail_use_entries")
-    .select("id, product_id, quantity_used, products(sku, name, order_name)")
+    .select("id, product_id, quantity_used, entry_date, products(sku, name, order_name)")
     .eq("stock_out_report_id", id)
     .order("id");
   if (linesError) throw linesError;

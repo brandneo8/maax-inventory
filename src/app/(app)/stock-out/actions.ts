@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { requireBranch } from "@/lib/auth";
 import { getDefaultStoreLocationId } from "@/lib/data/lookups";
+import { createAdminClient } from "@/lib/supabase/admin";
 
 export type StockOutType = "retail" | "inhouse";
 
@@ -14,6 +15,36 @@ function revalidateStockOut(reportId?: string) {
 }
 
 type Client = Awaited<ReturnType<typeof requireBranch>>["supabase"];
+
+const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
+const ATTACHMENT_MIME_EXTENSIONS: Record<string, string> = {
+  "image/png": "png",
+  "image/jpeg": "jpg",
+  "image/webp": "webp",
+};
+
+async function uploadStockOutAttachment(companyId: string, reportId: string, file: File) {
+  const extension = ATTACHMENT_MIME_EXTENSIONS[file.type];
+  if (!extension) {
+    throw new Error("Attachment must be a PNG, JPEG, or WEBP image.");
+  }
+  if (file.size > MAX_ATTACHMENT_BYTES) {
+    throw new Error("Attachment must be smaller than 10 MB.");
+  }
+  const admin = createAdminClient();
+  const path = `${companyId}/${reportId}.${extension}`;
+  const { error: uploadError } = await admin.storage
+    .from("stock-out-attachments")
+    .upload(path, file, { upsert: true, contentType: file.type });
+  if (uploadError) throw new Error(uploadError.message || "Could not upload the attachment.");
+  const { data: publicUrlData } = admin.storage.from("stock-out-attachments").getPublicUrl(path);
+  return `${publicUrlData.publicUrl}?v=${Date.now()}`;
+}
+
+function assertLineDateWithinReport(lineDate: string, reportDate: string) {
+  if (!lineDate) throw new Error("Each line needs a use date.");
+  if (lineDate > reportDate) throw new Error("A line's use date cannot be after the stock-out date.");
+}
 
 async function insertStockOutLine(
   supabase: Client,
@@ -48,6 +79,13 @@ async function insertStockOutLine(
 
   if (error || !entry) throw error ?? new Error("Could not save the stock-out entry.");
 
+  const { data: cost } = await supabase
+    .from("product_branch_costs")
+    .select("avg_unit_cost")
+    .eq("product_id", input.productId)
+    .eq("branch_id", input.branchId)
+    .maybeSingle();
+
   const { error: txnError } = await supabase.from("inventory_transactions").insert({
     company_id: input.companyId,
     product_id: input.productId,
@@ -58,6 +96,8 @@ async function insertStockOutLine(
     reference_id: entry.id,
     created_by: input.userEmail,
     notes: input.notes ?? `Stock-out (${input.type})`,
+    unit_cost: cost?.avg_unit_cost ?? 0,
+    classification: input.type,
   });
 
   if (txnError) throw txnError;
@@ -87,13 +127,16 @@ async function clearReportLines(supabase: Client, reportId: string) {
   if (deleteEntriesError) throw deleteEntriesError;
 }
 
-export async function recordStockOutReport(input: {
-  branch_id: string;
-  type: StockOutType;
-  entry_date: string;
-  notes: string;
-  lines: { product_id: string; quantity_used: number }[];
-}) {
+export async function recordStockOutReport(
+  input: {
+    branch_id: string;
+    type: StockOutType;
+    entry_date: string;
+    notes: string;
+    lines: { product_id: string; quantity_used: number; entry_date: string }[];
+  },
+  attachmentFile?: File | null,
+) {
   const { supabase, companyId, user, branch } = await requireBranch();
   if (input.branch_id && input.branch_id !== branch.id) {
     throw new Error("The form is for a different salon. Switch branch and try again.");
@@ -109,6 +152,7 @@ export async function recordStockOutReport(input: {
   const storeLocationId = await getDefaultStoreLocationId(supabase, branch.id);
   const entryDate = input.entry_date || new Date().toISOString().slice(0, 10);
   const notes = input.notes.trim() || null;
+  for (const line of lines) assertLineDateWithinReport(line.entry_date, entryDate);
 
   const { data: report, error: reportError } = await supabase
     .from("stock_out_reports")
@@ -124,6 +168,15 @@ export async function recordStockOutReport(input: {
     .single();
   if (reportError || !report) throw reportError ?? new Error("Could not create the stock-out.");
 
+  if (attachmentFile && attachmentFile.size > 0) {
+    const attachmentUrl = await uploadStockOutAttachment(companyId, report.id, attachmentFile);
+    const { error: attachError } = await supabase
+      .from("stock_out_reports")
+      .update({ attachment_url: attachmentUrl })
+      .eq("id", report.id);
+    if (attachError) throw attachError;
+  }
+
   for (const line of lines) {
     await insertStockOutLine(supabase, {
       companyId,
@@ -131,7 +184,7 @@ export async function recordStockOutReport(input: {
       storeLocationId,
       userEmail: user.email,
       reportId: report.id,
-      entryDate,
+      entryDate: line.entry_date,
       notes,
       productId: line.product_id,
       quantityUsed: line.quantity_used,
@@ -143,13 +196,16 @@ export async function recordStockOutReport(input: {
   redirect(`/stock-out/${report.id}`);
 }
 
-export async function updateStockOutReport(input: {
-  report_id: string;
-  type: StockOutType;
-  entry_date: string;
-  notes: string;
-  lines: { product_id: string; quantity_used: number }[];
-}) {
+export async function updateStockOutReport(
+  input: {
+    report_id: string;
+    type: StockOutType;
+    entry_date: string;
+    notes: string;
+    lines: { product_id: string; quantity_used: number; entry_date: string }[];
+  },
+  attachmentFile?: File | null,
+) {
   const { supabase, companyId, user, branch } = await requireBranch();
   if (input.type !== "retail" && input.type !== "inhouse") {
     throw new Error("Select a type before adding lines.");
@@ -171,17 +227,20 @@ export async function updateStockOutReport(input: {
   const storeLocationId = await getDefaultStoreLocationId(supabase, branch.id);
   const entryDate = input.entry_date || new Date().toISOString().slice(0, 10);
   const notes = input.notes.trim() || null;
+  for (const line of lines) assertLineDateWithinReport(line.entry_date, entryDate);
 
   await clearReportLines(supabase, report.id);
 
-  const { error: updateError } = await supabase
-    .from("stock_out_reports")
-    .update({
-      channel: input.type,
-      entry_date: entryDate,
-      notes,
-    })
-    .eq("id", report.id);
+  const patch: { channel: StockOutType; entry_date: string; notes: string | null; attachment_url?: string } = {
+    channel: input.type,
+    entry_date: entryDate,
+    notes,
+  };
+  if (attachmentFile && attachmentFile.size > 0) {
+    patch.attachment_url = await uploadStockOutAttachment(companyId, report.id, attachmentFile);
+  }
+
+  const { error: updateError } = await supabase.from("stock_out_reports").update(patch).eq("id", report.id);
   if (updateError) throw updateError;
 
   for (const line of lines) {
@@ -191,7 +250,7 @@ export async function updateStockOutReport(input: {
       storeLocationId,
       userEmail: user.email,
       reportId: report.id,
-      entryDate,
+      entryDate: line.entry_date,
       notes,
       productId: line.product_id,
       quantityUsed: line.quantity_used,

@@ -7,30 +7,39 @@ import { formatQty } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { ProductPicker, type Option } from "@/components/product-picker";
 
-export type StockOutLine = { key: string; product_id: string; quantity_used: number };
+export type StockOutLine = { key: string; product_id: string; quantity_used: number; entry_date: string };
 
 function clampToNonNegativeInteger(value: number) {
   if (!Number.isFinite(value)) return 0;
   return Math.max(0, Math.round(value));
 }
 
+function clampDateToMax(date: string, maxDate: string) {
+  if (!date) return maxDate;
+  return date > maxDate ? maxDate : date;
+}
+
 function AddStockOutLine({
   products,
+  reportDate,
   onAdd,
 }: {
   products: Option[];
-  onAdd: (productId: string, quantity: number) => void;
+  reportDate: string;
+  onAdd: (productId: string, quantity: number, useDate: string) => void;
 }) {
   const [productId, setProductId] = useState("");
   const [quantity, setQuantity] = useState(1);
+  const [useDate, setUseDate] = useState(reportDate);
 
-  const canAdd = Boolean(productId) && quantity > 0;
+  const canAdd = Boolean(productId) && quantity > 0 && Boolean(useDate) && useDate <= reportDate;
 
   function handleAdd() {
     if (!canAdd) return;
-    onAdd(productId, quantity);
+    onAdd(productId, quantity, useDate);
     setProductId("");
     setQuantity(1);
+    setUseDate(reportDate);
   }
 
   return (
@@ -38,6 +47,16 @@ function AddStockOutLine({
       <label className="min-w-64 flex-1 space-y-1 text-sm">
         <span>Search product</span>
         <ProductPicker products={products} value={productId} onSelect={(product) => setProductId(product.id)} />
+      </label>
+      <label className="w-40 space-y-1 text-sm">
+        <span>Use date</span>
+        <input
+          className={fieldClass}
+          type="date"
+          max={reportDate}
+          value={useDate}
+          onChange={(event) => setUseDate(clampDateToMax(event.target.value, reportDate))}
+        />
       </label>
       <label className="w-32 space-y-1 text-sm">
         <span>Quantity</span>
@@ -59,15 +78,19 @@ function AddStockOutLine({
 
 export function StockOutLinesEditor({
   products,
+  reportDate,
   lines,
   onLinesChange,
 }: {
   products: Option[];
+  reportDate: string;
   lines: StockOutLine[];
   onLinesChange: (lines: StockOutLine[]) => void;
 }) {
-  function addLine(productId: string, quantity: number) {
-    const existingIndex = lines.findIndex((line) => line.product_id === productId);
+  function addLine(productId: string, quantity: number, useDate: string) {
+    const existingIndex = lines.findIndex(
+      (line) => line.product_id === productId && line.entry_date === useDate,
+    );
     if (existingIndex >= 0) {
       onLinesChange(
         lines.map((line, index) =>
@@ -76,12 +99,21 @@ export function StockOutLinesEditor({
       );
       return;
     }
-    onLinesChange([...lines, { key: crypto.randomUUID(), product_id: productId, quantity_used: quantity }]);
+    onLinesChange([
+      ...lines,
+      { key: crypto.randomUUID(), product_id: productId, quantity_used: quantity, entry_date: useDate },
+    ]);
   }
 
   function updateQuantity(key: string, quantity: number) {
     onLinesChange(
       lines.map((line) => (line.key === key ? { ...line, quantity_used: clampToNonNegativeInteger(quantity) } : line)),
+    );
+  }
+
+  function updateDate(key: string, date: string) {
+    onLinesChange(
+      lines.map((line) => (line.key === key ? { ...line, entry_date: clampDateToMax(date, reportDate) } : line)),
     );
   }
 
@@ -91,7 +123,7 @@ export function StockOutLinesEditor({
 
   return (
     <div className="space-y-3">
-      <AddStockOutLine products={products} onAdd={addLine} />
+      <AddStockOutLine products={products} reportDate={reportDate} onAdd={addLine} />
 
       {lines.length === 0 ? (
         <p className="rounded-xl border border-dashed border-border bg-card p-4 text-sm text-muted">
@@ -103,6 +135,7 @@ export function StockOutLinesEditor({
             <thead>
               <tr>
                 <th className={thClass}>Product</th>
+                <th className={thClass}>Use date</th>
                 <th className={cn(thClass, "w-1/5 text-right")}>Quantity used</th>
                 <th className={thClass} />
               </tr>
@@ -113,6 +146,15 @@ export function StockOutLinesEditor({
                 return (
                   <tr key={line.key}>
                     <td className={tdClass}>{label}</td>
+                    <td className={tdClass}>
+                      <input
+                        className={fieldClass}
+                        type="date"
+                        max={reportDate}
+                        value={line.entry_date}
+                        onChange={(event) => updateDate(line.key, event.target.value)}
+                      />
+                    </td>
                     <td className={cn(tdClass, "w-1/5")}>
                       <input
                         className={cn(fieldClass, "text-right text-red-600")}

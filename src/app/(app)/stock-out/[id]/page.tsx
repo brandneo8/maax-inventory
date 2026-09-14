@@ -33,6 +33,7 @@ export default async function StockOutDetailPage({
       productId: line.product_id,
       label: productDisplayName(product) || "—",
       quantityUsed: Number(line.quantity_used),
+      entryDate: line.entry_date,
     };
   });
 
@@ -45,6 +46,7 @@ export default async function StockOutDetailPage({
       notes={report.notes}
       keyedInBy={report.keyed_in_by}
       createdAt={report.created_at}
+      attachmentUrl={report.attachment_url}
       lines={lines}
       retailProducts={retailProducts.map((product) => ({ id: product.id, label: productLabel(product) }))}
       inhouseProducts={inhouseProducts.map((product) => ({ id: product.id, label: productLabel(product) }))}

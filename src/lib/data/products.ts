@@ -207,6 +207,22 @@ export async function getBundleContents(supabase: Client, productIds: string[]) 
   return contents;
 }
 
+export async function getProductBranchCosts(supabase: Client, companyId: string) {
+  const { data, error } = await supabase
+    .from("product_branch_costs")
+    .select("product_id, branch_id, avg_unit_cost")
+    .eq("company_id", companyId);
+  if (error) throw error;
+
+  const byProduct: Record<string, Record<string, number>> = {};
+  for (const row of data ?? []) {
+    const branchCosts = byProduct[row.product_id] ?? {};
+    branchCosts[row.branch_id] = Number(row.avg_unit_cost);
+    byProduct[row.product_id] = branchCosts;
+  }
+  return byProduct;
+}
+
 export async function getBranchProductIds(supabase: Client, companyId: string, branchId: string) {
   const locations = await getStoreLocations(supabase, companyId);
   const locationIds = locations.filter((location) => location.branch_id === branchId).map((location) => location.id);

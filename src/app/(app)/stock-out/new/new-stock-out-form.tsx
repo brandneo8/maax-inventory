@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { recordStockOutReport, type StockOutType } from "../actions";
 import { btnClass, fieldClass } from "@/lib/ui";
 import { StockOutLinesEditor, type StockOutLine } from "../stock-out-lines-editor";
@@ -25,9 +25,11 @@ export function NewStockOutForm({
 }) {
   const today = useMemo(() => new Date().toISOString().slice(0, 10), []);
   const [type, setType] = useState<StockOutType | null>(null);
+  const [entryDate, setEntryDate] = useState(today);
   const [lines, setLines] = useState<StockOutLine[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
+  const attachmentInputRef = useRef<HTMLInputElement>(null);
 
   const products = type === "retail" ? retailProducts : type === "inhouse" ? inhouseProducts : [];
 
@@ -46,13 +48,21 @@ export function NewStockOutForm({
     setPending(true);
     setError(null);
     try {
-      await recordStockOutReport({
-        branch_id: branchId,
-        type,
-        entry_date: String(formData.get("entry_date") ?? ""),
-        notes: String(formData.get("notes") ?? ""),
-        lines: lines.map((line) => ({ product_id: line.product_id, quantity_used: line.quantity_used })),
-      });
+      const attachmentFile = attachmentInputRef.current?.files?.[0];
+      await recordStockOutReport(
+        {
+          branch_id: branchId,
+          type,
+          entry_date: entryDate,
+          notes: String(formData.get("notes") ?? ""),
+          lines: lines.map((line) => ({
+            product_id: line.product_id,
+            quantity_used: line.quantity_used,
+            entry_date: line.entry_date,
+          })),
+        },
+        attachmentFile && attachmentFile.size > 0 ? attachmentFile : null,
+      );
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not save this stock-out.");
       setPending(false);
@@ -85,14 +95,24 @@ export function NewStockOutForm({
         </div>
       </div>
 
-      <div className="grid gap-3 rounded-xl border border-border bg-card p-4 md:grid-cols-2">
+      <div className="grid gap-3 rounded-xl border border-border bg-card p-4 md:grid-cols-3">
         <label className="space-y-1 text-sm">
           <span>Entry date</span>
-          <input className={fieldClass} type="date" name="entry_date" defaultValue={today} required />
+          <input
+            className={fieldClass}
+            type="date"
+            value={entryDate}
+            onChange={(event) => setEntryDate(event.target.value)}
+            required
+          />
         </label>
         <label className="space-y-1 text-sm">
           <span>Notes</span>
           <input className={fieldClass} name="notes" />
+        </label>
+        <label className="space-y-1 text-sm">
+          <span>Attachment (optional)</span>
+          <input ref={attachmentInputRef} className={fieldClass} type="file" accept="image/png,image/jpeg,image/webp" />
         </label>
       </div>
 
@@ -103,7 +123,7 @@ export function NewStockOutForm({
             Select Retail use or Inhouse use above to add products.
           </p>
         ) : (
-          <StockOutLinesEditor products={products} lines={lines} onLinesChange={setLines} />
+          <StockOutLinesEditor products={products} reportDate={entryDate} lines={lines} onLinesChange={setLines} />
         )}
       </div>
 

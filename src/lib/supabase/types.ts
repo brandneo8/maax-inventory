@@ -284,6 +284,8 @@ export type Database = {
           purchase_order_id: string | null
           received_by: string | null
           received_date: string
+          rounding_adjustment: number
+          voided_at: string | null
         }
         Insert: {
           branch_id: string
@@ -296,6 +298,8 @@ export type Database = {
           purchase_order_id?: string | null
           received_by?: string | null
           received_date?: string
+          rounding_adjustment?: number
+          voided_at?: string | null
         }
         Update: {
           branch_id?: string
@@ -308,6 +312,8 @@ export type Database = {
           purchase_order_id?: string | null
           received_by?: string | null
           received_date?: string
+          rounding_adjustment?: number
+          voided_at?: string | null
         }
         Relationships: [
           {
@@ -522,6 +528,13 @@ export type Database = {
             foreignKeyName: "inventory_counts_filter_tag_id_fkey"
             columns: ["filter_tag_id"]
             isOneToOne: false
+            referencedRelation: "product_tag_branch_summary"
+            referencedColumns: ["tag_id"]
+          },
+          {
+            foreignKeyName: "inventory_counts_filter_tag_id_fkey"
+            columns: ["filter_tag_id"]
+            isOneToOne: false
             referencedRelation: "tags"
             referencedColumns: ["id"]
           },
@@ -536,6 +549,9 @@ export type Database = {
       }
       inventory_transactions: {
         Row: {
+          classification:
+            | Database["public"]["Enums"]["product_classification"]
+            | null
           company_id: string
           created_by: string | null
           id: string
@@ -547,8 +563,12 @@ export type Database = {
           store_location_id: string
           txn_date: string
           txn_type: Database["public"]["Enums"]["inventory_txn_type"]
+          unit_cost: number | null
         }
         Insert: {
+          classification?:
+            | Database["public"]["Enums"]["product_classification"]
+            | null
           company_id: string
           created_by?: string | null
           id?: string
@@ -560,8 +580,12 @@ export type Database = {
           store_location_id: string
           txn_date?: string
           txn_type: Database["public"]["Enums"]["inventory_txn_type"]
+          unit_cost?: number | null
         }
         Update: {
+          classification?:
+            | Database["public"]["Enums"]["product_classification"]
+            | null
           company_id?: string
           created_by?: string | null
           id?: string
@@ -573,6 +597,7 @@ export type Database = {
           store_location_id?: string
           txn_date?: string
           txn_type?: Database["public"]["Enums"]["inventory_txn_type"]
+          unit_cost?: number | null
         }
         Relationships: [
           {
@@ -638,6 +663,118 @@ export type Database = {
           },
           {
             foreignKeyName: "product_branch_classifications_product_id_fkey"
+            columns: ["product_id"]
+            isOneToOne: false
+            referencedRelation: "products"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      product_branch_cost_history: {
+        Row: {
+          avg_unit_cost: number
+          branch_id: string
+          company_id: string
+          effective_at: string
+          id: string
+          product_id: string
+        }
+        Insert: {
+          avg_unit_cost: number
+          branch_id: string
+          company_id: string
+          effective_at?: string
+          id?: string
+          product_id: string
+        }
+        Update: {
+          avg_unit_cost?: number
+          branch_id?: string
+          company_id?: string
+          effective_at?: string
+          id?: string
+          product_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "product_branch_cost_history_branch_id_fkey"
+            columns: ["branch_id"]
+            isOneToOne: false
+            referencedRelation: "branches"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "product_branch_cost_history_company_id_fkey"
+            columns: ["company_id"]
+            isOneToOne: false
+            referencedRelation: "companies"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "product_branch_cost_history_product_id_fkey"
+            columns: ["product_id"]
+            isOneToOne: false
+            referencedRelation: "low_stock_alerts"
+            referencedColumns: ["product_id"]
+          },
+          {
+            foreignKeyName: "product_branch_cost_history_product_id_fkey"
+            columns: ["product_id"]
+            isOneToOne: false
+            referencedRelation: "products"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      product_branch_costs: {
+        Row: {
+          avg_unit_cost: number
+          branch_id: string
+          company_id: string
+          id: string
+          product_id: string
+          updated_at: string
+        }
+        Insert: {
+          avg_unit_cost?: number
+          branch_id: string
+          company_id: string
+          id?: string
+          product_id: string
+          updated_at?: string
+        }
+        Update: {
+          avg_unit_cost?: number
+          branch_id?: string
+          company_id?: string
+          id?: string
+          product_id?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "product_branch_costs_branch_id_fkey"
+            columns: ["branch_id"]
+            isOneToOne: false
+            referencedRelation: "branches"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "product_branch_costs_company_id_fkey"
+            columns: ["company_id"]
+            isOneToOne: false
+            referencedRelation: "companies"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "product_branch_costs_product_id_fkey"
+            columns: ["product_id"]
+            isOneToOne: false
+            referencedRelation: "low_stock_alerts"
+            referencedColumns: ["product_id"]
+          },
+          {
+            foreignKeyName: "product_branch_costs_product_id_fkey"
             columns: ["product_id"]
             isOneToOne: false
             referencedRelation: "products"
@@ -794,6 +931,13 @@ export type Database = {
             foreignKeyName: "product_tags_tag_id_fkey"
             columns: ["tag_id"]
             isOneToOne: false
+            referencedRelation: "product_tag_branch_summary"
+            referencedColumns: ["tag_id"]
+          },
+          {
+            foreignKeyName: "product_tags_tag_id_fkey"
+            columns: ["tag_id"]
+            isOneToOne: false
             referencedRelation: "tags"
             referencedColumns: ["id"]
           },
@@ -902,6 +1046,51 @@ export type Database = {
           },
         ]
       }
+      purchase_order_audit_events: {
+        Row: {
+          actor_name: string
+          company_id: string
+          created_at: string
+          event_type: string
+          id: string
+          purchase_order_id: string
+          remarks: string | null
+        }
+        Insert: {
+          actor_name: string
+          company_id: string
+          created_at?: string
+          event_type: string
+          id?: string
+          purchase_order_id: string
+          remarks?: string | null
+        }
+        Update: {
+          actor_name?: string
+          company_id?: string
+          created_at?: string
+          event_type?: string
+          id?: string
+          purchase_order_id?: string
+          remarks?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "purchase_order_audit_events_company_id_fkey"
+            columns: ["company_id"]
+            isOneToOne: false
+            referencedRelation: "companies"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "purchase_order_audit_events_purchase_order_id_fkey"
+            columns: ["purchase_order_id"]
+            isOneToOne: false
+            referencedRelation: "purchase_orders"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       purchase_order_items: {
         Row: {
           classification: Database["public"]["Enums"]["product_classification"]
@@ -911,6 +1100,7 @@ export type Database = {
           purchase_order_id: string
           quantity_ordered: number
           quantity_received: number
+          sort_order: number
           tax_rate_id: string | null
           unit_price: number
         }
@@ -922,6 +1112,7 @@ export type Database = {
           purchase_order_id: string
           quantity_ordered: number
           quantity_received?: number
+          sort_order?: number
           tax_rate_id?: string | null
           unit_price: number
         }
@@ -933,6 +1124,7 @@ export type Database = {
           purchase_order_id?: string
           quantity_ordered?: number
           quantity_received?: number
+          sort_order?: number
           tax_rate_id?: string | null
           unit_price?: number
         }
@@ -1172,6 +1364,7 @@ export type Database = {
       }
       stock_out_reports: {
         Row: {
+          attachment_url: string | null
           branch_id: string
           channel: string
           company_id: string
@@ -1182,6 +1375,7 @@ export type Database = {
           notes: string | null
         }
         Insert: {
+          attachment_url?: string | null
           branch_id: string
           channel: string
           company_id: string
@@ -1192,6 +1386,7 @@ export type Database = {
           notes?: string | null
         }
         Update: {
+          attachment_url?: string | null
           branch_id?: string
           channel?: string
           company_id?: string
@@ -1453,8 +1648,46 @@ export type Database = {
         }
         Relationships: []
       }
+      product_tag_branch_summary: {
+        Row: {
+          branch_id: string | null
+          classification:
+            | Database["public"]["Enums"]["product_classification"]
+            | null
+          company_id: string | null
+          sku_count: number | null
+          tag_id: string | null
+          tag_name: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "product_branches_branch_id_fkey"
+            columns: ["branch_id"]
+            isOneToOne: false
+            referencedRelation: "branches"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "products_company_id_fkey"
+            columns: ["company_id"]
+            isOneToOne: false
+            referencedRelation: "companies"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
     }
     Functions: {
+      fn_apply_goods_receipt_cost: {
+        Args: {
+          p_branch_id: string
+          p_company_id: string
+          p_product_id: string
+          p_qty: number
+          p_unit_cost: number
+        }
+        Returns: undefined
+      }
       fn_fill_uncounted_count_items: {
         Args: { p_count_id: string; p_mode: string }
         Returns: undefined
@@ -1465,6 +1698,18 @@ export type Database = {
       }
       fn_my_company_ids: { Args: never; Returns: string[] }
       fn_recompute_po_status: { Args: { p_po_id: string }; Returns: undefined }
+      fn_reverse_goods_receipt: {
+        Args: { p_goods_receipt_id: string }
+        Returns: undefined
+      }
+      fn_void_purchase_order: {
+        Args: {
+          p_branch_id: string
+          p_company_id: string
+          p_purchase_order_id: string
+        }
+        Returns: undefined
+      }
       search_products_for_count: {
         Args: {
           p_branch_id: string

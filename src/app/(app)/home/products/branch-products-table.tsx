@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { CLASSIFICATIONS, classificationLabel, isAvailableInTunai, type ProductClassification } from "@/lib/labels";
+import { CLASSIFICATIONS, isAvailableInTunai, type ProductClassification } from "@/lib/labels";
 import { confirmedRetailPrice } from "@/lib/catalog-pricing";
 import { parseSize, sizesMatch } from "@/lib/product-size";
 import { btnClass, btnSecondaryClass, checkboxClass, fieldClass, tableClass, tdClass, thClass } from "@/lib/ui";
@@ -9,6 +9,7 @@ import { formatMoney, formatQty, formatSku, productDisplayName } from "@/lib/for
 import { searchFieldsMatch } from "@/lib/search";
 import type { CatalogProduct } from "@/lib/data/products";
 import { cn } from "@/lib/utils";
+import { ChipField } from "@/components/chip-field";
 import { bulkUpdateBranchProductClassifications, updateBranchProductClassifications } from "./actions";
 
 type SalonProduct = CatalogProduct & { onHand: number; classifications: ProductClassification[] };
@@ -21,15 +22,7 @@ function groupKey(product: SalonProduct, groupBy: Exclude<GroupBy, "none">) {
   return product.brandSub.trim() || "No Brand_sub";
 }
 
-function matchClassification(raw: string) {
-  const needle = raw.trim().toLowerCase();
-  if (!needle) return null;
-  return (
-    EDITABLE_CLASSIFICATIONS.find(
-      (item) => item.label.toLowerCase() === needle || item.value.toLowerCase() === needle,
-    ) ?? null
-  );
-}
+const TYPE_CHIP_OPTIONS = EDITABLE_CLASSIFICATIONS.map((item) => ({ id: item.value, label: item.label }));
 
 function TypeCell({
   productId,
@@ -42,8 +35,6 @@ function TypeCell({
 }) {
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [inputValue, setInputValue] = useState("");
-  const datalistId = `type-options-${productId}`;
 
   async function save(next: ProductClassification[]) {
     setPending(true);
@@ -58,67 +49,17 @@ function TypeCell({
     }
   }
 
-  function addFromInput() {
-    const match = matchClassification(inputValue);
-    if (!match) return;
-    setInputValue("");
-    if (classifications.includes(match.value)) return;
-    void save([...classifications, match.value]);
-  }
-
-  function removeTag(value: ProductClassification) {
-    void save(classifications.filter((item) => item !== value));
-  }
-
-  const remainingOptions = EDITABLE_CLASSIFICATIONS.filter((item) => !classifications.includes(item.value));
-
   return (
-    <div className="flex min-w-32 flex-col gap-1">
-      {classifications.length > 0 ? (
-        <div className="flex flex-wrap gap-1">
-          {classifications.map((value) => (
-            <span
-              key={value}
-              className="inline-flex items-center gap-1 rounded bg-slate-100 px-1.5 py-0.5 text-xs"
-            >
-              {classificationLabel(value)}
-              <button
-                type="button"
-                className="text-muted hover:text-slate-900"
-                disabled={pending}
-                onClick={() => removeTag(value)}
-                aria-label={`Remove ${classificationLabel(value)}`}
-              >
-                ×
-              </button>
-            </span>
-          ))}
-        </div>
-      ) : null}
-      {remainingOptions.length > 0 ? (
-        <>
-          <input
-            list={datalistId}
-            className="w-full rounded border border-border px-1.5 py-0.5 text-xs"
-            placeholder="Type to add…"
-            value={inputValue}
-            disabled={pending}
-            onChange={(event) => setInputValue(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter") {
-                event.preventDefault();
-                addFromInput();
-              }
-            }}
-            onBlur={addFromInput}
-          />
-          <datalist id={datalistId}>
-            {remainingOptions.map((item) => (
-              <option key={item.value} value={item.label} />
-            ))}
-          </datalist>
-        </>
-      ) : null}
+    <div className="min-w-40 space-y-1">
+      <ChipField
+        options={TYPE_CHIP_OPTIONS}
+        selectedIds={classifications}
+        onChange={(ids) => void save(ids as ProductClassification[])}
+        disabled={pending}
+        compact
+        placeholder="Add type…"
+        ariaLabel="Type"
+      />
       {error ? <span className="text-[10px] text-red-600">{error}</span> : null}
     </div>
   );
