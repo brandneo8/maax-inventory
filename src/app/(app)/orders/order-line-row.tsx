@@ -118,9 +118,10 @@ export function OrderLinesTable({
         <thead>
           <tr>
             <th className={cn(thClass, "w-[10%]")}>SKU</th>
-            <th className={cn(thClass, "w-[20%]")}>Product</th>
+            <th className={cn(thClass, "w-[18%]")}>Product</th>
             <th className={thClass}>Size</th>
             <th className={thClass}>Type</th>
+            <th className={cn(thClass, "w-[12%]")}>Tags</th>
             <th className={thClass}>Qty</th>
             <th className={thClass}>Unit price</th>
             <th className={thClass}>Avg paid here</th>
@@ -142,6 +143,7 @@ export function OrderLinesTable({
                 <td className={tdClass}>{product?.label ?? "—"}</td>
                 <td className={tdClass}>{product?.sizeLabel || "—"}</td>
                 <td className={tdClass}>{classificationLabel(line.classification)}</td>
+                <td className={tdClass}>{product?.tagNames?.filter(Boolean).join(", ") || "—"}</td>
                 <td className={tdClass}>
                   <input
                     className={cn(fieldClass, numberFieldClass)}

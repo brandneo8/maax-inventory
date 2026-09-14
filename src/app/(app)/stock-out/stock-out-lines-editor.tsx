@@ -135,6 +135,7 @@ export function StockOutLinesEditor({
             <thead>
               <tr>
                 <th className={thClass}>Product</th>
+                <th className={thClass}>Tags</th>
                 <th className={thClass}>Use date</th>
                 <th className={cn(thClass, "w-1/5 text-right")}>Quantity used</th>
                 <th className={thClass} />
@@ -142,10 +143,12 @@ export function StockOutLinesEditor({
             </thead>
             <tbody>
               {lines.map((line) => {
-                const label = products.find((product) => product.id === line.product_id)?.label ?? "Unknown product";
+                const product = products.find((item) => item.id === line.product_id);
+                const label = product?.label ?? "Unknown product";
                 return (
                   <tr key={line.key}>
                     <td className={tdClass}>{label}</td>
+                    <td className={tdClass}>{product?.tagNames?.filter(Boolean).join(", ") || "—"}</td>
                     <td className={tdClass}>
                       <input
                         className={fieldClass}

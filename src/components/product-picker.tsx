@@ -12,6 +12,7 @@ export type Option = {
   sku?: string | null;
   barcode?: string | null;
   sizeLabel?: string | null;
+  tagNames?: string[];
 };
 export type ProductOption = Option & {
   defaultClassification: ProductClassification | null;

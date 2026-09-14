@@ -262,8 +262,6 @@ export type ProductDraft = {
   rrp: string;
   threshold: string;
   isSet: boolean;
-  branchIds: string[];
-  tagIds: string[];
   supplierIds: string[];
   components: { productId: string; quantity: number; allocatedCost?: number | null }[];
 };
@@ -291,29 +289,6 @@ async function syncProductSuppliers(
       is_preferred: index === 0,
     })),
   );
-  if (insertError) throw insertError;
-}
-
-async function syncProductTags(supabase: Client, companyId: string, productId: string, requestedIds: string[]) {
-  const wanted = [...new Set(requestedIds.map((id) => id.trim()).filter(Boolean))];
-  let tagIds: string[] = [];
-  if (wanted.length > 0) {
-    const { data: ownedTags, error: tagError } = await supabase
-      .from("tags")
-      .select("id")
-      .eq("company_id", companyId)
-      .in("id", wanted);
-    if (tagError) throw tagError;
-    tagIds = (ownedTags ?? []).map((tag) => tag.id);
-  }
-
-  const { error: deleteError } = await supabase.from("product_tags").delete().eq("product_id", productId);
-  if (deleteError) throw deleteError;
-  if (tagIds.length === 0) return;
-
-  const { error: insertError } = await supabase
-    .from("product_tags")
-    .insert(tagIds.map((tagId) => ({ product_id: productId, tag_id: tagId })));
   if (insertError) throw insertError;
 }
 
@@ -405,7 +380,6 @@ export async function saveProducts(drafts: ProductDraft[]) {
       });
       await syncBundleTag(supabase, companyId, productId, draft.isSet);
     }
-    await syncProductTags(supabase, companyId, productId, draft.tagIds ?? []);
     saved.push({ clientKey: draft.clientKey ?? null, id: productId });
   }
 

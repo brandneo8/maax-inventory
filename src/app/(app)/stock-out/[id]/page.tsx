@@ -48,8 +48,16 @@ export default async function StockOutDetailPage({
       createdAt={report.created_at}
       attachmentUrl={report.attachment_url}
       lines={lines}
-      retailProducts={retailProducts.map((product) => ({ id: product.id, label: productLabel(product) }))}
-      inhouseProducts={inhouseProducts.map((product) => ({ id: product.id, label: productLabel(product) }))}
+      retailProducts={retailProducts.map((product) => ({
+        id: product.id,
+        label: productLabel(product),
+        tagNames: product.tagNames,
+      }))}
+      inhouseProducts={inhouseProducts.map((product) => ({
+        id: product.id,
+        label: productLabel(product),
+        tagNames: product.tagNames,
+      }))}
     />
   );
 }

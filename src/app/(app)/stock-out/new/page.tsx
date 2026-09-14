@@ -30,8 +30,16 @@ export default async function NewStockOutPage() {
       <NewStockOutForm
         branchId={branch.id}
         branchName={branch.displayName}
-        retailProducts={retailProducts.map((product) => ({ id: product.id, label: productLabel(product) }))}
-        inhouseProducts={inhouseProducts.map((product) => ({ id: product.id, label: productLabel(product) }))}
+        retailProducts={retailProducts.map((product) => ({
+          id: product.id,
+          label: productLabel(product),
+          tagNames: product.tagNames,
+        }))}
+        inhouseProducts={inhouseProducts.map((product) => ({
+          id: product.id,
+          label: productLabel(product),
+          tagNames: product.tagNames,
+        }))}
       />
     </div>
   );

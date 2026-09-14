@@ -1,23 +1,13 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { SalonChipField } from "@/components/salon-chip-field";
 import { parseSize } from "@/lib/product-size";
 import { btnClass, btnSecondaryClass, fieldClass } from "@/lib/ui";
 import { cn } from "@/lib/utils";
 
-export type BulkEditFieldKey =
-  | "branchIds"
-  | "tagIds"
-  | "brand"
-  | "brandSub"
-  | "size"
-  | "supplierId"
-  | "threshold";
+export type BulkEditFieldKey = "brand" | "brandSub" | "size" | "supplierId" | "threshold";
 
 export type BulkEditFields = {
-  branchIds?: string[];
-  tagIds?: string[];
   brand?: string;
   brandSub?: string;
   size?: string;
@@ -26,8 +16,6 @@ export type BulkEditFields = {
 };
 
 const FIELD_LABELS: Record<BulkEditFieldKey, string> = {
-  branchIds: "Salons",
-  tagIds: "Tag",
   brand: "Brand",
   brandSub: "Brand_sub",
   size: "Size",
@@ -35,16 +23,8 @@ const FIELD_LABELS: Record<BulkEditFieldKey, string> = {
   threshold: "Threshold",
 };
 
-const DEFAULT_FIELDS: BulkEditFieldKey[] = ["branchIds", "tagIds"];
-const ALL_FIELDS: BulkEditFieldKey[] = [
-  "branchIds",
-  "tagIds",
-  "brand",
-  "brandSub",
-  "size",
-  "supplierId",
-  "threshold",
-];
+const DEFAULT_FIELDS: BulkEditFieldKey[] = ["brand", "brandSub"];
+const ALL_FIELDS: BulkEditFieldKey[] = ["brand", "brandSub", "size", "supplierId", "threshold"];
 
 function brandSubListId(brand: string) {
   return `bulk-brand-sub-${brand.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
@@ -54,8 +34,6 @@ export function BulkEditModal({
   open,
   pending,
   selectedCount,
-  tags,
-  branches,
   suppliers,
   brandOptions,
   brandSubsByBrand,
@@ -65,8 +43,6 @@ export function BulkEditModal({
   open: boolean;
   pending: boolean;
   selectedCount: number;
-  tags: { id: string; name: string }[];
-  branches: { id: string; name: string }[];
   suppliers: { id: string; name: string }[];
   brandOptions: string[];
   brandSubsByBrand: Map<string, string[]>;
@@ -75,8 +51,6 @@ export function BulkEditModal({
 }) {
   const [fieldKeys, setFieldKeys] = useState<BulkEditFieldKey[]>(DEFAULT_FIELDS);
   const [addKey, setAddKey] = useState<BulkEditFieldKey | "">("");
-  const [branchIds, setBranchIds] = useState<string[]>([]);
-  const [tagId, setTagId] = useState("");
   const [brand, setBrand] = useState("");
   const [brandSub, setBrandSub] = useState("");
   const [size, setSize] = useState("");
@@ -92,8 +66,6 @@ export function BulkEditModal({
   function reset() {
     setFieldKeys(DEFAULT_FIELDS);
     setAddKey("");
-    setBranchIds([]);
-    setTagId("");
     setBrand("");
     setBrandSub("");
     setSize("");
@@ -129,8 +101,6 @@ export function BulkEditModal({
 
     const fields: BulkEditFields = {};
     for (const key of fieldKeys) {
-      if (key === "branchIds") fields.branchIds = [...branchIds];
-      if (key === "tagIds") fields.tagIds = tagId ? [tagId] : [];
       if (key === "brand") fields.brand = brand;
       if (key === "brandSub") fields.brandSub = brandSub;
       if (key === "size") fields.size = size;
@@ -186,30 +156,6 @@ export function BulkEditModal({
             <div key={key} className="flex items-start gap-2">
               <label className="min-w-0 flex-1 space-y-1 text-sm">
                 <span className="font-medium">{FIELD_LABELS[key]}</span>
-                {key === "branchIds" ? (
-                  <SalonChipField
-                    branches={branches}
-                    selectedIds={branchIds}
-                    onChange={setBranchIds}
-                    disabled={pending}
-                    ariaLabel="Set salons for selected products"
-                  />
-                ) : null}
-                {key === "tagIds" ? (
-                  <select
-                    className={fieldClass}
-                    value={tagId}
-                    onChange={(event) => setTagId(event.target.value)}
-                    disabled={pending}
-                  >
-                    <option value="">None</option>
-                    {tags.map((tag) => (
-                      <option key={tag.id} value={tag.id}>
-                        {tag.name}
-                      </option>
-                    ))}
-                  </select>
-                ) : null}
                 {key === "brand" ? (
                   <input
                     className={fieldClass}

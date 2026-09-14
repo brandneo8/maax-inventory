@@ -63,6 +63,10 @@ export default async function NewOrderPage() {
             sizeLabel: product.size_label,
             barcode: product.barcode,
             branchAvgCost: branchCosts[product.id]?.[branch.id] ?? null,
+            tagNames: (product.product_tags ?? []).flatMap((row) => {
+              const tag = Array.isArray(row.tags) ? row.tags[0] : row.tags;
+              return tag?.name ? [tag.name] : [];
+            }),
           }))}
         />
       )}

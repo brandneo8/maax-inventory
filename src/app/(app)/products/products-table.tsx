@@ -51,7 +51,12 @@ export type ProductRow = {
 };
 
 type TableDraft = ProductDraft & {
+  // Read-only in this table now — tags are edited from /admin/branches, and
+  // salon assignment from /admin/branches too. Kept here only so this
+  // table's own group-by/sort/filter/CSV export can still show them.
+  tagIds: string[];
   tagNames: string[];
+  branchIds: string[];
   sizeMl: number | null;
   supplierName: string;
   gstRegistered: boolean;
@@ -531,8 +536,6 @@ function sameIdList(left: string[] = [], right: string[] = []) {
 }
 
 function overrideCaughtUp(product: ProductRow, override: Partial<TableDraft>) {
-  if (override.tagIds && !sameIdList(product.tagIds, override.tagIds)) return false;
-  if (override.branchIds && !sameIdList(product.branchIds, override.branchIds)) return false;
   if (override.brand != null && product.brand !== override.brand) return false;
   if (override.brandSub != null && product.brandSub !== override.brandSub) return false;
   if (override.size != null && (product.sizeLabel ?? "") !== override.size) return false;
@@ -605,16 +608,9 @@ async function postCatalogBulk(payload: { productIds: string[]; fields: BulkEdit
 
 function bulkFieldsToPatch(
   fields: BulkEditFields,
-  tags: { id: string; name: string }[],
   suppliers: { id: string; name: string; gstRegistered: boolean }[],
 ): Partial<TableDraft> {
   const patch: Partial<TableDraft> = {};
-  if (fields.branchIds !== undefined) patch.branchIds = fields.branchIds;
-  if (fields.tagIds !== undefined) {
-    const tag = tags.find((item) => item.id === fields.tagIds?.[0]);
-    patch.tagIds = tag ? [tag.id] : [];
-    patch.tagNames = tag ? [tag.name] : [];
-  }
   if (fields.brand !== undefined) patch.brand = fields.brand.trim();
   if (fields.brandSub !== undefined) patch.brandSub = fields.brandSub.trim();
   if (fields.size !== undefined) {
@@ -983,7 +979,7 @@ export function ProductsTable({
   const pageCount = Math.max(1, Math.ceil(displayGrouped.length / pageSize));
   const currentPage = Math.min(page, pageCount - 1);
   const visible = displayGrouped.slice(currentPage * pageSize, currentPage * pageSize + pageSize);
-  const columnCount = 25 + branches.length;
+  const columnCount = 24 + branches.length;
   const usedInBundles = useMemo(() => {
     const byChild = new Map<string, string[]>();
     for (const row of rows) {
@@ -1199,7 +1195,7 @@ export function ProductsTable({
       throw new Error("Select at least one product.");
     }
     const productIds = [...selected];
-    const patch = bulkFieldsToPatch(fields, tags, suppliers);
+    const patch = bulkFieldsToPatch(fields, suppliers);
     applyToSelected(productIds, patch);
     setPending(true);
     setError(null);
@@ -1291,8 +1287,6 @@ export function ProductsTable({
           rrp: row.rrp,
           threshold: row.threshold,
           isSet: row.isSet,
-          branchIds: row.branchIds,
-          tagIds: row.tagIds,
           supplierIds: row.supplierIds,
           components: row.componentLabels.length > 0 ? contentsPayload(row.componentLabels) : row.components,
         })),
@@ -1339,14 +1333,6 @@ export function ProductsTable({
     if (editing && hasUnsaved) return;
     setSnapshotAt(new Date());
     router.refresh();
-  }
-
-  function setRowTag(index: number, tagId: string) {
-    const tag = tags.find((item) => item.id === tagId);
-    updateRow(index, {
-      tagIds: tag ? [tag.id] : [],
-      tagNames: tag ? [tag.name] : [],
-    });
   }
 
   function setRowSupplier(index: number, supplierId: string) {
@@ -1835,11 +1821,6 @@ export function ProductsTable({
                 </SortableHeader>
               </th>
               <th className={cn(thClass, wField, stickyHead)}>Available in Tunai</th>
-              <th className={cn(thClass, wContents, stickyHead)}>
-                <SortableHeader column="tags" active={sortColumn === "tags"} direction={sortDirection} onSort={toggleSort}>
-                  Tags
-                </SortableHeader>
-              </th>
               <th className={cn(thClass, wSupplier, stickyHead)}>
                 <SortableHeader column="supplier" active={sortColumn === "supplier"} direction={sortDirection} onSort={toggleSort}>
                   Supplier
@@ -1925,8 +1906,6 @@ export function ProductsTable({
                 const groupIds = showGroup ? groupProductIds(groupKey) : [];
                 const groupSelectedCount = groupIds.filter((id) => selected.includes(id)).length;
                 const groupCollapsed = groupKey !== NEW_PRODUCTS && collapsedGroups.has(groupKey);
-                const justUpdated = Boolean(row.id && recentBulkIds.has(row.id));
-                const updatedCell = justUpdated ? "ring-2 ring-emerald-400 ring-inset" : "";
                 const inBundles = row.id ? usedInBundles.get(row.id) ?? [] : [];
                 const contentsLabel = row.isSet
                   ? row.componentLabels.length === 0
@@ -2116,30 +2095,6 @@ export function ProductsTable({
                       <ViewValue>
                         {isAvailableInTunai(flattenClassifications(row.classificationsByBranch)) ? "Yes" : "No"}
                       </ViewValue>
-                    </td>
-                    <td className={cn(tdClass, wContents)}>
-                      {editing ? (
-                        tags.length === 0 ? (
-                          <span className="text-sm text-muted">—</span>
-                        ) : (
-                          <select
-                            key={`tag-${row.id ?? index}-${row.tagIds[0] ?? "none"}`}
-                            className={cn(fieldClass, wContents, updatedCell)}
-                            value={row.tagIds[0] ?? ""}
-                            onChange={(event) => setRowTag(index, event.target.value)}
-                            aria-label={`Tag for ${productDisplayName(row) || row.orderName || "product"}`}
-                          >
-                            <option value="">None</option>
-                            {tags.map((tag) => (
-                              <option key={tag.id} value={tag.id}>
-                                {tag.name}
-                              </option>
-                            ))}
-                          </select>
-                        )
-                      ) : (
-                        <ViewValue>{dash(row.tagNames.filter(Boolean).join(", "))}</ViewValue>
-                      )}
                     </td>
                     <td className={cn(tdClass, wSupplier)}>
                       {editing ? (
@@ -2349,8 +2304,6 @@ export function ProductsTable({
           open={bulkOpen}
           pending={pending}
           selectedCount={selectedCount}
-          tags={tags}
-          branches={branches}
           suppliers={suppliers}
           brandOptions={brandOptions}
           brandSubsByBrand={brandSubsByBrand}

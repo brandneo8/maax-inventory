@@ -73,57 +73,6 @@ async function ownedProductIds(supabase: Client, companyId: string, productIds: 
   return ownedIds;
 }
 
-async function applyTags(supabase: Client, companyId: string, ownedIds: string[], requestedTagIds: string[]) {
-  let tagIds: string[] = [];
-  if (requestedTagIds.length > 0) {
-    const { data, error } = await supabase
-      .from("tags")
-      .select("id")
-      .eq("company_id", companyId)
-      .in("id", requestedTagIds);
-    if (error) throw new Error(error.message);
-    tagIds = (data ?? []).map((tag) => tag.id);
-  }
-
-  for (const ids of chunkIds(ownedIds)) {
-    const { error } = await supabase.from("product_tags").delete().in("product_id", ids);
-    if (error) throw new Error(error.message);
-  }
-  if (tagIds.length > 0) {
-    for (const ids of chunkIds(ownedIds)) {
-      const { error } = await supabase.from("product_tags").insert(
-        ids.flatMap((productId) => tagIds.map((tagId) => ({ product_id: productId, tag_id: tagId }))),
-      );
-      if (error) throw new Error(error.message);
-    }
-  }
-}
-
-async function applySalons(supabase: Client, companyId: string, ownedIds: string[], requestedBranchIds: string[]) {
-  const { data: companyBranches, error: branchError } = await supabase
-    .from("branches")
-    .select("id")
-    .eq("company_id", companyId);
-  if (branchError) throw new Error(branchError.message);
-  const valid = new Set((companyBranches ?? []).map((branch) => branch.id));
-  const branchIds = requestedBranchIds.filter((id) => valid.has(id));
-
-  for (const ids of chunkIds(ownedIds)) {
-    const { error } = await supabase.from("product_branches").delete().in("product_id", ids);
-    if (error) throw new Error(error.message);
-  }
-  if (branchIds.length > 0) {
-    for (const ids of chunkIds(ownedIds)) {
-      const { error } = await supabase.from("product_branches").insert(
-        ids.flatMap((productId) =>
-          branchIds.map((branchId) => ({ product_id: productId, branch_id: branchId })),
-        ),
-      );
-      if (error) throw new Error(error.message);
-    }
-  }
-}
-
 async function applySuppliers(supabase: Client, companyId: string, ownedIds: string[], supplierId: string) {
   const { data: companySuppliers, error: supplierError } = await supabase
     .from("suppliers")
@@ -217,12 +166,6 @@ async function applyEdit(
     }
   }
 
-  if (hasField(fields, "tagIds")) {
-    await applyTags(supabase, companyId, ownedIds, asIdList(fields.tagIds));
-  }
-  if (hasField(fields, "branchIds")) {
-    await applySalons(supabase, companyId, ownedIds, asIdList(fields.branchIds));
-  }
   if (hasField(fields, "supplierId")) {
     await applySuppliers(supabase, companyId, ownedIds, asString(fields.supplierId).trim());
   }
@@ -233,8 +176,6 @@ export async function POST(request: Request) {
     | {
         kind?: unknown;
         productIds?: unknown;
-        tagIds?: unknown;
-        branchIds?: unknown;
         fields?: unknown;
       }
     | null;
@@ -256,18 +197,6 @@ export async function POST(request: Request) {
         return NextResponse.json({ error: "Add at least one field to apply." }, { status: 400 });
       }
       await applyEdit(supabase, companyId, productIds, fields);
-    } else if (body?.kind === "tags") {
-      const ownedIds = await ownedProductIds(supabase, companyId, productIds);
-      if (ownedIds.length === 0) {
-        return NextResponse.json({ error: "No matching products to update." }, { status: 400 });
-      }
-      await applyTags(supabase, companyId, ownedIds, asIdList(body.tagIds));
-    } else if (body?.kind === "salons") {
-      const ownedIds = await ownedProductIds(supabase, companyId, productIds);
-      if (ownedIds.length === 0) {
-        return NextResponse.json({ error: "No matching products to update." }, { status: 400 });
-      }
-      await applySalons(supabase, companyId, ownedIds, asIdList(body.branchIds));
     } else {
       return NextResponse.json({ error: "Unknown bulk action." }, { status: 400 });
     }
