@@ -1,6 +1,7 @@
 "use client";
 
 import { Fragment, useMemo, useState } from "react";
+import { formatQty } from "@/lib/format";
 import { CLASSIFICATIONS, type ProductClassification } from "@/lib/labels";
 import { btnSecondaryClass, checkboxClass, tableClass, tdClass, thClass } from "@/lib/ui";
 import { cn } from "@/lib/utils";
@@ -50,9 +51,14 @@ const COL_SELECT = "w-[4%]";
 const COL_SKU = "w-[9%]";
 const COL_PRODUCT = "w-[20%]";
 const COL_SIZE = "w-[7%]";
-const COL_TYPE = "w-[25%]";
-const COL_TAGS = "w-[23%]";
+const COL_TAGS = "w-[21%]";
 const COL_ASSIGNED = "w-[12%]";
+const COL_TYPE = "w-[19%]";
+const COL_ON_HAND = "w-[8%]";
+
+// Marks the start of the branch-specific columns (Assigned, Type) — everything
+// to the left (SKU/Product/Size/Tags) is company-wide, not tied to this branch.
+const BRANCH_SECTION_START = "border-l-2 border-slate-300";
 
 function AssignToggle({
   productId,
@@ -329,11 +335,13 @@ export function BranchAssignmentReport({
   tags: initialTags,
   products: initialProducts,
   pendingRequests,
+  onHandByProductBranch,
 }: {
   branches: BranchOption[];
   tags: ChipOption[];
   products: BranchReportProduct[];
   pendingRequests: PendingBranchRequest[];
+  onHandByProductBranch: Record<string, number>;
 }) {
   const [products, setProducts] = useState(initialProducts);
   const [tags, setTags] = useState(initialTags);
@@ -584,9 +592,8 @@ export function BranchAssignmentReport({
                 <th className={cn(thClass, COL_SKU)}>SKU</th>
                 <th className={cn(thClass, COL_PRODUCT)}>Product</th>
                 <th className={cn(thClass, COL_SIZE)}>Size</th>
-                <th className={cn(thClass, COL_TYPE)}>Type</th>
                 <th className={cn(thClass, COL_TAGS)}>Tags</th>
-                <th className={cn(thClass, COL_ASSIGNED)}>
+                <th className={cn(thClass, COL_ASSIGNED, BRANCH_SECTION_START)}>
                   <label className="flex items-center gap-1.5 font-normal normal-case">
                     <input
                       type="checkbox"
@@ -598,18 +605,20 @@ export function BranchAssignmentReport({
                     <span>Assigned</span>
                   </label>
                 </th>
+                <th className={cn(thClass, COL_TYPE)}>Type</th>
+                <th className={cn(thClass, COL_ON_HAND)}>On hand</th>
               </tr>
             </thead>
             <tbody>
               {selectedSeries.length === 0 ? (
                 <tr>
-                  <td className={tdClass} colSpan={7}>
+                  <td className={tdClass} colSpan={8}>
                     No products in this brand.
                   </td>
                 </tr>
               ) : visibleSeries.length === 0 ? (
                 <tr>
-                  <td className={tdClass} colSpan={7}>
+                  <td className={tdClass} colSpan={8}>
                     No SKUs match this filter.
                   </td>
                 </tr>
@@ -634,7 +643,7 @@ export function BranchAssignmentReport({
                               aria-label={`Select all rows in ${seriesKey}`}
                             />
                           </td>
-                          <td className={tdClass} colSpan={6}>
+                          <td className={tdClass} colSpan={7}>
                             <div className="flex flex-wrap items-center justify-between gap-3">
                               <button
                                 type="button"
@@ -663,7 +672,7 @@ export function BranchAssignmentReport({
                         </tr>
                         {selected.size > 0 ? (
                           <tr>
-                            <td className={cn(tdClass, "p-0")} colSpan={7}>
+                            <td className={cn(tdClass, "p-0")} colSpan={8}>
                               <BulkActionsBar
                                 selectedCount={selected.size}
                                 tagOptions={tags}
@@ -701,14 +710,6 @@ export function BranchAssignmentReport({
                                   <td className={tdClass}>{product.label}</td>
                                   <td className={tdClass}>{product.sizeLabel || "—"}</td>
                                   <td className={tdClass}>
-                                    <TypeEditCell
-                                      productId={product.id}
-                                      branchId={branchId}
-                                      classifications={types}
-                                      onSaved={(next) => updateProductClassificationLocal(product.id, next)}
-                                    />
-                                  </td>
-                                  <td className={tdClass}>
                                     <TagEditCell
                                       productId={product.id}
                                       tagOptions={tags}
@@ -717,7 +718,7 @@ export function BranchAssignmentReport({
                                       onTagCreated={addTagOption}
                                     />
                                   </td>
-                                  <td className={tdClass}>
+                                  <td className={cn(tdClass, BRANCH_SECTION_START)}>
                                     <div className="flex items-center gap-1.5">
                                       <AssignToggle
                                         productId={product.id}
@@ -740,6 +741,17 @@ export function BranchAssignmentReport({
                                         </span>
                                       ) : null}
                                     </div>
+                                  </td>
+                                  <td className={tdClass}>
+                                    <TypeEditCell
+                                      productId={product.id}
+                                      branchId={branchId}
+                                      classifications={types}
+                                      onSaved={(next) => updateProductClassificationLocal(product.id, next)}
+                                    />
+                                  </td>
+                                  <td className={tdClass}>
+                                    {formatQty(onHandByProductBranch[`${product.id}::${branchId}`] ?? 0)}
                                   </td>
                                 </tr>
                               );

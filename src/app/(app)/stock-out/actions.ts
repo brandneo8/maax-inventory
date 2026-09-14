@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { requireBranch } from "@/lib/auth";
 import { getDefaultStoreLocationId } from "@/lib/data/lookups";
+import { getBundleComponents } from "@/lib/data/product-components";
 import { createAdminClient } from "@/lib/supabase/admin";
 
 export type StockOutType = "retail" | "inhouse";
@@ -79,26 +80,47 @@ async function insertStockOutLine(
 
   if (error || !entry) throw error ?? new Error("Could not save the stock-out entry.");
 
-  const { data: cost } = await supabase
-    .from("product_branch_costs")
-    .select("avg_unit_cost")
-    .eq("product_id", input.productId)
-    .eq("branch_id", input.branchId)
-    .maybeSingle();
+  const qtyUsed = Math.abs(input.quantityUsed);
+  const components = await getBundleComponents(supabase, input.productId);
 
-  const { error: txnError } = await supabase.from("inventory_transactions").insert({
-    company_id: input.companyId,
-    product_id: input.productId,
-    store_location_id: input.storeLocationId,
-    txn_type: "retail_use",
-    quantity_change: -Math.abs(input.quantityUsed),
-    reference_table: "retail_use_entries",
-    reference_id: entry.id,
-    created_by: input.userEmail,
-    notes: input.notes ?? `Stock-out (${input.type})`,
-    unit_cost: cost?.avg_unit_cost ?? 0,
-    classification: input.type,
-  });
+  // A bundle SKU never carries its own stock/cost (mirrors receiving — see
+  // fn_after_goods_receipt_item_insert): using it fans out to deduct each
+  // component by its recipe quantity, costed at the component's own current
+  // average. Nothing is written against the bundle's own product_id.
+  const lines =
+    components.length > 0
+      ? components.map((component) => ({
+          productId: component.productId,
+          quantity: qtyUsed * component.quantity,
+          notes: `${input.notes ?? `Stock-out (${input.type})`} (unpacked from bundle usage)`,
+        }))
+      : [{ productId: input.productId, quantity: qtyUsed, notes: input.notes ?? `Stock-out (${input.type})` }];
+
+  const { data: costs } = await supabase
+    .from("product_branch_costs")
+    .select("product_id, avg_unit_cost")
+    .eq("branch_id", input.branchId)
+    .in(
+      "product_id",
+      lines.map((line) => line.productId),
+    );
+  const costByProduct = new Map((costs ?? []).map((row) => [row.product_id, row.avg_unit_cost]));
+
+  const { error: txnError } = await supabase.from("inventory_transactions").insert(
+    lines.map((line) => ({
+      company_id: input.companyId,
+      product_id: line.productId,
+      store_location_id: input.storeLocationId,
+      txn_type: "retail_use" as const,
+      quantity_change: -line.quantity,
+      reference_table: "retail_use_entries",
+      reference_id: entry.id,
+      created_by: input.userEmail,
+      notes: line.notes,
+      unit_cost: costByProduct.get(line.productId) ?? 0,
+      classification: input.type,
+    })),
+  );
 
   if (txnError) throw txnError;
 }

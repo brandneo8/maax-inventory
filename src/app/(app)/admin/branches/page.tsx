@@ -2,18 +2,27 @@ import { requireAdmin } from "@/lib/auth";
 import { getBranches, getTags } from "@/lib/data/lookups";
 import { getPendingBranchProductRequests } from "@/lib/data/orders";
 import { getCatalogProducts } from "@/lib/data/products";
+import { getCurrentStock } from "@/lib/data/stock";
 import { productDisplayName } from "@/lib/format";
 import { salonName } from "@/lib/labels";
 import { BranchAssignmentReport } from "./branch-assignment-report";
 
 export default async function AdminBranchesPage() {
   const { supabase, companyId } = await requireAdmin();
-  const [branches, products, tags, pendingRequests] = await Promise.all([
+  const [branches, products, tags, pendingRequests, stock] = await Promise.all([
     getBranches(supabase, companyId),
     getCatalogProducts(supabase, companyId),
     getTags(supabase, companyId),
     getPendingBranchProductRequests(supabase, companyId),
+    getCurrentStock(supabase),
   ]);
+
+  const onHandByProductBranch: Record<string, number> = {};
+  for (const row of stock) {
+    if (!row.product_id || !row.branch_id) continue;
+    const key = `${row.product_id}::${row.branch_id}`;
+    onHandByProductBranch[key] = (onHandByProductBranch[key] ?? 0) + Number(row.quantity_on_hand ?? 0);
+  }
 
   return (
     <div className="space-y-4">
@@ -40,6 +49,7 @@ export default async function AdminBranchesPage() {
           branchIds: product.branchIds,
         }))}
         pendingRequests={pendingRequests}
+        onHandByProductBranch={onHandByProductBranch}
       />
     </div>
   );

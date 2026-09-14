@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/auth";
-import { persistProductComponents } from "@/lib/data/product-components";
+import { getBundleMigratableStock, persistProductComponents } from "@/lib/data/product-components";
 
 function asComponents(value: unknown) {
   if (!Array.isArray(value)) return [];
@@ -60,7 +60,9 @@ export async function POST(request: Request) {
       replaceEmpty: body?.replaceEmpty === true,
     });
 
-    return NextResponse.json({ ok: true });
+    const migratable = body?.replaceEmpty === true ? null : await getBundleMigratableStock(supabase, productId);
+
+    return NextResponse.json({ ok: true, migratable });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Could not save bundle contents.";
     return NextResponse.json({ error: message }, { status: 400 });

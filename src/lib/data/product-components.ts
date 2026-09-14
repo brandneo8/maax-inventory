@@ -55,6 +55,104 @@ export async function syncBundleTag(
   if (error) throw new Error(error.message);
 }
 
+export type BundleComponent = { productId: string; quantity: number };
+
+/**
+ * The BOM for a bundle product, or an empty array if it isn't currently a
+ * bundle (or has no components defined). Used to fan usage/receiving of the
+ * bundle SKU out to its components — the bundle itself never carries its own
+ * stock or cost, see fn_after_goods_receipt_item_insert.
+ */
+export async function getBundleComponents(supabase: Client, productId: string): Promise<BundleComponent[]> {
+  const { data: product, error: productError } = await supabase
+    .from("products")
+    .select("is_set")
+    .eq("id", productId)
+    .maybeSingle();
+  if (productError) throw new Error(productError.message);
+  if (!product?.is_set) return [];
+
+  const { data, error } = await supabase
+    .from("product_components")
+    .select("component_product_id, quantity")
+    .eq("set_product_id", productId);
+  if (error) throw new Error(error.message);
+  return (data ?? []).map((row) => ({ productId: row.component_product_id, quantity: Number(row.quantity) }));
+}
+
+export type BundleMigratableStock = {
+  quantity: number;
+  value: number;
+  locationCount: number;
+};
+
+/**
+ * Preview of whatever stock/cost a bundle's parent SKU is still carrying from
+ * before it became a bundle (receipts recorded while it was a plain product).
+ * Returns null when there's nothing to migrate.
+ */
+export async function getBundleMigratableStock(
+  supabase: Client,
+  productId: string,
+): Promise<BundleMigratableStock | null> {
+  const { data: stock, error } = await supabase
+    .from("current_stock")
+    .select("store_location_id, quantity_on_hand")
+    .eq("product_id", productId)
+    .gt("quantity_on_hand", 0);
+  if (error) throw new Error(error.message);
+  if (!stock?.length) return null;
+
+  const locationIds = [...new Set(stock.map((row) => row.store_location_id).filter(Boolean))] as string[];
+  const { data: locations, error: locationError } = await supabase
+    .from("store_locations")
+    .select("id, branch_id")
+    .in("id", locationIds);
+  if (locationError) throw new Error(locationError.message);
+  const branchByLocation = new Map((locations ?? []).map((location) => [location.id, location.branch_id]));
+
+  const branchIds = [...new Set([...branchByLocation.values()])];
+  const { data: costs, error: costError } = await supabase
+    .from("product_branch_costs")
+    .select("branch_id, avg_unit_cost")
+    .eq("product_id", productId)
+    .in("branch_id", branchIds);
+  if (costError) throw new Error(costError.message);
+  const costByBranch = new Map((costs ?? []).map((row) => [row.branch_id, Number(row.avg_unit_cost)]));
+
+  let quantity = 0;
+  let value = 0;
+  for (const row of stock) {
+    const branchId = row.store_location_id ? branchByLocation.get(row.store_location_id) : undefined;
+    const avgCost = branchId ? (costByBranch.get(branchId) ?? 0) : 0;
+    quantity += Number(row.quantity_on_hand);
+    value += Number(row.quantity_on_hand) * avgCost;
+  }
+
+  if (quantity <= 0) return null;
+  return { quantity, value: roundMoney(value), locationCount: stock.length };
+}
+
+export type BundleMigrationResult = {
+  locationsMoved: number;
+  quantityMoved: number;
+  valueMoved: number;
+};
+
+/** Moves a bundle parent's remaining stock/cost into its components. See the migration comment on fn_migrate_bundle_stock_to_components. */
+export async function migrateBundleStock(
+  supabase: Client,
+  companyId: string,
+  productId: string,
+): Promise<BundleMigrationResult | null> {
+  const { data, error } = await supabase.rpc("fn_migrate_bundle_stock_to_components", {
+    p_company_id: companyId,
+    p_product_id: productId,
+  });
+  if (error) throw new Error(error.message || "Could not migrate existing stock.");
+  return data as BundleMigrationResult | null;
+}
+
 export async function persistProductComponents(
   supabase: Client,
   companyId: string,

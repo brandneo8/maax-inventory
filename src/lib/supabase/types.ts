@@ -1696,6 +1696,10 @@ export type Database = {
         Args: { p_email: string; p_user_id: string }
         Returns: undefined
       }
+      fn_migrate_bundle_stock_to_components: {
+        Args: { p_company_id: string; p_product_id: string }
+        Returns: Json
+      }
       fn_my_company_ids: { Args: never; Returns: string[] }
       fn_recompute_po_status: { Args: { p_po_id: string }; Returns: undefined }
       fn_reverse_goods_receipt: {

@@ -565,10 +565,30 @@ async function postCatalogBundle(payload: {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
-  const data = (await response.json().catch(() => null)) as { error?: string } | null;
+  const data = (await response.json().catch(() => null)) as {
+    error?: string;
+    migratable?: { quantity: number; value: number; locationCount: number } | null;
+  } | null;
   if (!response.ok) {
     throw new Error(data?.error || "Could not save bundle contents.");
   }
+  return { migratable: data?.migratable ?? null };
+}
+
+async function postCatalogBundleMigrate(productId: string) {
+  const response = await fetch("/admin/catalog-bundle/migrate", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ productId }),
+  });
+  const data = (await response.json().catch(() => null)) as {
+    error?: string;
+    result?: { locationsMoved: number; quantityMoved: number; valueMoved: number } | null;
+  } | null;
+  if (!response.ok) {
+    throw new Error(data?.error || "Could not migrate existing stock.");
+  }
+  return data?.result ?? null;
 }
 
 async function postCatalogBulk(payload: { productIds: string[]; fields: BulkEditFields }) {
@@ -668,6 +688,13 @@ export function ProductsTable({
   const [dirty, setDirty] = useState<Set<number>>(() => new Set());
   const [bundleIndex, setBundleIndex] = useState<number | null>(null);
   const [bundleQuery, setBundleQuery] = useState("");
+  const [migrationPrompt, setMigrationPrompt] = useState<{
+    productId: string;
+    productLabel: string;
+    quantity: number;
+    value: number;
+  } | null>(null);
+  const [migrating, setMigrating] = useState(false);
   const [deleteBlock, setDeleteBlock] = useState<{
     index: number;
     productId: string;
@@ -1356,6 +1383,25 @@ export function ProductsTable({
       return inheritChildCosts(next, withCosts.componentLabels, dirtyIdsRef.current);
     });
     setDirty((current) => new Set(current).add(index));
+  }
+
+  async function confirmMigration() {
+    if (!migrationPrompt) return;
+    setMigrating(true);
+    try {
+      const result = await postCatalogBundleMigrate(migrationPrompt.productId);
+      setMigrationPrompt(null);
+      setMessage(
+        result
+          ? `Moved ${result.quantityMoved} unit${result.quantityMoved === 1 ? "" : "s"} (worth ${formatMoney(result.valueMoved)}) into the bundle's components.`
+          : "Nothing left to migrate.",
+      );
+      router.refresh();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Could not migrate existing stock.");
+    } finally {
+      setMigrating(false);
+    }
   }
 
   function removeRow(index: number, productId?: string) {
@@ -2325,13 +2371,18 @@ export function ProductsTable({
           onChange={(contents) => setBundleContents(bundleIndex, contents)}
           onPersist={async (contents) => {
             if (!editingBundle.id) return;
+            const productId = editingBundle.id;
+            const productLabel = productDisplayName(editingBundle) || editingBundle.orderName || "this bundle";
             const allocated = autoAllocateBundleCosts(Number(editingBundle.unitCost) || 0, contents);
-            await postCatalogBundle({
-              productId: editingBundle.id,
+            const { migratable } = await postCatalogBundle({
+              productId,
               unitCost: Number(editingBundle.unitCost) || 0,
               components: contentsPayload(allocated),
               replaceEmpty: allocated.length === 0,
             });
+            if (migratable) {
+              setMigrationPrompt({ productId, productLabel, quantity: migratable.quantity, value: migratable.value });
+            }
           }}
           onClose={() => setBundleIndex(null)}
         />
@@ -2346,6 +2397,63 @@ export function ProductsTable({
           onClose={() => setDeleteBlock(null)}
         />
       ) : null}
+
+      {migrationPrompt ? (
+        <BundleMigrationModal
+          productLabel={migrationPrompt.productLabel}
+          quantity={migrationPrompt.quantity}
+          value={migrationPrompt.value}
+          pending={migrating}
+          onConfirm={() => void confirmMigration()}
+          onClose={() => setMigrationPrompt(null)}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+function BundleMigrationModal({
+  productLabel,
+  quantity,
+  value,
+  pending,
+  onConfirm,
+  onClose,
+}: {
+  productLabel: string;
+  quantity: number;
+  value: number;
+  pending: boolean;
+  onConfirm: () => void;
+  onClose: () => void;
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={onClose}>
+      <div
+        className="w-full max-w-md rounded-xl border border-border bg-white p-5 shadow-lg"
+        onClick={(event) => event.stopPropagation()}
+        role="alertdialog"
+        aria-labelledby="bundle-migration-title"
+        aria-modal="true"
+      >
+        <h3 id="bundle-migration-title" className="text-base font-semibold">
+          Move existing stock into the new bundle?
+        </h3>
+        <p className="mt-2 text-sm text-muted">
+          “{productLabel}” already has stock from before it became a bundle: {formatQty(quantity)} unit
+          {quantity === 1 ? "" : "s"} worth {formatMoney(value)}. Move that into its components now, split the same
+          way new receipts will be? Future purchase orders for this bundle will do this automatically either way —
+          this only affects stock already on hand.
+        </p>
+        <div className="mt-4 flex justify-end gap-2">
+          <button className={btnSecondaryClass} type="button" disabled={pending} onClick={onClose}>
+            Not now
+          </button>
+          <button className={btnClass} type="button" disabled={pending} onClick={onConfirm}>
+            {pending ? "Moving…" : "Move it"}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
