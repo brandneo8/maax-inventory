@@ -3,6 +3,7 @@ import type { Database } from "@/lib/supabase/types";
 export type ProductClassification = Database["public"]["Enums"]["product_classification"];
 export type PoStatus = Database["public"]["Enums"]["po_status"];
 export type OrderChannel = Database["public"]["Enums"]["order_channel"];
+export type InventoryTxnType = Database["public"]["Enums"]["inventory_txn_type"];
 
 export const CLASSIFICATIONS: { value: ProductClassification; label: string }[] = [
   { value: "retail", label: "Retail" },
@@ -74,4 +75,24 @@ export function countStatusLabel(status: string) {
   if (status === "completed") return "Confirmed";
   if (status === "voided") return "Voided";
   return status.replaceAll("_", " ");
+}
+
+export function countTypeLabel(countType: string) {
+  if (countType === "opening_balance") return "Opening balance";
+  if (countType === "regular") return "Regular";
+  return countType.replaceAll("_", " ");
+}
+
+const MOVEMENT_TYPE_LABELS: Record<string, string> = {
+  goods_receipt: "Goods receipt",
+  retail_use: "Retail / in-house use",
+  count_adjustment: "Count adjustment",
+  transfer: "Transfer",
+  waste: "Waste",
+  gwp_use: "GWP use",
+  initial_stock: "Initial stock",
+};
+
+export function movementTypeLabel(txnType: string) {
+  return MOVEMENT_TYPE_LABELS[txnType] ?? txnType.replaceAll("_", " ");
 }

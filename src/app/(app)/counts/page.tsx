@@ -2,7 +2,7 @@ import Link from "next/link";
 import { requireBranch } from "@/lib/auth";
 import { getInventoryCounts } from "@/lib/data/counts";
 import { formatDate, formatQty } from "@/lib/format";
-import { classificationLabel, countStatusLabel } from "@/lib/labels";
+import { classificationLabel, countStatusLabel, countTypeLabel } from "@/lib/labels";
 import { btnClass, tableClass, tdClass, thClass } from "@/lib/ui";
 import { CountRecordAction } from "./delete-count-button";
 
@@ -30,6 +30,7 @@ export default async function CountsPage() {
           <thead>
             <tr>
               <th className={thClass}>Date</th>
+              <th className={thClass}>Type</th>
               <th className={thClass}>Scope</th>
               <th className={thClass}>Counted qty</th>
               <th className={thClass}>Unique SKUs</th>
@@ -41,7 +42,7 @@ export default async function CountsPage() {
           <tbody>
             {counts.length === 0 ? (
               <tr>
-                <td className={tdClass} colSpan={7}>
+                <td className={tdClass} colSpan={8}>
                   No counts yet.
                 </td>
               </tr>
@@ -64,6 +65,7 @@ export default async function CountsPage() {
                         {formatDate(count.count_date)}
                       </Link>
                     </td>
+                    <td className={tdClass}>{countTypeLabel(count.count_type)}</td>
                     <td className={tdClass}>{scope || "All products"}</td>
                     <td className={tdClass}>{formatQty(count.countedQuantity)}</td>
                     <td className={tdClass}>{count.uniqueSkus}</td>

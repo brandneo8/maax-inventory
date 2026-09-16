@@ -8,7 +8,6 @@ export default async function HomePage() {
   const { supabase, companyId, branch } = await requireBranch();
   const catalog = await getCatalogProducts(supabase, companyId);
   const branchProducts = catalog.filter((product) => product.branchIds.includes(branch.id));
-  const productCount = branchProducts.length;
   const tunaiCount = branchProducts.filter((product) =>
     isAvailableInTunai(product.classificationsByBranch[branch.id] ?? []),
   ).length;
@@ -21,17 +20,6 @@ export default async function HomePage() {
       </div>
 
       <section className="space-y-4">
-        <div className="flex flex-wrap items-center justify-between gap-4 rounded-xl border border-border bg-card p-6">
-          <div>
-            <h2 className="text-lg font-semibold">Products</h2>
-            <p className="mt-1 text-sm text-muted">
-              {productCount} product{productCount === 1 ? "" : "s"} assigned to {branch.displayName}.
-            </p>
-          </div>
-          <Link href="/home/products" className={btnClass}>
-            View products
-          </Link>
-        </div>
         <div className="flex flex-wrap items-center justify-between gap-4 rounded-xl border border-border bg-card p-6">
           <div>
             <h2 className="text-lg font-semibold">Tunai</h2>

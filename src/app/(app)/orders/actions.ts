@@ -314,7 +314,6 @@ export async function receivePurchaseOrder(
 
   revalidatePath(`/orders/${order.id}`);
   revalidatePath("/orders");
-  revalidatePath("/home/products");
   revalidatePath("/home/tunai");
   revalidatePath("/home");
   redirect(`/orders/${order.id}`);
@@ -392,7 +391,6 @@ export async function addFreeGoodsReceipt(input: {
 
   revalidatePath(`/orders/${order.id}`);
   revalidatePath("/orders");
-  revalidatePath("/home/products");
   revalidatePath("/home/tunai");
   revalidatePath("/home");
 }

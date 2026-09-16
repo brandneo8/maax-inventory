@@ -5,6 +5,8 @@ import type { createClient } from "@/lib/supabase/server";
 
 type Client = Awaited<ReturnType<typeof createClient>>;
 
+export type CountType = "regular" | "opening_balance";
+
 const PAGE_SIZE = 1000;
 const IN_CHUNK = 200;
 
@@ -29,7 +31,7 @@ export async function getInventoryCounts(supabase: Client, companyId: string, br
   const { data, error } = await supabase
     .from("inventory_counts")
     .select(
-      "id, status, count_date, counted_by, brands(name), tags(name), filter_classification",
+      "id, status, count_date, count_type, counted_by, brands(name), tags(name), filter_classification",
     )
     .eq("company_id", companyId)
     .eq("branch_id", branchId)
@@ -74,7 +76,7 @@ export async function getInventoryCount(supabase: Client, companyId: string, id:
   const { data, error } = await supabase
     .from("inventory_counts")
     .select(
-      "id, status, count_date, counted_by, filter_brand_id, filter_classification, filter_tag_id, brands(name), tags(name)",
+      "id, status, count_date, count_type, counted_by, filter_brand_id, filter_classification, filter_tag_id, brands(name), tags(name)",
     )
     .eq("company_id", companyId)
     .eq("branch_id", branchId)
@@ -88,7 +90,7 @@ export async function getInventoryCount(supabase: Client, companyId: string, id:
     const { data: page, error: itemsError } = await supabase
       .from("inventory_count_items")
       .select(
-        "id, product_id, expected_quantity, counted_quantity, variance, notes, products(sku, name, order_name, size_label, brand_sub, brands(name))",
+        "id, product_id, expected_quantity, counted_quantity, variance, notes, products(sku, barcode, name, order_name, size_label, brand_sub, brands(name))",
       )
       .eq("inventory_count_id", id)
       .order("id")
@@ -239,6 +241,7 @@ export type CountCatalogHit = {
   orderName: string;
   name: string;
   sku: string;
+  barcode: string;
   brand: string;
   sizeLabel: string;
   expected: number;
@@ -279,13 +282,16 @@ export async function searchCatalogForCount(
     p_limit: 20,
   });
   const hits = rpcError ? await searchCatalogFallback(db, companyId, branchId, needle) : (rpcHits ?? []);
-  const sizeById = new Map<string, string>();
+  const extraById = new Map<string, { sizeLabel: string; barcode: string }>();
   const ids = hits.map((product) => product.id);
   if (ids.length > 0) {
-    const { data: sizes, error: sizeError } = await db.from("products").select("id, size_label").in("id", ids);
-    if (sizeError) throw queryError(sizeError, "Could not load product sizes.");
-    for (const row of sizes ?? []) {
-      sizeById.set(row.id, String(row.size_label ?? "").trim());
+    const { data: extras, error: extraError } = await db.from("products").select("id, size_label, barcode").in("id", ids);
+    if (extraError) throw queryError(extraError, "Could not load product details.");
+    for (const row of extras ?? []) {
+      extraById.set(row.id, {
+        sizeLabel: String(row.size_label ?? "").trim(),
+        barcode: String(row.barcode ?? "").trim(),
+      });
     }
   }
   return hits.map((product) => ({
@@ -293,8 +299,9 @@ export async function searchCatalogForCount(
     orderName: product.order_name?.trim() ?? "",
     name: product.name?.trim() ?? "",
     sku: product.sku?.trim() ?? "",
+    barcode: extraById.get(product.id)?.barcode ?? "",
     brand: product.brand_name?.trim() ?? "",
-    sizeLabel: sizeById.get(product.id) ?? "",
+    sizeLabel: extraById.get(product.id)?.sizeLabel ?? "",
     expected: 0,
     onCount: false,
     onSalon: Boolean(product.on_salon),
@@ -315,6 +322,7 @@ async function searchCatalogFallback(
     `name.ilike."${like}"`,
     `order_name.ilike."${like}"`,
     `sku.ilike."${like}"`,
+    `barcode.ilike."${like}"`,
     `brand_sub.ilike."${like}"`,
     `size_label.ilike."${like}"`,
   ].join(",");
@@ -322,7 +330,7 @@ async function searchCatalogFallback(
   const [{ data: named, error: namedError }, { data: brands, error: brandError }] = await Promise.all([
     supabase
       .from("products")
-      .select("id, sku, name, order_name, brand_sub, size_label, brands(name)")
+      .select("id, sku, barcode, name, order_name, brand_sub, size_label, brands(name)")
       .eq("company_id", companyId)
       .eq("is_active", true)
       .or(orFilter)
@@ -339,7 +347,7 @@ async function searchCatalogFallback(
       : (
           await supabase
             .from("products")
-            .select("id, sku, name, order_name, brand_sub, size_label, brands(name)")
+            .select("id, sku, barcode, name, order_name, brand_sub, size_label, brands(name)")
             .eq("company_id", companyId)
             .eq("is_active", true)
             .in("brand_id", brandIds)
@@ -349,6 +357,7 @@ async function searchCatalogFallback(
   const hits: {
     id: string;
     sku: string | null;
+    barcode: string | null;
     name: string | null;
     order_name: string | null;
     brand_name: string;
@@ -364,13 +373,16 @@ async function searchCatalogFallback(
         ? String((brand as { name?: string | null }).name ?? "").trim()
         : "";
     const haystack = normalizeSearchText(
-      [product.name, product.order_name, product.sku, product.brand_sub, product.size_label, brandName].join(" "),
+      [product.name, product.order_name, product.sku, product.barcode, product.brand_sub, product.size_label, brandName].join(
+        " ",
+      ),
     );
     if (!tokens.every((token) => haystack.includes(token))) continue;
     seen.add(product.id);
     hits.push({
       id: product.id,
       sku: product.sku,
+      barcode: product.barcode,
       name: product.name,
       order_name: product.order_name,
       brand_name: brandName,
@@ -668,62 +680,64 @@ export async function voidCompletedCount(
   supabase: Client,
   args: { companyId: string; countId: string; createdBy: string | null },
 ) {
-  const itemIds: string[] = [];
-  for (let from = 0; ; from += PAGE_SIZE) {
-    const { data, error } = await supabase
-      .from("inventory_count_items")
-      .select("id")
-      .eq("inventory_count_id", args.countId)
-      .order("id")
-      .range(from, from + PAGE_SIZE - 1);
-    if (error) throw queryError(error, "Could not load count lines.");
-    itemIds.push(...(data ?? []).map((item) => item.id));
-    if (!data || data.length < PAGE_SIZE) break;
-  }
-
-  if (itemIds.length > 0) {
-    const posted: {
-      product_id: string;
-      store_location_id: string;
-      quantity_change: number;
-      reference_id: string | null;
-    }[] = [];
-    for (const ids of chunkList(itemIds)) {
-      const { data, error } = await supabase
-        .from("inventory_transactions")
-        .select("product_id, store_location_id, quantity_change, reference_id")
-        .eq("company_id", args.companyId)
-        .eq("txn_type", "count_adjustment")
-        .eq("reference_table", "inventory_count_items")
-        .eq("notes", "Count variance")
-        .in("reference_id", ids);
-      if (error) throw queryError(error, "Could not load posted count adjustments.");
-      posted.push(...(data ?? []));
-    }
-
-    for (const batch of chunkList(posted.filter((row) => Number(row.quantity_change) !== 0))) {
-      const { error } = await supabase.from("inventory_transactions").insert(
-        batch.map((row) => ({
-          company_id: args.companyId,
-          product_id: row.product_id,
-          store_location_id: row.store_location_id,
-          txn_type: "count_adjustment" as const,
-          quantity_change: -Number(row.quantity_change),
-          reference_table: "inventory_count_items",
-          reference_id: row.reference_id,
-          created_by: args.createdBy,
-          notes: "Voided count",
-        })),
-      );
-      if (error) throw queryError(error, "Could not reverse posted count adjustments.");
-    }
-  }
-
-  const { error: statusError } = await supabase
-    .from("inventory_counts")
-    .update({ status: "voided" })
-    .eq("id", args.countId)
-    .eq("status", "completed");
-  if (statusError) throw queryError(statusError, "Could not void the count.");
+  // Reverses the posted ledger quantity and unwinds any weighted-average-cost
+  // blend a surplus line applied (see fn_void_inventory_count) — atomically,
+  // so a partial reversal never gets left behind if a later receipt/count
+  // makes an exact unwind impossible for one of the lines.
+  const { error } = await supabase.rpc("fn_void_inventory_count", { p_count_id: args.countId });
+  if (error) throw queryError(error, "Could not void the count.");
 }
+
+/**
+ * Weighted-average cost per product, as of the end of a given date — the
+ * most recent product_branch_cost_history row at or before that date.
+ * Falls back to 0 for a product with no cost history yet.
+ */
+export async function getCostsAsOfDate(
+  supabase: Client,
+  branchId: string,
+  productIds: string[],
+  asOfDate: string,
+) {
+  const costs = new Map<string, number>();
+  const wanted = [...new Set(productIds.filter(Boolean))];
+  if (wanted.length === 0) return costs;
+  const boundary = `${asOfDate}T23:59:59.999Z`;
+  for (const ids of chunkList(wanted)) {
+    const { data, error } = await supabase
+      .from("product_branch_cost_history")
+      .select("product_id, avg_unit_cost, effective_at")
+      .eq("branch_id", branchId)
+      .in("product_id", ids)
+      .lte("effective_at", boundary)
+      .order("effective_at", { ascending: false });
+    if (error) throw queryError(error, "Could not look up historical cost.");
+    for (const row of data ?? []) {
+      if (!costs.has(row.product_id)) costs.set(row.product_id, Number(row.avg_unit_cost));
+    }
+  }
+  return costs;
+}
+
+/** Current weighted-average cost per product for a branch. Missing = never costed (0). */
+export async function getCurrentCosts(supabase: Client, branchId: string, productIds: string[]) {
+  const costs = new Map<string, number>();
+  const wanted = [...new Set(productIds.filter(Boolean))];
+  if (wanted.length === 0) return costs;
+  for (const ids of chunkList(wanted)) {
+    const { data, error } = await supabase
+      .from("product_branch_costs")
+      .select("product_id, avg_unit_cost")
+      .eq("branch_id", branchId)
+      .in("product_id", ids);
+    if (error) throw queryError(error, "Could not look up current cost.");
+    for (const row of data ?? []) costs.set(row.product_id, Number(row.avg_unit_cost));
+  }
+  return costs;
+}
+
+// getVoidBlockers was removed: cost correctness on void is now handled
+// automatically by fn_recompute_branch_cost regardless of insertion order,
+// so there's no longer a case where voiding needs to be pre-checked or
+// blocked.
 

@@ -35,7 +35,7 @@ export default async function NewOrderPage() {
             supplier
           </Link>{" "}
           and one{" "}
-          <Link href="/home/products" className="underline">
+          <Link href="/admin/products" className="underline">
             product
           </Link>{" "}
           before creating an order.

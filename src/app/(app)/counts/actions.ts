@@ -8,6 +8,7 @@ import {
   assignProductsToSalon,
   chunkList,
   fillUncountedItems,
+  getCurrentCosts,
   getLatestPostedCountDate,
   getScannedProductIds,
   queryError,
@@ -16,10 +17,11 @@ import {
   setCountedQuantities,
   syncProductSalonMembership,
   voidCompletedCount,
+  type CountType,
 } from "@/lib/data/counts";
 import { getDefaultStoreLocationId } from "@/lib/data/lookups";
 import { updateProductNames } from "@/lib/data/products";
-import { formatDate, singaporeToday } from "@/lib/format";
+import { businessTxnDate, formatDate, singaporeToday } from "@/lib/format";
 import type { ProductClassification } from "@/lib/labels";
 
 function emptyToNull(value: FormDataEntryValue | null) {
@@ -41,6 +43,11 @@ function assertCountDateAllowed(
   if (latestPostedDate && latestPostedDate >= today && countDate > latestPostedDate) {
     throw new Error(
       `The latest confirmed count is ${formatDate(latestPostedDate)}. You cannot choose a later date.`,
+    );
+  }
+  if (kind === "confirm" && latestPostedDate && countDate < latestPostedDate) {
+    throw new Error(
+      `A count dated ${formatDate(latestPostedDate)} is already confirmed for this salon — confirming this ${formatDate(countDate)} count would post stale variances on top of it. Void the ${formatDate(latestPostedDate)} count first if you need to redo that day.`,
     );
   }
 }
@@ -85,6 +92,10 @@ function namesFromForm(formData: FormData) {
 
 export async function createInventoryCount(formData: FormData) {
   const { supabase, companyId, user, branch } = await requireBranch();
+  const countType = String(formData.get("count_type") ?? "regular") as CountType;
+  if (countType !== "regular" && countType !== "opening_balance") {
+    throw new Error("Unknown count type.");
+  }
   const filterBrandId = emptyToNull(formData.get("filter_brand_id"));
   const filterClassification = emptyToNull(formData.get("filter_classification")) as
     | ProductClassification
@@ -112,6 +123,7 @@ export async function createInventoryCount(formData: FormData) {
       filter_tag_id: filterTagId,
       status: "in_progress",
       count_date: countDate,
+      count_type: countType,
       counted_by: user.email,
     })
     .select("id")
@@ -125,6 +137,86 @@ export async function createInventoryCount(formData: FormData) {
       product_id: item.product_id,
       store_location_id: null,
       expected_quantity: item.expected_quantity,
+    })),
+  )) {
+    const { error: itemsError } = await supabase.from("inventory_count_items").insert(batch);
+    if (itemsError) {
+      await supabase.from("inventory_counts").delete().eq("id", count.id);
+      throw queryError(itemsError, "Could not create count lines.");
+    }
+  }
+
+  revalidatePath("/counts");
+  redirect(`/counts/${count.id}`);
+}
+
+export async function duplicateInventoryCount(formData: FormData) {
+  const { supabase, companyId, user, branch } = await requireBranch();
+  const sourceId = String(formData.get("count_id") ?? "");
+
+  const { data: source, error: sourceError } = await supabase
+    .from("inventory_counts")
+    .select("filter_brand_id, filter_classification, filter_tag_id, count_type")
+    .eq("id", sourceId)
+    .eq("company_id", companyId)
+    .eq("branch_id", branch.id)
+    .single();
+  if (sourceError || !source) throw queryError(sourceError, "Count not found.");
+
+  const today = singaporeToday();
+  const latestPostedDate = await getLatestPostedCountDate(supabase, companyId, branch.id);
+  assertCountDateAllowed(today, today, latestPostedDate, "start");
+
+  // Copy each SKU's last counted amount as a starting point — not the
+  // individual scan-by-scan transactions, just the final summary per
+  // product — so a re-count only needs touching what actually changed.
+  // Expected quantity is still freshly resolved against today's live stock.
+  const sourceCountedByProduct = new Map<string, number>();
+  for (let from = 0; ; from += 1000) {
+    const { data, error: sourceItemsError } = await supabase
+      .from("inventory_count_items")
+      .select("product_id, counted_quantity")
+      .eq("inventory_count_id", sourceId)
+      .order("id")
+      .range(from, from + 999);
+    if (sourceItemsError) throw queryError(sourceItemsError, "Could not load the source count's lines.");
+    for (const row of data ?? []) {
+      if (row.counted_quantity != null) sourceCountedByProduct.set(row.product_id, Number(row.counted_quantity));
+    }
+    if (!data || data.length < 1000) break;
+  }
+
+  const items = await resolveCountItems(supabase, companyId, branch.id, {
+    filter_brand_id: source.filter_brand_id,
+    filter_classification: source.filter_classification,
+    filter_tag_id: source.filter_tag_id,
+  });
+
+  const { data: count, error } = await supabase
+    .from("inventory_counts")
+    .insert({
+      company_id: companyId,
+      branch_id: branch.id,
+      store_location_id: null,
+      filter_brand_id: source.filter_brand_id,
+      filter_classification: source.filter_classification,
+      filter_tag_id: source.filter_tag_id,
+      status: "in_progress",
+      count_date: today,
+      count_type: source.count_type,
+      counted_by: user.email,
+    })
+    .select("id")
+    .single();
+  if (error || !count) throw queryError(error, "Could not duplicate the count.");
+
+  for (const batch of chunkList(
+    items.map((item) => ({
+      inventory_count_id: count.id,
+      product_id: item.product_id,
+      store_location_id: null,
+      expected_quantity: item.expected_quantity,
+      counted_quantity: sourceCountedByProduct.get(item.product_id) ?? null,
     })),
   )) {
     const { error: itemsError } = await supabase.from("inventory_count_items").insert(batch);
@@ -180,7 +272,6 @@ export async function addCountEntryAction(formData: FormData) {
 
   revalidatePath(`/counts/${count.id}`);
   revalidatePath(`/counts/${count.id}/review`);
-  revalidatePath("/home/products");
 }
 
 export async function searchCountProductsAction(countId: string, query: string) {
@@ -247,7 +338,6 @@ export async function saveCountQuantities(formData: FormData) {
 
   revalidatePath(`/counts/${count.id}`);
   revalidatePath(`/counts/${count.id}/review`);
-  revalidatePath("/home/products");
 }
 
 export async function fillUncountedCountItems(formData: FormData) {
@@ -282,7 +372,7 @@ export async function completeInventoryCount(formData: FormData) {
 
   const { data: count, error: countError } = await supabase
     .from("inventory_counts")
-    .select("id, status, count_date")
+    .select("id, status, count_date, count_type")
     .eq("id", countId)
     .eq("company_id", companyId)
     .eq("branch_id", branch.id)
@@ -291,6 +381,7 @@ export async function completeInventoryCount(formData: FormData) {
   if (countError || !count) throw queryError(countError, "Count not found.");
   if (count.status !== "in_progress") throw new Error("This count is already closed.");
 
+  const countType = (count.count_type as CountType) ?? "regular";
   const today = singaporeToday();
   const latestPostedDate = await getLatestPostedCountDate(supabase, companyId, branch.id);
   assertCountDateAllowed(count.count_date, today, latestPostedDate, "confirm");
@@ -319,12 +410,13 @@ export async function completeInventoryCount(formData: FormData) {
     id: string;
     product_id: string;
     counted_quantity: number | null;
+    expected_quantity: number | null;
     variance: number | null;
   }[] = [];
   for (let from = 0; ; from += 1000) {
     const { data, error: itemsError } = await supabase
       .from("inventory_count_items")
-      .select("id, product_id, counted_quantity, variance")
+      .select("id, product_id, counted_quantity, expected_quantity, variance")
       .eq("inventory_count_id", count.id)
       .order("id")
       .range(from, from + 999);
@@ -333,12 +425,50 @@ export async function completeInventoryCount(formData: FormData) {
     if (!data || !data.length || data.length < 1000) break;
   }
 
-  if (items.some((item) => item.counted_quantity === null)) {
+  // A product with nothing expected and nothing counted has no real
+  // ambiguity to resolve — it doesn't need to block completion the way a
+  // genuine gap (something expected, still uncounted) does.
+  if (items.some((item) => item.counted_quantity === null && Number(item.expected_quantity ?? 0) !== 0)) {
     throw new Error("Enter a counted quantity for every product before completing.");
   }
 
   const adjustments = items.filter((item) => Number(item.variance ?? 0) !== 0);
-  for (const batch of chunkList(adjustments)) {
+  const surplus = adjustments.filter((item) => Number(item.variance) > 0);
+  const shortfall = adjustments.filter((item) => Number(item.variance) < 0);
+  const txnDate = businessTxnDate(count.count_date);
+
+  // A surplus needs a ground-truth cost decided and recorded: the branch's
+  // current average for a regular count (blending at the existing average
+  // leaves it unchanged unless there wasn't one — i.e. it stays at $0), or
+  // whatever the admin entered for an opening-balance count. Everything
+  // else — folding this into the running average, and re-costing
+  // shortfalls at whatever the average is once this count's date is
+  // correctly slotted into history — happens automatically via
+  // fn_recompute_branch_cost the moment these rows are inserted.
+  let surplusCosts = new Map<string, number>();
+  if (countType === "opening_balance") {
+    const missing: string[] = [];
+    for (const item of surplus) {
+      const raw = formData.get(`cost:${item.product_id}`);
+      const cost = raw == null || String(raw).trim() === "" ? null : Number(raw);
+      if (cost == null || !Number.isFinite(cost) || cost < 0) {
+        missing.push(item.product_id);
+        continue;
+      }
+      surplusCosts.set(item.product_id, cost);
+    }
+    if (missing.length > 0) {
+      throw new Error("Enter a cost for every counted product before completing this opening-balance count.");
+    }
+  } else {
+    surplusCosts = await getCurrentCosts(
+      supabase,
+      branch.id,
+      surplus.map((item) => item.product_id),
+    );
+  }
+
+  for (const batch of chunkList(surplus)) {
     const { error } = await supabase.from("inventory_transactions").insert(
       batch.map((item) => ({
         company_id: companyId,
@@ -350,6 +480,26 @@ export async function completeInventoryCount(formData: FormData) {
         reference_id: item.id,
         created_by: user.email ?? null,
         notes: "Count variance",
+        unit_cost: surplusCosts.get(item.product_id) ?? 0,
+        txn_date: txnDate,
+      })),
+    );
+    if (error) throw queryError(error, "Could not post count variances.");
+  }
+
+  for (const batch of chunkList(shortfall)) {
+    const { error } = await supabase.from("inventory_transactions").insert(
+      batch.map((item) => ({
+        company_id: companyId,
+        product_id: item.product_id,
+        store_location_id: defaultLocationId,
+        txn_type: "count_adjustment" as const,
+        quantity_change: Number(item.variance),
+        reference_table: "inventory_count_items",
+        reference_id: item.id,
+        created_by: user.email ?? null,
+        notes: "Count variance",
+        txn_date: txnDate,
       })),
     );
     if (error) throw queryError(error, "Could not post count variances.");
@@ -399,7 +549,6 @@ export async function completeInventoryCount(formData: FormData) {
   revalidatePath("/counts");
   revalidatePath("/reports");
   revalidatePath("/admin/products");
-  revalidatePath("/home/products");
   redirect(`/counts/${count.id}`);
 }
 
@@ -427,7 +576,7 @@ export async function deleteInventoryCount(formData: FormData) {
   redirect("/counts");
 }
 
-export async function voidInventoryCount(formData: FormData) {
+export async function voidInventoryCount(formData: FormData): Promise<{ ok: true }> {
   const { supabase, companyId, user, branch } = await requireBranch();
   const countId = String(formData.get("count_id") ?? "");
 
@@ -445,6 +594,9 @@ export async function voidInventoryCount(formData: FormData) {
     throw new Error("Only confirmed counts can be voided. Drafts can be deleted.");
   }
 
+  // Cost correctness on void is now handled automatically by
+  // fn_recompute_branch_cost regardless of what order things happened in,
+  // so there's no longer a case where voiding needs to be blocked.
   await voidCompletedCount(supabase, {
     companyId,
     countId: count.id,
@@ -455,5 +607,5 @@ export async function voidInventoryCount(formData: FormData) {
   revalidatePath(`/counts/${count.id}/review`);
   revalidatePath("/counts");
   revalidatePath("/reports");
-  revalidatePath("/home/products");
+  return { ok: true };
 }

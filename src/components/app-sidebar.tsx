@@ -3,10 +3,10 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
+  ArrowLeftRight,
   BarChart3,
   ClipboardList,
   Home,
-  Package,
   PackageMinus,
   ShieldCheck,
   ShoppingBag,
@@ -15,7 +15,7 @@ import { cn } from "@/lib/utils";
 
 const links = [
   { href: "/home", label: "Home", icon: Home },
-  { href: "/home/products", label: "Products", icon: Package },
+  { href: "/movement", label: "Movements", icon: ArrowLeftRight },
   { href: "/orders", label: "Orders", icon: ShoppingBag },
   { href: "/stock-out", label: "Stock-out", icon: PackageMinus },
   { href: "/counts", label: "Counts", icon: ClipboardList },

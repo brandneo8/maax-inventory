@@ -1,9 +1,9 @@
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { requireBranch } from "@/lib/auth";
-import { getInventoryCount, getSalonProductIds } from "@/lib/data/counts";
+import { getInventoryCount, getSalonProductIds, type CountType } from "@/lib/data/counts";
 import { formatDate } from "@/lib/format";
-import { classificationLabel } from "@/lib/labels";
+import { classificationLabel, countTypeLabel } from "@/lib/labels";
 import { toCountEntry, toCountLine } from "../../count-lines";
 import { CountCsvButton } from "../../count-csv-button";
 import { CountItemsForm } from "../count-items-form";
@@ -47,6 +47,7 @@ export default async function CountReviewPage({
           </h1>
           <p className="mt-1 text-sm text-muted">
             {[
+              countTypeLabel(count.count_type),
               brand?.name,
               classificationLabel(count.filter_classification),
               tag?.name,
@@ -62,6 +63,7 @@ export default async function CountReviewPage({
 
       <CountItemsForm
         countId={count.id}
+        countType={count.count_type as CountType}
         items={lines}
         entries={entries}
         branchName={branch.name}

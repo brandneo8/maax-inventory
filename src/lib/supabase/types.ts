@@ -459,6 +459,7 @@ export type Database = {
           branch_id: string
           company_id: string
           count_date: string
+          count_type: string
           counted_by: string | null
           created_at: string
           filter_brand_id: string | null
@@ -475,6 +476,7 @@ export type Database = {
           branch_id: string
           company_id: string
           count_date?: string
+          count_type?: string
           counted_by?: string | null
           created_at?: string
           filter_brand_id?: string | null
@@ -491,6 +493,7 @@ export type Database = {
           branch_id?: string
           company_id?: string
           count_date?: string
+          count_type?: string
           counted_by?: string | null
           created_at?: string
           filter_brand_id?: string | null
@@ -1688,6 +1691,10 @@ export type Database = {
         }
         Returns: undefined
       }
+      fn_business_txn_date: {
+        Args: { p_business_date: string }
+        Returns: string
+      }
       fn_fill_uncounted_count_items: {
         Args: { p_count_id: string; p_mode: string }
         Returns: undefined
@@ -1701,9 +1708,21 @@ export type Database = {
         Returns: Json
       }
       fn_my_company_ids: { Args: never; Returns: string[] }
+      fn_recompute_branch_cost: {
+        Args: {
+          p_branch_id: string
+          p_company_id: string
+          p_product_id: string
+        }
+        Returns: undefined
+      }
       fn_recompute_po_status: { Args: { p_po_id: string }; Returns: undefined }
       fn_reverse_goods_receipt: {
         Args: { p_goods_receipt_id: string }
+        Returns: undefined
+      }
+      fn_void_inventory_count: {
+        Args: { p_count_id: string }
         Returns: undefined
       }
       fn_void_purchase_order: {
@@ -1722,6 +1741,7 @@ export type Database = {
           p_needle: string
         }
         Returns: {
+          barcode: string
           brand_name: string
           id: string
           name: string

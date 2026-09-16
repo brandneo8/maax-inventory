@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { unstable_rethrow } from "next/navigation";
 import { createInventoryCount } from "../actions";
+import type { CountType } from "@/lib/data/counts";
 import { formatDate } from "@/lib/format";
 import { CLASSIFICATIONS } from "@/lib/labels";
 import { btnClass, fieldClass } from "@/lib/ui";
@@ -10,11 +11,13 @@ import { btnClass, fieldClass } from "@/lib/ui";
 type Option = { id: string; label: string };
 
 export function CountForm({
+  countType,
   brands,
   tags,
   today,
   latestPostedDate,
 }: {
+  countType: CountType;
   brands: Option[];
   tags: Option[];
   today: string;
@@ -39,6 +42,7 @@ export function CountForm({
 
   return (
     <form action={onSubmit} className="space-y-6">
+      <input type="hidden" name="count_type" value={countType} />
       {error ? (
         <p className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">{error}</p>
       ) : null}

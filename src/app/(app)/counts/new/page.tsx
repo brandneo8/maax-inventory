@@ -1,18 +1,8 @@
 import Link from "next/link";
 import { requireBranch } from "@/lib/auth";
-import { getLatestPostedCountDate } from "@/lib/data/counts";
-import { getBrands, getTags } from "@/lib/data/lookups";
-import { singaporeToday } from "@/lib/format";
-import { CountForm } from "./count-form";
 
-export default async function NewCountPage() {
-  const { supabase, companyId, branch } = await requireBranch();
-  const [brands, tags, latestPostedDate] = await Promise.all([
-    getBrands(supabase, companyId),
-    getTags(supabase, companyId),
-    getLatestPostedCountDate(supabase, companyId, branch.id),
-  ]);
-  const today = singaporeToday();
+export default async function NewCountChooserPage() {
+  const { branch } = await requireBranch();
 
   return (
     <div className="space-y-6">
@@ -21,19 +11,31 @@ export default async function NewCountPage() {
           Back to counts
         </Link>
         <h1 className="mt-2 text-2xl font-semibold tracking-tight">New inventory count</h1>
-        <p className="mt-1 text-sm text-muted">
-          Working in {branch.displayName}. Leave a filter blank to include everything. Expected
-          quantities are snapshotted from this salon&apos;s ledger when you start.
-        </p>
+        <p className="mt-1 text-sm text-muted">Working in {branch.displayName}.</p>
       </div>
 
-      <CountForm
-        key={branch.id}
-        brands={brands.map((brand) => ({ id: brand.id, label: brand.name }))}
-        tags={tags.map((tag) => ({ id: tag.id, label: tag.name }))}
-        today={today}
-        latestPostedDate={latestPostedDate}
-      />
+      <div className="grid gap-4 sm:grid-cols-2">
+        <Link
+          href="/counts/new/regular"
+          className="block rounded-xl border border-border bg-card p-5 hover:border-slate-400"
+        >
+          <h2 className="text-base font-semibold">Regular count</h2>
+          <p className="mt-1 text-sm text-muted">
+            Compare what you count to the ledger&apos;s expected quantity. Shortfalls cost at the average
+            in effect on the count date; surpluses blend at the current average.
+          </p>
+        </Link>
+        <Link
+          href="/counts/new/opening-balance"
+          className="block rounded-xl border border-border bg-card p-5 hover:border-slate-400"
+        >
+          <h2 className="text-base font-semibold">Opening balance count</h2>
+          <p className="mt-1 text-sm text-muted">
+            For SKUs with no reliable cost history. You enter a cost for every counted product yourself,
+            at the review step, instead of relying on the existing average.
+          </p>
+        </Link>
+      </div>
     </div>
   );
 }

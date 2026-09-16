@@ -5,6 +5,7 @@ import { redirect } from "next/navigation";
 import { requireBranch } from "@/lib/auth";
 import { getDefaultStoreLocationId } from "@/lib/data/lookups";
 import { getBundleComponents } from "@/lib/data/product-components";
+import { businessTxnDate } from "@/lib/format";
 import { createAdminClient } from "@/lib/supabase/admin";
 
 export type StockOutType = "retail" | "inhouse";
@@ -106,6 +107,7 @@ async function insertStockOutLine(
     );
   const costByProduct = new Map((costs ?? []).map((row) => [row.product_id, row.avg_unit_cost]));
 
+  const txnDate = businessTxnDate(input.entryDate);
   const { error: txnError } = await supabase.from("inventory_transactions").insert(
     lines.map((line) => ({
       company_id: input.companyId,
@@ -119,6 +121,7 @@ async function insertStockOutLine(
       notes: line.notes,
       unit_cost: costByProduct.get(line.productId) ?? 0,
       classification: input.type,
+      txn_date: txnDate,
     })),
   );
 

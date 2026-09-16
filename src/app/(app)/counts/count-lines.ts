@@ -6,6 +6,7 @@ export type CountLine = {
   orderName: string;
   name: string;
   sku: string;
+  barcode: string;
   brand: string;
   brandSub: string;
   sizeLabel: string;
@@ -41,6 +42,7 @@ export function toCountLine(
     orderName: product?.order_name?.trim() ?? "",
     name: product?.name?.trim() ?? "",
     sku: product?.sku?.trim() ?? "",
+    barcode: product && "barcode" in product ? String(product.barcode ?? "").trim() : "",
     brand: brandName(product && "brands" in product ? product.brands : null),
     brandSub: product && "brand_sub" in product ? String(product.brand_sub ?? "").trim() : "",
     sizeLabel: product && "size_label" in product ? String(product.size_label ?? "").trim() : "",

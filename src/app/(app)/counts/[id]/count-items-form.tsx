@@ -9,6 +9,7 @@ import {
   saveCountQuantities,
   searchCountProductsAction,
 } from "../actions";
+import type { CountType } from "@/lib/data/counts";
 import { formatDateTime, formatQty } from "@/lib/format";
 import { keepOnSalonLabel, salonName } from "@/lib/labels";
 import { searchFieldsMatch } from "@/lib/search";
@@ -25,6 +26,7 @@ type CountProduct = {
   orderName: string;
   name: string;
   sku: string;
+  barcode: string;
   brand: string;
   sizeLabel: string;
   expected?: number;
@@ -41,7 +43,7 @@ function liveVariance(expected: number, counted: string) {
 
 function productMatches(product: CountProduct, needle: string) {
   return searchFieldsMatch(
-    [product.orderName, product.name, product.sku, product.brand, product.sizeLabel],
+    [product.orderName, product.name, product.sku, product.barcode, product.brand, product.sizeLabel],
     needle,
   );
 }
@@ -59,6 +61,7 @@ function uniqueProducts(items: CountLine[]): CountProduct[] {
       orderName: item.orderName,
       name: item.name,
       sku: item.sku,
+      barcode: item.barcode,
       brand: item.brand,
       sizeLabel: item.sizeLabel,
       expected: item.expected,
@@ -184,6 +187,9 @@ function CountLinesTable({
   names,
   nameEditable,
   onNameChange,
+  costs,
+  costEditable,
+  onCostChange,
 }: {
   rows: CountLine[];
   quantities: Record<string, string>;
@@ -197,9 +203,12 @@ function CountLinesTable({
   names?: Record<string, string>;
   nameEditable?: boolean;
   onNameChange?: (productId: string, name: string) => void;
+  costs?: Record<string, string>;
+  costEditable?: boolean;
+  onCostChange?: (productId: string, cost: string) => void;
 }) {
   const showSalon = Boolean(salonHeader);
-  const columns = showSalon ? 9 : 8;
+  const columns = (showSalon ? 9 : 8) + (costEditable ? 1 : 0);
   const displayRows = rows.map((item) => ({
     key: item.id,
     productId: item.productId,
@@ -257,6 +266,7 @@ function CountLinesTable({
             <th className={thClass}>Expected</th>
             <th className={thClass}>Counted</th>
             <th className={thClass}>Variance</th>
+            {costEditable ? <th className={thClass}>Cost per unit</th> : null}
           </tr>
         </thead>
         <tbody>
@@ -312,6 +322,20 @@ function CountLinesTable({
                   <td className={cn(tdClass, varianceTextClass(variance))}>
                     {variance === null ? "—" : signedQty(variance)}
                   </td>
+                  {costEditable ? (
+                    <td className={tdClass}>
+                      <input
+                        className={cn(fieldClass, "min-w-24")}
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        value={costs?.[item.productId] ?? ""}
+                        placeholder={variance != null && variance > 0 ? "Required" : "—"}
+                        aria-label={`Cost per unit for ${item.orderName || "product"}`}
+                        onChange={(event) => onCostChange?.(item.productId, event.target.value)}
+                      />
+                    </td>
+                  ) : null}
                 </tr>
               );
             })
@@ -324,6 +348,7 @@ function CountLinesTable({
 
 export function CountItemsForm({
   countId,
+  countType = "regular",
   items,
   entries,
   branchName = "",
@@ -332,6 +357,7 @@ export function CountItemsForm({
   mode = "count",
 }: {
   countId: string;
+  countType?: CountType;
   items: CountLine[];
   entries: CountEntryLine[];
   branchName?: string;
@@ -352,6 +378,8 @@ export function CountItemsForm({
     salonFlagsFromItems(items, salonProductIds, scannedProductIdsFrom(items, entries)),
   );
   const [names, setNames] = useState<Record<string, string>>(() => namesFromItems(items));
+  const [costs, setCosts] = useState<Record<string, string>>({});
+  const openingBalance = countType === "opening_balance";
   const [query, setQuery] = useState("");
   const [searchQty, setSearchQty] = useState("");
   const [selectedProduct, setSelectedProduct] = useState<CountProduct | null>(null);
@@ -360,6 +388,8 @@ export function CountItemsForm({
   const [catalogError, setCatalogError] = useState<string | null>(null);
   const [countedBrandFilter, setCountedBrandFilter] = useState("");
   const [countedBrandSubFilter, setCountedBrandSubFilter] = useState("");
+  const [noVarianceBrandFilter, setNoVarianceBrandFilter] = useState("");
+  const [noVarianceBrandSubFilter, setNoVarianceBrandSubFilter] = useState("");
   const [uncountedBrandFilter, setUncountedBrandFilter] = useState("");
   const [uncountedBrandSubFilter, setUncountedBrandSubFilter] = useState("");
   const qtyRef = useRef<HTMLInputElement>(null);
@@ -419,6 +449,7 @@ export function CountItemsForm({
               orderName: hit.orderName,
               name: hit.name,
               sku: hit.sku,
+              barcode: hit.barcode,
               brand: hit.brand,
               sizeLabel: hit.sizeLabel,
               expected: hit.expected,
@@ -466,23 +497,40 @@ export function CountItemsForm({
     () => sortCountLines(items.filter((item) => item.counted != null)),
     [items],
   );
-  const scannedItemIds = useMemo(() => new Set(entries.map((entry) => entry.itemId)), [entries]);
+  // Three review buckets, driven by the data itself rather than "was this
+  // scanned this session" — a product with nothing expected and nothing
+  // counted is just as resolved as one explicitly confirmed at 0, so it
+  // belongs in "No variance," not lumped in with real gaps to chase down.
   const countedRows = useMemo(
-    () => sortCountLines(items.filter((item) => scannedItemIds.has(item.id))),
-    [items, scannedItemIds],
+    () => sortCountLines(items.filter((item) => item.counted != null && item.counted !== item.expected)),
+    [items],
   );
-  const countedProductIds = useMemo(
-    () => new Set(countedRows.map((item) => item.productId)),
-    [countedRows],
+  const noVarianceRows = useMemo(
+    () =>
+      sortCountLines(
+        items.filter((item) =>
+          item.counted != null ? item.counted === item.expected : item.expected === 0,
+        ),
+      ),
+    [items],
   );
   const uncountedRows = useMemo(
-    () => sortCountLines(items.filter((item) => !scannedItemIds.has(item.id))),
-    [items, scannedItemIds],
+    () => sortCountLines(items.filter((item) => item.counted == null && item.expected !== 0)),
+    [items],
+  );
+  const countedProductIds = useMemo(
+    () => new Set(items.filter((item) => item.counted != null).map((item) => item.productId)),
+    [items],
   );
   const countedBrands = useMemo(() => tableBrands(countedRows), [countedRows]);
   const countedBrandSubs = useMemo(
     () => tableBrandSubs(countedRows, countedBrandFilter),
     [countedBrandFilter, countedRows],
+  );
+  const noVarianceBrands = useMemo(() => tableBrands(noVarianceRows), [noVarianceRows]);
+  const noVarianceBrandSubs = useMemo(
+    () => tableBrandSubs(noVarianceRows, noVarianceBrandFilter),
+    [noVarianceBrandFilter, noVarianceRows],
   );
   const uncountedBrands = useMemo(() => tableBrands(uncountedRows), [uncountedRows]);
   const uncountedBrandSubs = useMemo(
@@ -493,6 +541,13 @@ export function CountItemsForm({
     () => countedRows.filter((item) => matchesBrandFilters(item, countedBrandFilter, countedBrandSubFilter)),
     [countedBrandFilter, countedBrandSubFilter, countedRows],
   );
+  const filteredNoVarianceRows = useMemo(
+    () =>
+      noVarianceRows.filter((item) =>
+        matchesBrandFilters(item, noVarianceBrandFilter, noVarianceBrandSubFilter),
+      ),
+    [noVarianceBrandFilter, noVarianceBrandSubFilter, noVarianceRows],
+  );
   const filteredUncountedRows = useMemo(
     () =>
       uncountedRows.filter((item) =>
@@ -500,7 +555,15 @@ export function CountItemsForm({
       ),
     [uncountedBrandFilter, uncountedBrandSubFilter, uncountedRows],
   );
-  const missing = items.filter((item) => (quantities[item.id] ?? "").trim() === "").length;
+  const missing = uncountedRows.length;
+  const missingCosts = openingBalance
+    ? items.filter((item) => {
+        const variance = liveVariance(item.expected, quantities[item.id] ?? "");
+        if (variance == null || variance <= 0) return false;
+        const cost = costs[item.productId];
+        return cost == null || cost.trim() === "" || !Number.isFinite(Number(cost)) || Number(cost) < 0;
+      }).length
+    : 0;
 
   function pickMatch(product: CountProduct) {
     setSelectedProduct(product);
@@ -521,7 +584,12 @@ export function CountItemsForm({
         `salon:${productId}`,
         countedProductIds.has(productId) || salonOn[productId] ? "1" : "0",
       );
-      if (kind === "complete") formData.set(`name:${productId}`, names[productId] ?? "");
+      if (kind === "complete") {
+        formData.set(`name:${productId}`, names[productId] ?? "");
+        if (openingBalance && costs[productId] != null) {
+          formData.set(`cost:${productId}`, costs[productId]);
+        }
+      }
     }
     await saveCountQuantities(formData);
     if (kind === "complete") await completeInventoryCount(formData);
@@ -648,7 +716,7 @@ export function CountItemsForm({
               </button>
               <button
                 className={btnClass}
-                disabled={pending !== null || missing > 0}
+                disabled={pending !== null || missing > 0 || missingCosts > 0}
                 type="button"
                 onClick={() => void run("complete")}
               >
@@ -777,6 +845,9 @@ export function CountItemsForm({
           Quantities come from counting or the bulk actions on uncounted products. Edit Name to set the
           salon-friendly name shared by Min and Kin — confirming this count replaces the existing names.
           A ticked {salonHeader} checkbox leaves the product on {salonLabel}.
+          {openingBalance
+            ? " This is an opening-balance count: enter a cost per unit for every product counted above its expected quantity — that cost becomes this SKU's weighted-average cost."
+            : null}
         </p>
       ) : null}
 
@@ -860,13 +931,62 @@ export function CountItemsForm({
               }}
               onBrandSubChange={setCountedBrandSubFilter}
             />
+            {missingCosts > 0 ? (
+              <p className="rounded-lg border border-red-200 bg-red-50 px-3 py-3 text-sm text-red-800">
+                {missingCosts} counted product{missingCosts === 1 ? "" : "s"} still {missingCosts === 1 ? "needs" : "need"} a
+                cost per unit before this opening-balance count can be confirmed.
+              </p>
+            ) : null}
             <CountLinesTable
               rows={filteredCountedRows}
               quantities={quantities}
               empty={
                 countedRows.length === 0
-                  ? "No products scanned on the counting page."
-                  : "No counted products match these filters."
+                  ? "No products have a variance to review."
+                  : "No products with a variance match these filters."
+              }
+              salonHeader={salonHeader}
+              salonOn={salonOn}
+              salonEditable={editable}
+              salonLockedIds={countedProductIds}
+              onSalonChange={(productId, on) => {
+                if (!on && countedProductIds.has(productId)) return;
+                setSalonOn((current) => ({ ...current, [productId]: on }));
+              }}
+              names={names}
+              nameEditable={editable}
+              onNameChange={(productId, name) =>
+                setNames((current) => ({ ...current, [productId]: name }))
+              }
+              costs={costs}
+              costEditable={openingBalance && editable}
+              onCostChange={(productId, cost) => setCosts((current) => ({ ...current, [productId]: cost }))}
+            />
+          </div>
+          <div className="space-y-2">
+            <h2 className="text-sm font-medium">No variance</h2>
+            <p className="text-sm text-muted">
+              Counted matches expected — or nothing was expected and nothing was counted. Nothing to review, and
+              these never block confirming the count.
+            </p>
+            <BrandTableFilters
+              brand={noVarianceBrandFilter}
+              brandSub={noVarianceBrandSubFilter}
+              brands={noVarianceBrands}
+              brandSubs={noVarianceBrandSubs}
+              onBrandChange={(brand) => {
+                setNoVarianceBrandFilter(brand);
+                setNoVarianceBrandSubFilter("");
+              }}
+              onBrandSubChange={setNoVarianceBrandSubFilter}
+            />
+            <CountLinesTable
+              rows={filteredNoVarianceRows}
+              quantities={quantities}
+              empty={
+                noVarianceRows.length === 0
+                  ? "Nothing here yet."
+                  : "No matching products in this filter."
               }
               salonHeader={salonHeader}
               salonOn={salonOn}
@@ -938,7 +1058,7 @@ export function CountItemsForm({
               quantities={quantities}
               empty={
                 uncountedRows.length === 0
-                  ? "Every product in this count was scanned."
+                  ? "Nothing left to count."
                   : "No uncounted products match these filters."
               }
               salonHeader={salonHeader}

@@ -11,7 +11,6 @@ const BRANCH_PATHS = [
   "/stock-out",
   "/counts",
   "/reports",
-  "/home/products",
   "/home/tunai",
   "/admin",
   "/admin/users",

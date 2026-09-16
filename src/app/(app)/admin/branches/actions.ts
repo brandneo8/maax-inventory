@@ -9,7 +9,6 @@ const VALID_CLASSIFICATIONS = new Set<ProductClassification>(["retail", "inhouse
 function revalidateBranchAssignment() {
   revalidatePath("/admin/branches");
   revalidatePath("/admin/products");
-  revalidatePath("/home/products");
   revalidatePath("/home/tunai");
   revalidatePath("/home");
 }
@@ -217,7 +216,6 @@ export async function createTag(name: string) {
   if (createError) throw new Error(createError.message || "Could not create tag.");
 
   revalidatePath("/admin/branches");
-  revalidatePath("/home/products");
   return { id: created.id, label: created.name };
 }
 

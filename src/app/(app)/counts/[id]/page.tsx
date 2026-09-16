@@ -1,11 +1,12 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { requireBranch } from "@/lib/auth";
-import { getInventoryCount } from "@/lib/data/counts";
+import { getInventoryCount, type CountType } from "@/lib/data/counts";
 import { formatDate } from "@/lib/format";
-import { classificationLabel, countStatusLabel } from "@/lib/labels";
+import { classificationLabel, countStatusLabel, countTypeLabel } from "@/lib/labels";
 import { toCountEntry, toCountLine } from "../count-lines";
 import { CountCsvButton } from "../count-csv-button";
+import { DuplicateCountButton } from "../duplicate-count-button";
 import { CountItemsForm } from "./count-items-form";
 import { CountRecordAction } from "../delete-count-button";
 
@@ -39,6 +40,7 @@ export default async function CountDetailPage({
           </h1>
           <p className="mt-1 text-sm text-muted">
             {[
+              countTypeLabel(count.count_type),
               brand?.name,
               classificationLabel(count.filter_classification),
               tag?.name,
@@ -50,6 +52,7 @@ export default async function CountDetailPage({
         </div>
         <div className="flex items-center gap-2">
           <CountCsvButton lines={lines} branchName={branch.name} countDate={count.count_date} />
+          <DuplicateCountButton countId={count.id} />
           {count.status === "in_progress" ? (
             <CountRecordAction countId={count.id} kind="delete" />
           ) : count.status === "completed" ? (
@@ -60,6 +63,7 @@ export default async function CountDetailPage({
 
       <CountItemsForm
         countId={count.id}
+        countType={count.count_type as CountType}
         items={lines}
         entries={entries}
         branchName={branch.name}

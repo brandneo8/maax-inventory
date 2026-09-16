@@ -14,6 +14,21 @@ export function singaporeToday() {
   return SINGAPORE_DATE.format(new Date());
 }
 
+/**
+ * Combines a "YYYY-MM-DD" business date with the current time-of-day, so a
+ * ledger row's txn_date reflects the date the user chose (e.g. a receipt's
+ * received_date, a count's count_date, a stock-out line's entry_date) —
+ * authoritative for cost ordering — while same-day rows still get a
+ * stable, deterministic order relative to each other (by real entry time).
+ */
+export function businessTxnDate(businessDate: string) {
+  const now = new Date();
+  const [year, month, day] = businessDate.split("-").map(Number);
+  return new Date(
+    Date.UTC(year, month - 1, day, now.getUTCHours(), now.getUTCMinutes(), now.getUTCSeconds(), now.getUTCMilliseconds()),
+  ).toISOString();
+}
+
 export function formatMoney(value: number | string | null | undefined) {
   const amount = Number(value ?? 0);
   return Number.isFinite(amount) ? sgd.format(amount) : "—";
