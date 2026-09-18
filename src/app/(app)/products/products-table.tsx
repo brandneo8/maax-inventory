@@ -1177,8 +1177,6 @@ export function ProductsTable({
     setSelected(allSelected ? [] : [...new Set(selectableIds)]);
   }
 
-  const hasUnsaved = dirty.size > 0 || dirtyIdsRef.current.size > 0;
-
   function applyToSelected(productIds: string[], patch: Partial<TableDraft>) {
     const ids = new Set(productIds);
     for (const id of ids) {
@@ -1328,12 +1326,6 @@ export function ProductsTable({
       if (!saved) return;
     }
     leaveEdit();
-  }
-
-  function reloadCatalog() {
-    if (editing && hasUnsaved) return;
-    setSnapshotAt(new Date());
-    router.refresh();
   }
 
   function setRowSupplier(index: number, supplierId: string) {

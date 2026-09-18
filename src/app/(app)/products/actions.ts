@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { requireAdmin, requireBranch } from "@/lib/auth";
 import { catalogSize, normalizeOptionalText, parseMoney } from "@/lib/catalog-import";
+import { createBrandResolver, resolveBrandId } from "@/lib/data/brands";
 import { persistProductComponents, syncBundleTag } from "@/lib/data/product-components";
 import { formatDate, productLabel } from "@/lib/format";
 import { countStatusLabel, defaultPosAllowed, salonName, type ProductClassification } from "@/lib/labels";
@@ -266,31 +267,6 @@ export async function quickCreateProduct(input: {
   };
 }
 
-async function resolveBrandId(
-  supabase: Client,
-  companyId: string,
-  brandName: string,
-) {
-  const name = brandName.trim();
-  if (!name) return null;
-
-  const { data: existing } = await supabase
-    .from("brands")
-    .select("id")
-    .eq("company_id", companyId)
-    .ilike("name", name)
-    .maybeSingle();
-  if (existing) return existing.id;
-
-  const { data: created, error } = await supabase
-    .from("brands")
-    .insert({ company_id: companyId, name })
-    .select("id")
-    .single();
-  if (error) throw error;
-  return created.id;
-}
-
 export type ProductDraft = {
   id?: string;
   clientKey?: string;
@@ -349,6 +325,7 @@ export async function saveProducts(drafts: ProductDraft[]) {
     .eq("is_default", true)
     .maybeSingle();
   const validSupplierIds = await companySupplierIds(supabase, companyId);
+  const resolveBrandIdCached = createBrandResolver(supabase, companyId);
   const saved: { clientKey: string | null; id: string }[] = [];
   const seenBarcodes = new Map<string, string>();
   const seenSkus = new Map<string, string>();
@@ -373,7 +350,7 @@ export async function saveProducts(drafts: ProductDraft[]) {
       barcode,
       order_name: orderName,
       name: draftText(draft.name),
-      brand_id: await resolveBrandId(supabase, companyId, draft.brand),
+      brand_id: await resolveBrandIdCached(draft.brand),
       brand_sub: draftText(draft.brandSub),
       unit_cost_price: parseMoney(draft.unitCost) ?? 0,
       rrp: parseMoney(draft.rrp),
@@ -389,7 +366,12 @@ export async function saveProducts(drafts: ProductDraft[]) {
       sku,
       barcode,
     });
-    await assertUniqueCodes(supabase, companyId, productId, { sku, barcode });
+    // resolveSavedProductId already checked barcode/sku uniqueness itself
+    // when it had to look an existing product up (no draft.id given) — only
+    // the known-id update path still needs a fresh check here.
+    if (draft.id) {
+      await assertUniqueCodes(supabase, companyId, productId, { sku, barcode });
+    }
 
     if (productId) {
       const { error } = await supabase

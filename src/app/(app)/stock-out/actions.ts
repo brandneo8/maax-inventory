@@ -1,11 +1,12 @@
 "use server";
 
+import { randomUUID } from "node:crypto";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { requireBranch } from "@/lib/auth";
 import { assertNoActiveCount } from "@/lib/data/counts";
 import { getDefaultStoreLocationId } from "@/lib/data/lookups";
-import { getBundleComponents } from "@/lib/data/product-components";
+import { getBundleComponentsForProducts } from "@/lib/data/product-components";
 import { businessTxnDate } from "@/lib/format";
 import { createAdminClient } from "@/lib/supabase/admin";
 
@@ -49,7 +50,15 @@ function assertLineDateWithinReport(lineDate: string, reportDate: string) {
   if (lineDate > reportDate) throw new Error("A line's use date cannot be after the stock-out date.");
 }
 
-async function insertStockOutLine(
+// Writes every line of a stock-out report in one pass instead of one
+// insertStockOutLine round trip per line: a single retail_use_entries
+// insert, one batched bundle-component lookup, one batched cost lookup,
+// then a single inventory_transactions insert covering every line (and
+// every bundle-unpacked component row). This doesn't reduce how many times
+// fn_recompute_branch_cost replays a product's history — that fires once per
+// inventory_transactions row regardless — but it cuts the network round
+// trips for an N-line stock-out from roughly 5N to a small constant.
+async function insertStockOutLines(
   supabase: Client,
   input: {
     companyId: string;
@@ -57,46 +66,56 @@ async function insertStockOutLine(
     storeLocationId: string;
     userEmail: string | undefined;
     reportId: string;
-    entryDate: string;
     notes: string | null;
-    productId: string;
-    quantityUsed: number;
     type: StockOutType;
+    lines: { productId: string; quantityUsed: number; entryDate: string }[];
   },
 ) {
-  const { data: entry, error } = await supabase
-    .from("retail_use_entries")
-    .insert({
+  if (input.lines.length === 0) return;
+
+  const entries = input.lines.map((line) => ({ ...line, entryId: randomUUID() }));
+
+  const { error: entriesError } = await supabase.from("retail_use_entries").insert(
+    entries.map((entry) => ({
+      id: entry.entryId,
       company_id: input.companyId,
       branch_id: input.branchId,
-      product_id: input.productId,
+      product_id: entry.productId,
       store_location_id: input.storeLocationId,
-      quantity_used: input.quantityUsed,
-      entry_date: input.entryDate,
+      quantity_used: entry.quantityUsed,
+      entry_date: entry.entryDate,
       keyed_in_by: input.userEmail,
       notes: input.notes,
       stock_out_report_id: input.reportId,
-    })
-    .select("id")
-    .single();
+    })),
+  );
+  if (entriesError) throw entriesError;
 
-  if (error || !entry) throw error ?? new Error("Could not save the stock-out entry.");
-
-  const qtyUsed = Math.abs(input.quantityUsed);
-  const components = await getBundleComponents(supabase, input.productId);
+  const baseNote = input.notes ?? `Stock-out (${input.type})`;
+  const componentsByProduct = await getBundleComponentsForProducts(
+    supabase,
+    entries.map((entry) => entry.productId),
+  );
 
   // A bundle SKU never carries its own stock/cost (mirrors receiving — see
   // fn_after_goods_receipt_item_insert): using it fans out to deduct each
   // component by its recipe quantity, costed at the component's own current
   // average. Nothing is written against the bundle's own product_id.
-  const lines =
-    components.length > 0
-      ? components.map((component) => ({
-          productId: component.productId,
-          quantity: qtyUsed * component.quantity,
-          notes: `${input.notes ?? `Stock-out (${input.type})`} (unpacked from bundle usage)`,
-        }))
-      : [{ productId: input.productId, quantity: qtyUsed, notes: input.notes ?? `Stock-out (${input.type})` }];
+  const txnLines = entries.flatMap((entry) => {
+    const qtyUsed = Math.abs(entry.quantityUsed);
+    const txnDate = businessTxnDate(entry.entryDate);
+    const components = componentsByProduct.get(entry.productId) ?? [];
+    if (components.length > 0) {
+      return components.map((component) => ({
+        entryId: entry.entryId,
+        productId: component.productId,
+        quantity: qtyUsed * component.quantity,
+        notes: `${baseNote} (unpacked from bundle usage)`,
+        txnDate,
+      }));
+    }
+    return [{ entryId: entry.entryId, productId: entry.productId, quantity: qtyUsed, notes: baseNote, txnDate }];
+  });
 
   const { data: costs } = await supabase
     .from("product_branch_costs")
@@ -104,13 +123,12 @@ async function insertStockOutLine(
     .eq("branch_id", input.branchId)
     .in(
       "product_id",
-      lines.map((line) => line.productId),
+      [...new Set(txnLines.map((line) => line.productId))],
     );
   const costByProduct = new Map((costs ?? []).map((row) => [row.product_id, row.avg_unit_cost]));
 
-  const txnDate = businessTxnDate(input.entryDate);
   const { error: txnError } = await supabase.from("inventory_transactions").insert(
-    lines.map((line) => ({
+    txnLines.map((line) => ({
       company_id: input.companyId,
       product_id: line.productId,
       store_location_id: input.storeLocationId,
@@ -121,12 +139,12 @@ async function insertStockOutLine(
       txn_type: "inhouse_use" as const,
       quantity_change: -line.quantity,
       reference_table: "retail_use_entries",
-      reference_id: entry.id,
+      reference_id: line.entryId,
       created_by: input.userEmail,
       notes: line.notes,
       unit_cost: costByProduct.get(line.productId) ?? 0,
       classification: input.type,
-      txn_date: txnDate,
+      txn_date: line.txnDate,
     })),
   );
 
@@ -208,20 +226,20 @@ export async function recordStockOutReport(
     if (attachError) throw attachError;
   }
 
-  for (const line of lines) {
-    await insertStockOutLine(supabase, {
-      companyId,
-      branchId: branch.id,
-      storeLocationId,
-      userEmail: user.email,
-      reportId: report.id,
-      entryDate: line.entry_date,
-      notes,
+  await insertStockOutLines(supabase, {
+    companyId,
+    branchId: branch.id,
+    storeLocationId,
+    userEmail: user.email,
+    reportId: report.id,
+    notes,
+    type: input.type,
+    lines: lines.map((line) => ({
       productId: line.product_id,
       quantityUsed: line.quantity_used,
-      type: input.type,
-    });
-  }
+      entryDate: line.entry_date,
+    })),
+  });
 
   revalidateStockOut(report.id);
   redirect(`/stock-out/${report.id}`);
@@ -275,20 +293,20 @@ export async function updateStockOutReport(
   const { error: updateError } = await supabase.from("stock_out_reports").update(patch).eq("id", report.id);
   if (updateError) throw updateError;
 
-  for (const line of lines) {
-    await insertStockOutLine(supabase, {
-      companyId,
-      branchId: branch.id,
-      storeLocationId,
-      userEmail: user.email,
-      reportId: report.id,
-      entryDate: line.entry_date,
-      notes,
+  await insertStockOutLines(supabase, {
+    companyId,
+    branchId: branch.id,
+    storeLocationId,
+    userEmail: user.email,
+    reportId: report.id,
+    notes,
+    type: input.type,
+    lines: lines.map((line) => ({
       productId: line.product_id,
       quantityUsed: line.quantity_used,
-      type: input.type,
-    });
-  }
+      entryDate: line.entry_date,
+    })),
+  });
 
   revalidateStockOut(report.id);
 }

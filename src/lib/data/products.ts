@@ -1,5 +1,5 @@
 import type { createClient } from "@/lib/supabase/server";
-import { getProducts, getStoreLocations } from "@/lib/data/lookups";
+import { getProducts } from "@/lib/data/lookups";
 import { productDisplayName, productLabel, singaporeToday } from "@/lib/format";
 import { isRetailFacing, type ProductClassification } from "@/lib/labels";
 
@@ -526,43 +526,6 @@ export async function getOrderBalanceProducts(supabase: Client, companyId: strin
     .sort((left, right) =>
       (left.name || left.orderName).localeCompare(right.name || right.orderName, undefined, { sensitivity: "base" }),
     );
-}
-
-export async function getBranchProductIds(supabase: Client, companyId: string, branchId: string) {
-  const locations = await getStoreLocations(supabase, companyId);
-  const locationIds = locations.filter((location) => location.branch_id === branchId).map((location) => location.id);
-  const ids = new Set<string>();
-
-  const [stock, retail, orders] = await Promise.all([
-    locationIds.length === 0
-      ? Promise.resolve({ data: [] as { product_id: string | null }[], error: null })
-      : supabase.from("current_stock").select("product_id").in("store_location_id", locationIds),
-    supabase.from("retail_use_entries").select("product_id").eq("company_id", companyId).eq("branch_id", branchId),
-    supabase.from("purchase_orders").select("id").eq("company_id", companyId).eq("branch_id", branchId),
-  ]);
-
-  if (stock.error) throw stock.error;
-  if (retail.error) throw retail.error;
-  if (orders.error) throw orders.error;
-
-  for (const row of stock.data ?? []) {
-    if (row.product_id) ids.add(row.product_id);
-  }
-  for (const row of retail.data ?? []) {
-    if (row.product_id) ids.add(row.product_id);
-  }
-
-  const orderIds = (orders.data ?? []).map((order) => order.id);
-  if (orderIds.length > 0) {
-    const { data: items, error } = await supabase
-      .from("purchase_order_items")
-      .select("product_id")
-      .in("purchase_order_id", orderIds);
-    if (error) throw error;
-    for (const item of items ?? []) ids.add(item.product_id);
-  }
-
-  return ids;
 }
 
 export async function getBranchOnHand(

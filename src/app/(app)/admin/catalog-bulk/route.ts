@@ -2,6 +2,7 @@ import { revalidatePath } from "next/cache";
 import { NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/auth";
 import { normalizeOptionalText, parseMoney } from "@/lib/catalog-import";
+import { resolveBrandId } from "@/lib/data/brands";
 import { parseSize } from "@/lib/product-size";
 import type { createClient } from "@/lib/supabase/server";
 
@@ -35,27 +36,6 @@ function revalidateCatalog() {
   revalidatePath("/stock-in");
   revalidatePath("/orders");
   revalidatePath("/reports");
-}
-
-async function resolveBrandId(supabase: Client, companyId: string, brandName: string) {
-  const name = brandName.trim();
-  if (!name) return null;
-
-  const { data: existing } = await supabase
-    .from("brands")
-    .select("id")
-    .eq("company_id", companyId)
-    .ilike("name", name)
-    .maybeSingle();
-  if (existing) return existing.id;
-
-  const { data: created, error } = await supabase
-    .from("brands")
-    .insert({ company_id: companyId, name })
-    .select("id")
-    .single();
-  if (error) throw new Error(error.message);
-  return created.id;
 }
 
 async function ownedProductIds(supabase: Client, companyId: string, productIds: string[]) {

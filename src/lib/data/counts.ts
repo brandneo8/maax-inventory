@@ -833,38 +833,6 @@ export async function getPostCountLedgerConflicts(
   });
 }
 
-/**
- * Weighted-average cost per product, as of the end of a given date — the
- * most recent product_branch_cost_history row at or before that date.
- * Falls back to 0 for a product with no cost history yet.
- */
-export async function getCostsAsOfDate(
-  supabase: Client,
-  branchId: string,
-  productIds: string[],
-  asOfDate: string,
-) {
-  const costs = new Map<string, number>();
-  const wanted = [...new Set(productIds.filter(Boolean))];
-  if (wanted.length === 0) return costs;
-  const boundary = `${asOfDate}T23:59:59.999Z`;
-  for (const ids of chunkList(wanted)) {
-    const { data, error } = await supabase
-      .from("product_branch_cost_history")
-      .select("product_id, avg_unit_cost, effective_at")
-      .eq("branch_id", branchId)
-      .in("product_id", ids)
-      .lte("effective_at", boundary)
-      .order("effective_at", { ascending: false });
-    if (error) throw queryError(error, "Could not look up historical cost.");
-    for (const row of data ?? []) {
-      if (!costs.has(row.product_id)) costs.set(row.product_id, Number(row.avg_unit_cost));
-    }
-  }
-  return costs;
-}
-
-
 // getVoidBlockers was removed: cost correctness on void is now handled
 // automatically by fn_recompute_branch_cost regardless of insertion order,
 // so there's no longer a case where voiding needs to be pre-checked or

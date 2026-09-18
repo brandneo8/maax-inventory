@@ -58,26 +58,43 @@ export async function syncBundleTag(
 export type BundleComponent = { productId: string; quantity: number };
 
 /**
- * The BOM for a bundle product, or an empty array if it isn't currently a
- * bundle (or has no components defined). Used to fan usage/receiving of the
- * bundle SKU out to its components — the bundle itself never carries its own
- * stock or cost, see fn_after_goods_receipt_item_insert.
+ * The BOM for each of the given products that is currently a bundle — a
+ * product not in the returned map either isn't a bundle or has no
+ * components defined, and should be treated as an empty array. Used to fan
+ * usage/receiving of bundle SKUs out to their components — a bundle itself
+ * never carries its own stock or cost, see fn_after_goods_receipt_item_insert.
+ * Batched across all given product ids in two queries total, regardless of
+ * how many of them are bundles.
  */
-export async function getBundleComponents(supabase: Client, productId: string): Promise<BundleComponent[]> {
-  const { data: product, error: productError } = await supabase
+export async function getBundleComponentsForProducts(
+  supabase: Client,
+  productIds: string[],
+): Promise<Map<string, BundleComponent[]>> {
+  const result = new Map<string, BundleComponent[]>();
+  const ids = [...new Set(productIds)];
+  if (ids.length === 0) return result;
+
+  const { data: products, error: productError } = await supabase
     .from("products")
-    .select("is_set")
-    .eq("id", productId)
-    .maybeSingle();
+    .select("id, is_set")
+    .in("id", ids);
   if (productError) throw new Error(productError.message);
-  if (!product?.is_set) return [];
+
+  const bundleIds = (products ?? []).filter((product) => product.is_set).map((product) => product.id);
+  if (bundleIds.length === 0) return result;
 
   const { data, error } = await supabase
     .from("product_components")
-    .select("component_product_id, quantity")
-    .eq("set_product_id", productId);
+    .select("set_product_id, component_product_id, quantity")
+    .in("set_product_id", bundleIds);
   if (error) throw new Error(error.message);
-  return (data ?? []).map((row) => ({ productId: row.component_product_id, quantity: Number(row.quantity) }));
+
+  for (const row of data ?? []) {
+    const components = result.get(row.set_product_id) ?? [];
+    components.push({ productId: row.component_product_id, quantity: Number(row.quantity) });
+    result.set(row.set_product_id, components);
+  }
+  return result;
 }
 
 export type BundleMigratableStock = {

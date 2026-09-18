@@ -76,37 +76,42 @@ export async function getPurchaseOrder(
 
   if (error) throw error;
 
-  const { data: items, error: itemsError } = await supabase
-    .from("purchase_order_items")
-    .select(
-      "id, product_id, classification, quantity_ordered, quantity_received, unit_price, line_total, sort_order, products(sku, name, order_name, size_label)",
-    )
-    .eq("purchase_order_id", id)
-    .order("sort_order")
-    .order("id");
+  // items/receipts/auditEvents only depend on the order id above, not on
+  // each other — fetch them together instead of one round trip at a time.
+  const [itemsResult, receiptsResult, auditEventsResult] = await Promise.all([
+    supabase
+      .from("purchase_order_items")
+      .select(
+        "id, product_id, classification, quantity_ordered, quantity_received, unit_price, line_total, sort_order, products(sku, name, order_name, size_label)",
+      )
+      .eq("purchase_order_id", id)
+      .order("sort_order")
+      .order("id"),
+    supabase
+      .from("goods_receipts")
+      .select(
+        "id, received_date, received_by, notes, invoice_reference, invoice_attachment_url, rounding_adjustment, goods_receipt_items(product_id, quantity_received, classification, purchase_order_item_id, products(sku, name, order_name))",
+      )
+      .eq("purchase_order_id", id)
+      .is("voided_at", null)
+      .order("received_date"),
+    supabase
+      .from("purchase_order_audit_events")
+      .select("id, event_type, actor_name, remarks, created_at")
+      .eq("purchase_order_id", id)
+      .order("created_at"),
+  ]);
 
-  if (itemsError) throw itemsError;
+  if (itemsResult.error) throw itemsResult.error;
+  if (receiptsResult.error) throw receiptsResult.error;
+  if (auditEventsResult.error) throw auditEventsResult.error;
 
-  const { data: receipts, error: receiptsError } = await supabase
-    .from("goods_receipts")
-    .select(
-      "id, received_date, received_by, notes, invoice_reference, invoice_attachment_url, rounding_adjustment, goods_receipt_items(product_id, quantity_received, classification, purchase_order_item_id, products(sku, name, order_name))",
-    )
-    .eq("purchase_order_id", id)
-    .is("voided_at", null)
-    .order("received_date");
-
-  if (receiptsError) throw receiptsError;
-
-  const { data: auditEvents, error: auditEventsError } = await supabase
-    .from("purchase_order_audit_events")
-    .select("id, event_type, actor_name, remarks, created_at")
-    .eq("purchase_order_id", id)
-    .order("created_at");
-
-  if (auditEventsError) throw auditEventsError;
-
-  return { ...data, items: items ?? [], receipts: receipts ?? [], auditEvents: auditEvents ?? [] };
+  return {
+    ...data,
+    items: itemsResult.data ?? [],
+    receipts: receiptsResult.data ?? [],
+    auditEvents: auditEventsResult.data ?? [],
+  };
 }
 
 export async function nextPoNumber(supabase: Client, companyId: string) {
