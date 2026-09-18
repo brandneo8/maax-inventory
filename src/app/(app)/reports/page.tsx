@@ -1,43 +1,14 @@
 import { requireBranch } from "@/lib/auth";
-import { getProducts } from "@/lib/data/lookups";
-import { getCurrentStock, getRecentMovements } from "@/lib/data/stock";
-import { formatDate, formatMoney, formatQty, formatSku, productDisplayName, productLabel } from "@/lib/format";
+import { getRecentMovements, getSalonStockReport } from "@/lib/data/stock";
+import { formatDate, formatMoney, formatQty, formatSku, productLabel } from "@/lib/format";
 import { tableClass, tdClass, thClass } from "@/lib/ui";
 
 export default async function ReportsPage() {
   const { supabase, companyId, branch } = await requireBranch();
-  const [stock, products, recent] = await Promise.all([
-    getCurrentStock(supabase),
-    getProducts(supabase, companyId),
+  const [{ salonStock, lowStock }, recent] = await Promise.all([
+    getSalonStockReport(supabase, companyId, branch.id),
     getRecentMovements(supabase, companyId, branch.id),
   ]);
-  const branchStock = stock.filter((row) => row.branch_id === branch.id);
-  const qtyByProduct = new Map<string, number>();
-  const salonStockMap = new Map<
-    string,
-    { productId: string; sku: string | undefined; name: string | undefined; quantity: number }
-  >();
-  for (const row of branchStock) {
-    if (!row.product_id) continue;
-    const quantity = Number(row.quantity_on_hand);
-    qtyByProduct.set(row.product_id, (qtyByProduct.get(row.product_id) ?? 0) + quantity);
-    const current = salonStockMap.get(row.product_id);
-    if (current) {
-      current.quantity += quantity;
-    } else {
-      salonStockMap.set(row.product_id, {
-        productId: row.product_id,
-        sku: row.sku ?? undefined,
-        name: row.name ?? undefined,
-        quantity,
-      });
-    }
-  }
-  const salonStock = [...salonStockMap.values()].filter((row) => row.quantity > 0);
-  const lowStock = products.filter((product) => {
-    if (product.low_stock_threshold == null) return false;
-    return (qtyByProduct.get(product.id) ?? 0) <= Number(product.low_stock_threshold);
-  });
 
   return (
     <div className="space-y-10">
@@ -71,9 +42,9 @@ export default async function ReportsPage() {
                 lowStock.map((row) => (
                   <tr key={row.id}>
                     <td className={tdClass}>{formatSku(row.sku)}</td>
-                    <td className={tdClass}>{productDisplayName(row)}</td>
-                    <td className={tdClass}>{formatQty(qtyByProduct.get(row.id) ?? 0)}</td>
-                    <td className={tdClass}>{formatQty(row.low_stock_threshold)}</td>
+                    <td className={tdClass}>{row.name}</td>
+                    <td className={tdClass}>{formatQty(row.onHand)}</td>
+                    <td className={tdClass}>{formatQty(row.threshold)}</td>
                   </tr>
                 ))
               )}

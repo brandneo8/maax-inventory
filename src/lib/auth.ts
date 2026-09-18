@@ -1,5 +1,6 @@
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
+import { cache } from "react";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { salonName } from "@/lib/labels";
@@ -35,7 +36,7 @@ async function grantDefaultAdminAccess(userId: string, email: string | undefined
   );
 }
 
-export async function requireUser() {
+async function loadUser() {
   const supabase = await createClient();
   const {
     data: { user },
@@ -104,6 +105,8 @@ export async function requireUser() {
     branch,
   };
 }
+
+export const requireUser = cache(loadUser);
 
 function sortSalonBranches(branches: BranchOption[]) {
   const rank = (name: string) => (name === "Min" ? 0 : name === "Kin" ? 1 : 2);

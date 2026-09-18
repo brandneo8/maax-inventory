@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter, unstable_rethrow } from "next/navigation";
 import { useState } from "react";
-import { markPurchaseOrderUnsent, removeGoodsReceipt, updateGoodsReceiptInvoice, updatePurchaseOrder } from "../actions";
+import { removeGoodsReceipt, updateGoodsReceiptInvoice, updatePurchaseOrder } from "../actions";
 import { formatDate, formatDateTime, formatMoney, formatQty } from "@/lib/format";
 import { classificationLabel, type PoStatus } from "@/lib/labels";
 import { blurOnWheel, btnClass, btnDangerClass, btnSecondaryClass, fieldClass, numberFieldClass, tableClass, tdClass, thClass } from "@/lib/ui";
@@ -13,7 +13,6 @@ import { PoStatusBadge } from "../po-status-badge";
 import { OrderTotals } from "../order-totals";
 import { catalogTax } from "@/lib/catalog-pricing";
 import { cn } from "@/lib/utils";
-import { MarkSentButton } from "./mark-sent-button";
 import { VoidOrderButton } from "./void-order-button";
 import { DuplicateOrderButton } from "./duplicate-order-button";
 import { AddFreeGoodsModal } from "./add-free-goods-modal";
@@ -244,8 +243,6 @@ export function OrderDetailPanel({
   expectedDeliveryDate,
   notes,
   suppliers,
-  canMarkSentNow,
-  canMarkUnsentNow,
   canReceiveNow,
   canVoidNow,
   canAddFreeGoodsNow,
@@ -267,8 +264,6 @@ export function OrderDetailPanel({
   expectedDeliveryDate: string | null;
   notes: string | null;
   suppliers: SupplierOption[];
-  canMarkSentNow: boolean;
-  canMarkUnsentNow: boolean;
   canReceiveNow: boolean;
   canVoidNow: boolean;
   canAddFreeGoodsNow: boolean;
@@ -288,6 +283,9 @@ export function OrderDetailPanel({
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
   const editGstRegistered = suppliers.find((supplier) => supplier.id === editSupplierId)?.gstRegistered ?? gstRegistered;
+  const editPickableProducts = editSupplierId
+    ? products.filter((product) => !product.supplierIds?.length || product.supplierIds.includes(editSupplierId))
+    : products;
   const sentEvents = auditEvents.filter((event) => event.eventType === "sent");
   const latestSentEvent = sentEvents.length > 0 ? sentEvents[sentEvents.length - 1] : null;
   const otherEvents = auditEvents.filter((event) => event.eventType !== "sent");
@@ -411,18 +409,9 @@ export function OrderDetailPanel({
                     Edit order
                   </button>
                 ) : null}
-                {canMarkSentNow ? <MarkSentButton purchaseOrderId={purchaseOrderId} /> : null}
-                {canMarkUnsentNow ? (
-                  <form action={markPurchaseOrderUnsent}>
-                    <input type="hidden" name="id" value={purchaseOrderId} />
-                    <button className={btnSecondaryClass} type="submit">
-                      Mark unsent
-                    </button>
-                  </form>
-                ) : null}
                 {canReceiveNow ? (
-                  <Link className={btnSecondaryClass} href={`/orders/${purchaseOrderId}/receive`}>
-                    Receive stock
+                  <Link className={btnClass} href={`/orders/${purchaseOrderId}/receive`}>
+                    Confirm &amp; receive
                   </Link>
                 ) : null}
                 {canAddFreeGoodsNow ? (
@@ -486,7 +475,7 @@ export function OrderDetailPanel({
 
       {editing ? (
         <div className="space-y-3">
-          <AddOrderLine products={products} onAdd={(line) => setLines((current) => [...current, line])} />
+          <AddOrderLine products={editPickableProducts} onAdd={(line) => setLines((current) => [...current, line])} />
           {lines.length > 0 ? (
             <BulkLineActionsBar
               onApplyAvgCost={applyAvgCostToAll}

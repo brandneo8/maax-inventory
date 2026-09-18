@@ -1,8 +1,8 @@
 import { notFound } from "next/navigation";
 import { requireBranch } from "@/lib/auth";
-import { canAddFreeGoods, canMarkSent, canMarkUnsent, canReceive, canVoid, getPurchaseOrder } from "@/lib/data/orders";
-import { getProducts, getSuppliers, getTaxRates } from "@/lib/data/lookups";
-import { getProductBranchCosts, pickPrimaryClassification } from "@/lib/data/products";
+import { canAddFreeGoods, canReceive, canVoid, getPurchaseOrder } from "@/lib/data/orders";
+import { getSuppliers, getTaxRates } from "@/lib/data/lookups";
+import { getOrderProductOptions } from "@/lib/data/products";
 import { productDisplayName, productLabel } from "@/lib/format";
 import type { ProductClassification } from "@/lib/labels";
 import { OrderDetailPanel } from "./order-detail-panel";
@@ -14,10 +14,9 @@ export default async function OrderDetailPage({
 }) {
   const { id } = await params;
   const { supabase, companyId, branch } = await requireBranch();
-  const [order, taxRates, branchCosts] = await Promise.all([
+  const [order, taxRates] = await Promise.all([
     getPurchaseOrder(supabase, companyId, id, branch.id).catch(() => null),
     getTaxRates(supabase, companyId),
-    getProductBranchCosts(supabase, companyId),
   ]);
 
   if (!order) notFound();
@@ -30,7 +29,7 @@ export default async function OrderDetailPage({
 
   const [suppliers, products] = await Promise.all([
     editableOrder ? getSuppliers(supabase, companyId) : Promise.resolve([]),
-    editableOrder || addFreeGoodsNow ? getProducts(supabase, companyId) : Promise.resolve([]),
+    editableOrder || addFreeGoodsNow ? getOrderProductOptions(supabase, companyId, branch.id) : Promise.resolve([]),
   ]);
 
   const items = order.items.map((item) => {
@@ -99,30 +98,11 @@ export default async function OrderDetailPage({
       expectedDeliveryDate={order.expected_delivery_date}
       notes={order.notes}
       suppliers={suppliers.map((item) => ({ id: item.id, label: item.supplier_name, gstRegistered: item.gst_registered }))}
-      canMarkSentNow={canMarkSent(order.status)}
-      canMarkUnsentNow={canMarkUnsent(order.status)}
       canReceiveNow={canReceive(order.status)}
       canVoidNow={canVoid(order.status)}
       canAddFreeGoodsNow={addFreeGoodsNow}
       items={items}
-      products={products.map((product) => ({
-        id: product.id,
-        label: productDisplayName(product) || product.sku || product.id,
-        defaultClassification: pickPrimaryClassification(
-          (product.product_branch_classifications ?? [])
-            .filter((row) => row.branch_id === branch.id)
-            .map((row) => row.classification),
-        ),
-        unitCost: Number(product.unit_cost_price),
-        sku: product.sku,
-        sizeLabel: product.size_label,
-        barcode: product.barcode,
-        branchAvgCost: branchCosts[product.id]?.[branch.id] ?? null,
-        tagNames: (product.product_tags ?? []).flatMap((row) => {
-          const tag = Array.isArray(row.tags) ? row.tags[0] : row.tags;
-          return tag?.name ? [tag.name] : [];
-        }),
-      }))}
+      products={products}
       receipts={receipts}
       freeGoodsSummary={freeGoodsSummary}
       auditEvents={auditEvents}

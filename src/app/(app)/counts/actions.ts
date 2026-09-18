@@ -261,7 +261,7 @@ export async function addCountEntryAction(formData: FormData) {
   if (productError) throw queryError(productError, "Could not check that product.");
   if (!product || !product.is_active) throw new Error("That product is not in the catalog.");
 
-  await addCountEntry(supabase, {
+  const applied = await addCountEntry(supabase, {
     countId: count.id,
     productId,
     quantityDelta,
@@ -269,9 +269,7 @@ export async function addCountEntryAction(formData: FormData) {
     branchId: branch.id,
   });
   await assignProductsToSalon(supabase, branch.id, [productId]);
-
-  revalidatePath(`/counts/${count.id}`);
-  revalidatePath(`/counts/${count.id}/review`);
+  return applied;
 }
 
 export async function searchCountProductsAction(countId: string, query: string) {

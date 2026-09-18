@@ -1,9 +1,8 @@
 import { notFound } from "next/navigation";
 import { requireBranch } from "@/lib/auth";
 import { getStockOutReport } from "@/lib/data/stock-out";
-import { getCatalogProducts } from "@/lib/data/products";
-import { isAvailableInTunai } from "@/lib/labels";
-import { productDisplayName, productLabel } from "@/lib/format";
+import { getBranchStockOutProducts } from "@/lib/data/products";
+import { productDisplayName } from "@/lib/format";
 import { StockOutDetailPanel } from "./stock-out-detail-panel";
 
 export default async function StockOutDetailPage({
@@ -17,14 +16,7 @@ export default async function StockOutDetailPage({
 
   if (!report) notFound();
 
-  const catalog = await getCatalogProducts(supabase, companyId);
-  const branchProducts = catalog.filter((product) => product.branchIds.includes(branch.id));
-  const retailProducts = branchProducts.filter((product) =>
-    isAvailableInTunai(product.classificationsByBranch[branch.id] ?? []),
-  );
-  const inhouseProducts = branchProducts.filter((product) =>
-    (product.classificationsByBranch[branch.id] ?? []).includes("inhouse"),
-  );
+  const { retail, inhouse } = await getBranchStockOutProducts(supabase, companyId, branch.id);
 
   const lines = report.lines.map((line) => {
     const product = Array.isArray(line.products) ? line.products[0] : line.products;
@@ -48,16 +40,8 @@ export default async function StockOutDetailPage({
       createdAt={report.created_at}
       attachmentUrl={report.attachment_url}
       lines={lines}
-      retailProducts={retailProducts.map((product) => ({
-        id: product.id,
-        label: productLabel(product),
-        tagNames: product.tagNames,
-      }))}
-      inhouseProducts={inhouseProducts.map((product) => ({
-        id: product.id,
-        label: productLabel(product),
-        tagNames: product.tagNames,
-      }))}
+      retailProducts={retail}
+      inhouseProducts={inhouse}
     />
   );
 }

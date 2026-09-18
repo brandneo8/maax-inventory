@@ -141,22 +141,21 @@ export async function resolveCountItems(
     if (!data || data.length < PAGE_SIZE) break;
   }
 
+  const assignedIds = [...assigned];
   const productIds: string[] = [];
-  for (let from = 0; ; from += PAGE_SIZE) {
-    let query = supabase
-      .from("products")
-      .select("id")
-      .eq("company_id", companyId)
-      .eq("is_active", true)
-      .order("id")
-      .range(from, from + PAGE_SIZE - 1);
-    if (filters.filter_brand_id) query = query.eq("brand_id", filters.filter_brand_id);
-    const { data, error } = await query;
-    if (error) throw queryError(error, "Could not load products for this count.");
-    for (const product of data ?? []) {
-      if (assigned.has(product.id)) productIds.push(product.id);
+  if (assignedIds.length > 0) {
+    for (const ids of chunkList(assignedIds)) {
+      let query = supabase
+        .from("products")
+        .select("id")
+        .eq("company_id", companyId)
+        .eq("is_active", true)
+        .in("id", ids);
+      if (filters.filter_brand_id) query = query.eq("brand_id", filters.filter_brand_id);
+      const { data, error } = await query;
+      if (error) throw queryError(error, "Could not load products for this count.");
+      for (const product of data ?? []) productIds.push(product.id);
     }
-    if (!data || data.length < PAGE_SIZE) break;
   }
 
   let scopedIds = productIds;
@@ -446,7 +445,7 @@ export async function addCountEntry(
 ) {
   const { data: itemRow, error } = await supabase
     .from("inventory_count_items")
-    .select("id, counted_quantity")
+    .select("id, counted_quantity, expected_quantity")
     .eq("inventory_count_id", args.countId)
     .eq("product_id", args.productId)
     .maybeSingle();
@@ -463,7 +462,7 @@ export async function addCountEntry(
         store_location_id: null,
         expected_quantity: stockMap.get(args.productId) ?? 0,
       })
-      .select("id, counted_quantity")
+      .select("id, counted_quantity, expected_quantity")
       .single();
     if (createError || !created) throw queryError(createError, "Could not add that product to this count.");
     item = created;
@@ -476,20 +475,33 @@ export async function addCountEntry(
     );
   }
 
-  const { error: insertError } = await supabase.from("inventory_count_entries").insert({
-    inventory_count_id: args.countId,
-    inventory_count_item_id: item.id,
-    store_location_id: null,
-    quantity_delta: args.quantityDelta,
-    created_by: args.createdBy,
-  });
-  if (insertError) throw queryError(insertError, "Could not save that count.");
+  const { data: entry, error: insertError } = await supabase
+    .from("inventory_count_entries")
+    .insert({
+      inventory_count_id: args.countId,
+      inventory_count_item_id: item.id,
+      store_location_id: null,
+      quantity_delta: args.quantityDelta,
+      created_by: args.createdBy,
+    })
+    .select("id, created_at")
+    .single();
+  if (insertError || !entry) throw queryError(insertError, "Could not save that count.");
 
   const { error: updateError } = await supabase
     .from("inventory_count_items")
     .update({ counted_quantity: next })
     .eq("id", item.id);
   if (updateError) throw queryError(updateError, "Could not update the counted total.");
+
+  return {
+    itemId: item.id,
+    productId: args.productId,
+    counted: next,
+    expected: Number(item.expected_quantity ?? 0),
+    entryId: entry.id,
+    createdAt: entry.created_at,
+  };
 }
 
 export async function setCountedQuantities(

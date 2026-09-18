@@ -2,17 +2,19 @@
 
 import { useMemo, useState } from "react";
 import { fieldClass } from "@/lib/ui";
-import { searchFieldsMatch } from "@/lib/search";
+import { normalizeSearchText, searchFieldsMatch } from "@/lib/search";
 import { cn } from "@/lib/utils";
 import type { ProductClassification } from "@/lib/labels";
 
 export type Option = {
   id: string;
   label: string;
+  orderName?: string | null;
   sku?: string | null;
   barcode?: string | null;
   sizeLabel?: string | null;
   tagNames?: string[];
+  supplierIds?: string[];
 };
 export type ProductOption = Option & {
   defaultClassification: ProductClassification | null;
@@ -23,6 +25,25 @@ export type ProductOption = Option & {
 };
 
 const MAX_PRODUCT_MATCHES = 50;
+
+function productSearchFields(product: Option) {
+  return [product.label, product.orderName, product.sku, product.barcode, product.sizeLabel];
+}
+
+function matchRank(product: Option, needle: string) {
+  const query = normalizeSearchText(needle);
+  const barcode = normalizeSearchText(product.barcode ?? "");
+  const sku = normalizeSearchText(product.sku ?? "");
+  const label = normalizeSearchText(product.label ?? "");
+  const orderName = normalizeSearchText(product.orderName ?? "");
+  if (barcode && barcode === query) return 0;
+  if (sku && sku === query) return 1;
+  if (barcode && barcode.startsWith(query)) return 2;
+  if (sku && sku.startsWith(query)) return 3;
+  if (label.startsWith(query) || orderName.startsWith(query)) return 4;
+  if (label.includes(query) || orderName.includes(query)) return 5;
+  return 6;
+}
 
 export function ProductPicker<T extends Option>({
   products,
@@ -40,7 +61,9 @@ export function ProductPicker<T extends Option>({
   const matches = useMemo(() => {
     const needle = query.trim();
     const pool = needle
-      ? products.filter((product) => searchFieldsMatch([product.label, product.sku, product.barcode], needle))
+      ? products
+          .filter((product) => searchFieldsMatch(productSearchFields(product), needle))
+          .sort((left, right) => matchRank(left, needle) - matchRank(right, needle))
       : products;
     return pool.slice(0, MAX_PRODUCT_MATCHES);
   }, [products, query]);
@@ -51,6 +74,9 @@ export function ProductPicker<T extends Option>({
         className={fieldClass}
         value={open ? query : (selected?.label ?? "")}
         placeholder="Search by name, SKU, or barcode"
+        autoComplete="off"
+        autoCorrect="off"
+        spellCheck={false}
         onFocus={() => {
           setOpen(true);
           setQuery("");
@@ -84,8 +110,17 @@ export function ProductPicker<T extends Option>({
                     setQuery("");
                   }}
                 >
-                  {product.label}
-                  {product.sizeLabel ? <span className="ml-1.5 text-xs text-muted">({product.sizeLabel})</span> : null}
+                  <span>
+                    {product.label}
+                    {product.sizeLabel ? (
+                      <span className="ml-1.5 text-xs text-muted">({product.sizeLabel})</span>
+                    ) : null}
+                  </span>
+                  {product.sku || product.barcode ? (
+                    <span className="mt-0.5 block text-xs text-muted">
+                      {[product.sku, product.barcode].filter(Boolean).join(" · ")}
+                    </span>
+                  ) : null}
                 </button>
               ))
             )}

@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type ReactNode } from "react";
+import { Fragment, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, type ChangeEvent, type ReactNode } from "react";
 import { unstable_rethrow, useRouter } from "next/navigation";
 import {
   deleteProduct,
@@ -127,7 +127,7 @@ function toDraft(product: ProductRow): TableDraft {
   };
 }
 
-const PAGE_SIZES = [50, 100, 500, 1000] as const;
+const PAGE_SIZES = [50, 100] as const;
 
 const FILTERABLE_CLASSIFICATIONS = CLASSIFICATIONS.filter((item) => item.value !== "retail_inhouse");
 
@@ -664,6 +664,7 @@ export function ProductsTable({
   const [recentBulkIds, setRecentBulkIds] = useState<Set<string>>(() => new Set());
   const [selected, setSelected] = useState<string[]>([]);
   const [query, setQuery] = useState("");
+  const deferredQuery = useDeferredValue(query);
   const [brandFilter, setBrandFilter] = useState("");
   const [brandSubFilter, setBrandSubFilter] = useState<string[]>([]);
   const [customBrandSubs, setCustomBrandSubs] = useState<{ brand: string; name: string }[]>([]);
@@ -803,14 +804,14 @@ export function ProductsTable({
       }
       if (tagFilter === "none" && current.tagIds.length > 0) return false;
       if (tagFilter && tagFilter !== "none" && !current.tagIds.includes(tagFilter)) return false;
-      const needle = query.trim();
+      const needle = deferredQuery.trim();
       if (!needle) return true;
       return searchFieldsMatch(
         [current.sku, current.barcode, current.name, current.orderName, current.brand, current.brandSub, current.size, current.supplierName],
         needle,
       );
     },
-    [brandFilter, brandSubFilter, overlayTick, query, salonFilter, sizeFilter, supplierFilter, tagFilter, typeFilter],
+    [brandFilter, brandSubFilter, deferredQuery, overlayTick, salonFilter, sizeFilter, supplierFilter, tagFilter, typeFilter],
   );
 
   const brandSubOptions = useMemo(() => {

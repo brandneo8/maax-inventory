@@ -27,6 +27,10 @@ export function OrderForm({
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
   const gstRegistered = suppliers.find((supplier) => supplier.id === supplierId)?.gstRegistered ?? false;
+  const pickableProducts = useMemo(() => {
+    if (!supplierId) return products;
+    return products.filter((product) => !product.supplierIds?.length || product.supplierIds.includes(supplierId));
+  }, [products, supplierId]);
 
   function updateLine(key: string, patch: Partial<EditableLine>) {
     setLines((current) => current.map((line) => (line.key === key ? { ...line, ...patch } : line)));
@@ -79,7 +83,6 @@ export function OrderForm({
         branch_id: branchId,
         supplier_id: String(formData.get("supplier_id") ?? ""),
         order_date: String(formData.get("order_date") ?? ""),
-        expected_delivery_date: String(formData.get("expected_delivery_date") ?? ""),
         notes: String(formData.get("notes") ?? ""),
         lines: lines.map((line) => ({
           product_id: line.product_id,
@@ -124,10 +127,6 @@ export function OrderForm({
           <span>Order date</span>
           <input className={fieldClass} type="date" name="order_date" defaultValue={today} />
         </label>
-        <label className="space-y-1 text-sm">
-          <span>Expected delivery</span>
-          <input className={fieldClass} type="date" name="expected_delivery_date" />
-        </label>
         <label className="space-y-1 text-sm md:col-span-2">
           <span>Notes</span>
           <textarea className={fieldClass} name="notes" rows={2} />
@@ -136,8 +135,13 @@ export function OrderForm({
 
       <div className="space-y-3">
         <h2 className="text-lg font-semibold">Lines</h2>
+        {supplierId ? (
+          <p className="text-xs text-muted">
+            Showing products tagged to this supplier, plus any product with no supplier tagged yet.
+          </p>
+        ) : null}
 
-        <AddOrderLine products={products} onAdd={(line) => setLines((current) => [...current, line])} />
+        <AddOrderLine products={pickableProducts} onAdd={(line) => setLines((current) => [...current, line])} />
 
         {lines.length > 0 ? (
           <BulkLineActionsBar

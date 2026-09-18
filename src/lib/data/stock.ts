@@ -3,6 +3,88 @@ import { productDisplayName } from "@/lib/format";
 
 type Client = Awaited<ReturnType<typeof createClient>>;
 
+export async function getSalonStockReport(supabase: Client, companyId: string, branchId: string) {
+  const { data: locations, error: locationError } = await supabase
+    .from("store_locations")
+    .select("id")
+    .eq("branch_id", branchId);
+  if (locationError) throw locationError;
+  const locationIds = (locations ?? []).map((location) => location.id);
+  if (locationIds.length === 0) {
+    return { salonStock: [] as SalonStockRow[], lowStock: [] as LowStockRow[] };
+  }
+
+  const { data: stockRows, error: stockError } = await supabase
+    .from("current_stock")
+    .select("product_id, quantity_on_hand")
+    .in("store_location_id", locationIds)
+    .gt("quantity_on_hand", 0);
+  if (stockError) throw stockError;
+
+  const qtyByProduct = new Map<string, number>();
+  for (const row of stockRows ?? []) {
+    if (!row.product_id) continue;
+    qtyByProduct.set(row.product_id, (qtyByProduct.get(row.product_id) ?? 0) + Number(row.quantity_on_hand));
+  }
+
+  const stockIds = [...qtyByProduct.keys()];
+  const [{ data: named }, { data: watched, error: watchedError }] = await Promise.all([
+    stockIds.length === 0
+      ? Promise.resolve({ data: [] as { id: string; sku: string | null; name: string | null; order_name: string | null }[] })
+      : supabase.from("products").select("id, sku, name, order_name").in("id", stockIds),
+    supabase
+      .from("products")
+      .select("id, sku, name, order_name, low_stock_threshold")
+      .eq("company_id", companyId)
+      .eq("is_active", true)
+      .not("low_stock_threshold", "is", null),
+  ]);
+  if (watchedError) throw watchedError;
+
+  const productMap = new Map((named ?? []).map((product) => [product.id, product]));
+  const salonStock = stockIds
+    .map((productId) => {
+      const product = productMap.get(productId);
+      return {
+        productId,
+        sku: product?.sku ?? undefined,
+        name: productDisplayName(product) || undefined,
+        quantity: qtyByProduct.get(productId) ?? 0,
+      };
+    })
+    .filter((row) => row.quantity > 0);
+
+  const lowStock = (watched ?? [])
+    .map((product) => {
+      const onHand = qtyByProduct.get(product.id) ?? 0;
+      return {
+        id: product.id,
+        sku: product.sku,
+        name: productDisplayName(product),
+        onHand,
+        threshold: Number(product.low_stock_threshold),
+      };
+    })
+    .filter((row) => row.threshold != null && row.onHand <= row.threshold);
+
+  return { salonStock, lowStock };
+}
+
+type SalonStockRow = {
+  productId: string;
+  sku: string | undefined;
+  name: string | undefined;
+  quantity: number;
+};
+
+type LowStockRow = {
+  id: string;
+  sku: string | null;
+  name: string;
+  onHand: number;
+  threshold: number;
+};
+
 export async function getCurrentStock(supabase: Client) {
   const { data: rows, error } = await supabase
     .from("current_stock")

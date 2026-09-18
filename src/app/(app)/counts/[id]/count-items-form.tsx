@@ -349,8 +349,8 @@ function CountLinesTable({
 export function CountItemsForm({
   countId,
   countType = "regular",
-  items,
-  entries,
+  items: itemsProp,
+  entries: entriesProp,
   branchName = "",
   salonProductIds = [],
   editable = true,
@@ -366,6 +366,10 @@ export function CountItemsForm({
   mode?: "count" | "review";
 }) {
   const router = useRouter();
+  const [liveItems, setLiveItems] = useState(itemsProp);
+  const [liveEntries, setLiveEntries] = useState(entriesProp);
+  const items = liveItems;
+  const entries = liveEntries;
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [pending, setPending] = useState<
@@ -395,6 +399,14 @@ export function CountItemsForm({
   const qtyRef = useRef<HTMLInputElement>(null);
   const productSearchRef = useRef<HTMLInputElement>(null);
   useCountLive(countId, editable, pending !== null);
+
+  useEffect(() => {
+    setLiveItems(itemsProp);
+  }, [itemsProp]);
+
+  useEffect(() => {
+    setLiveEntries(entriesProp);
+  }, [entriesProp]);
 
   useEffect(() => {
     setQuantities(
@@ -622,8 +634,55 @@ export function CountItemsForm({
     setError(null);
     setMessage(null);
     try {
-      await addCountEntryAction(formData);
-      const next = current + amount;
+      const applied = await addCountEntryAction(formData);
+      const next = applied.counted;
+      setLiveItems((current) => {
+        const existing = current.find((item) => item.productId === product.productId);
+        if (existing) {
+          return current.map((item) =>
+            item.id === existing.id
+              ? {
+                  ...item,
+                  counted: applied.counted,
+                  expected: applied.expected,
+                  variance: applied.counted - applied.expected,
+                }
+              : item,
+          );
+        }
+        return [
+          ...current,
+          {
+            id: applied.itemId,
+            productId: product.productId,
+            orderName: product.orderName,
+            name: product.name,
+            sku: product.sku,
+            barcode: product.barcode,
+            brand: product.brand,
+            brandSub: "",
+            sizeLabel: product.sizeLabel,
+            expected: applied.expected,
+            counted: applied.counted,
+            variance: applied.counted - applied.expected,
+          },
+        ];
+      });
+      setLiveEntries((current) => [
+        {
+          id: applied.entryId,
+          itemId: applied.itemId,
+          orderName: product.orderName,
+          name: product.name,
+          brand: product.brand,
+          sizeLabel: product.sizeLabel,
+          quantityDelta: amount,
+          createdAt: applied.createdAt,
+        },
+        ...current,
+      ]);
+      setQuantities((current) => ({ ...current, [applied.itemId]: String(applied.counted) }));
+      setSalonOn((current) => ({ ...current, [product.productId]: true }));
       setMessage(
         `Applied ${signedQty(amount)} to ${lineTitle(product)}. Counted is now ${formatQty(next)}.`,
       );
@@ -633,7 +692,6 @@ export function CountItemsForm({
       setCatalogHits([]);
       setCatalogReady(false);
       if (editable) window.setTimeout(() => productSearchRef.current?.focus(), 0);
-      router.refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not save that count.");
     } finally {

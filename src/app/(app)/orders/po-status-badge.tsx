@@ -2,7 +2,7 @@ import { poStatusLabel, type PoStatus } from "@/lib/labels";
 import { cn } from "@/lib/utils";
 
 const STATUS_STYLES: Partial<Record<PoStatus, string>> = {
-  sent: "border-green-300 bg-green-50 text-green-700",
+  received: "border-green-300 bg-green-50 text-green-700",
   cancelled: "border-red-200 bg-red-50 text-red-700",
 };
 

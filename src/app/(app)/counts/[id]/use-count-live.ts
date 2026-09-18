@@ -13,9 +13,8 @@ export function useCountLive(countId: string, enabled: boolean, paused: boolean)
   useEffect(() => {
     if (!paused && skippedRef.current) {
       skippedRef.current = false;
-      router.refresh();
     }
-  }, [paused, router]);
+  }, [paused]);
 
   useEffect(() => {
     if (!enabled || !countId) return;
@@ -36,7 +35,7 @@ export function useCountLive(countId: string, enabled: boolean, paused: boolean)
           return;
         }
         router.refresh();
-      }, 200);
+      }, 800);
     };
 
     const stopPoll = () => {

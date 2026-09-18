@@ -1,16 +1,11 @@
 import Link from "next/link";
 import { requireBranch } from "@/lib/auth";
-import { getCatalogProducts } from "@/lib/data/products";
-import { isAvailableInTunai } from "@/lib/labels";
+import { countTunaiProducts } from "@/lib/data/products";
 import { btnClass, workingIn } from "@/lib/ui";
 
 export default async function HomePage() {
-  const { supabase, companyId, branch } = await requireBranch();
-  const catalog = await getCatalogProducts(supabase, companyId);
-  const branchProducts = catalog.filter((product) => product.branchIds.includes(branch.id));
-  const tunaiCount = branchProducts.filter((product) =>
-    isAvailableInTunai(product.classificationsByBranch[branch.id] ?? []),
-  ).length;
+  const { supabase, branch } = await requireBranch();
+  const tunaiCount = await countTunaiProducts(supabase, branch.id);
 
   return (
     <div className="space-y-10">

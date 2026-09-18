@@ -15,6 +15,13 @@ export function searchTextMatches(haystack: string, needle: string) {
   return normalizeSearchText(haystack).includes(query);
 }
 
+export function searchTokens(needle: string) {
+  return normalizeSearchText(needle).split(" ").filter(Boolean);
+}
+
 export function searchFieldsMatch(fields: Array<string | null | undefined>, needle: string) {
-  return searchTextMatches(fields.map((value) => value ?? "").join(" "), needle);
+  const tokens = searchTokens(needle);
+  if (tokens.length === 0) return true;
+  const haystack = normalizeSearchText(fields.map((value) => value ?? "").join(" "));
+  return tokens.every((token) => haystack.includes(token));
 }

@@ -121,15 +121,7 @@ export async function nextPoNumber(supabase: Client, companyId: string) {
 }
 
 export function canReceive(status: PoStatus) {
-  return status === "sent" || status === "confirmed" || status === "partially_received";
-}
-
-export function canMarkSent(status: PoStatus) {
-  return status === "draft";
-}
-
-export function canMarkUnsent(status: PoStatus) {
-  return status === "sent";
+  return status === "draft" || status === "sent" || status === "confirmed" || status === "partially_received";
 }
 
 export function canVoid(status: PoStatus) {

@@ -8,9 +8,9 @@ import { parseSize, sizesMatch } from "@/lib/product-size";
 import { searchTextMatches } from "@/lib/search";
 import { fieldClass, tableClass, tdClass, thClass } from "@/lib/ui";
 import { cn } from "@/lib/utils";
-import type { CatalogProduct } from "@/lib/data/products";
+import type { TunaiListProduct } from "@/lib/data/products";
 
-export type TunaiProduct = CatalogProduct & { onHand: number; classifications: ProductClassification[] };
+export type TunaiProduct = TunaiListProduct;
 
 type SortColumn = "type" | "brand" | "sku" | "barcode" | "name" | "size" | "onHand";
 type SortDirection = "asc" | "desc";

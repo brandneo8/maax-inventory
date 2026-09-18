@@ -6,7 +6,7 @@ import { requireBranch } from "@/lib/auth";
 import { nextPoNumber } from "@/lib/data/orders";
 import { getDefaultStoreLocationId } from "@/lib/data/lookups";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { ORDER_SENDER_NAMES, type ProductClassification } from "@/lib/labels";
+import type { ProductClassification } from "@/lib/labels";
 
 const MAX_INVOICE_BYTES = 10 * 1024 * 1024;
 const INVOICE_MIME_EXTENSIONS: Record<string, string> = {
@@ -45,7 +45,6 @@ export async function createPurchaseOrder(input: {
   branch_id: string;
   supplier_id: string;
   order_date: string;
-  expected_delivery_date: string;
   notes: string;
   lines: OrderLineInput[];
 }) {
@@ -69,7 +68,6 @@ export async function createPurchaseOrder(input: {
       po_number: poNumber,
       status: "draft",
       order_date: input.order_date || null,
-      expected_delivery_date: input.expected_delivery_date || null,
       notes: input.notes || null,
       created_by: user.email,
     })
@@ -154,62 +152,6 @@ export async function updatePurchaseOrder(input: {
 
   revalidatePath(`/orders/${order.id}`);
   revalidatePath("/orders");
-}
-
-export async function markPurchaseOrderSent(input: { id: string; sentBy: string; remarks: string; sentDate: string }) {
-  const { supabase, companyId, branch } = await requireBranch();
-  const sentBy = input.sentBy.trim();
-  if (!ORDER_SENDER_NAMES.includes(sentBy)) {
-    throw new Error("Select who is sending this order.");
-  }
-  const sentDate = input.sentDate || new Date().toISOString().slice(0, 10);
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(sentDate)) {
-    throw new Error("Enter a valid sent date.");
-  }
-
-  const { data: order, error } = await supabase
-    .from("purchase_orders")
-    .update({ status: "sent" })
-    .eq("id", input.id)
-    .eq("company_id", companyId)
-    .eq("branch_id", branch.id)
-    .eq("status", "draft")
-    .select("id")
-    .single();
-
-  if (error || !order) throw error ?? new Error("Could not mark this order sent.");
-
-  const { error: auditError } = await supabase.from("purchase_order_audit_events").insert({
-    company_id: companyId,
-    purchase_order_id: order.id,
-    event_type: "sent",
-    actor_name: sentBy,
-    remarks: input.remarks.trim() || null,
-    created_at: `${sentDate}T12:00:00+08:00`,
-  });
-  if (auditError) throw auditError;
-
-  revalidatePath(`/orders/${input.id}`);
-  revalidatePath("/orders");
-  revalidatePath("/");
-}
-
-export async function markPurchaseOrderUnsent(formData: FormData) {
-  const { supabase, companyId, branch } = await requireBranch();
-  const id = String(formData.get("id") ?? "");
-
-  const { error } = await supabase
-    .from("purchase_orders")
-    .update({ status: "draft" })
-    .eq("id", id)
-    .eq("company_id", companyId)
-    .eq("branch_id", branch.id)
-    .eq("status", "sent");
-
-  if (error) throw error;
-  revalidatePath(`/orders/${id}`);
-  revalidatePath("/orders");
-  revalidatePath("/");
 }
 
 export async function receivePurchaseOrder(
@@ -418,7 +360,7 @@ export async function duplicatePurchaseOrder(formData: FormData) {
 
   const { data: order, error: orderError } = await supabase
     .from("purchase_orders")
-    .select("id, supplier_id, branch_id, order_date, expected_delivery_date, notes")
+    .select("id, supplier_id, branch_id, order_date, notes")
     .eq("id", id)
     .eq("company_id", companyId)
     .eq("branch_id", branch.id)
@@ -443,7 +385,6 @@ export async function duplicatePurchaseOrder(formData: FormData) {
       po_number: poNumber,
       status: "draft",
       order_date: new Date().toISOString().slice(0, 10),
-      expected_delivery_date: order.expected_delivery_date,
       notes: order.notes,
       created_by: user.email,
     })
