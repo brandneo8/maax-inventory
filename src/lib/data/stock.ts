@@ -3,88 +3,6 @@ import { productDisplayName } from "@/lib/format";
 
 type Client = Awaited<ReturnType<typeof createClient>>;
 
-export async function getSalonStockReport(supabase: Client, companyId: string, branchId: string) {
-  const { data: locations, error: locationError } = await supabase
-    .from("store_locations")
-    .select("id")
-    .eq("branch_id", branchId);
-  if (locationError) throw locationError;
-  const locationIds = (locations ?? []).map((location) => location.id);
-  if (locationIds.length === 0) {
-    return { salonStock: [] as SalonStockRow[], lowStock: [] as LowStockRow[] };
-  }
-
-  const { data: stockRows, error: stockError } = await supabase
-    .from("current_stock")
-    .select("product_id, quantity_on_hand")
-    .in("store_location_id", locationIds)
-    .gt("quantity_on_hand", 0);
-  if (stockError) throw stockError;
-
-  const qtyByProduct = new Map<string, number>();
-  for (const row of stockRows ?? []) {
-    if (!row.product_id) continue;
-    qtyByProduct.set(row.product_id, (qtyByProduct.get(row.product_id) ?? 0) + Number(row.quantity_on_hand));
-  }
-
-  const stockIds = [...qtyByProduct.keys()];
-  const [{ data: named }, { data: watched, error: watchedError }] = await Promise.all([
-    stockIds.length === 0
-      ? Promise.resolve({ data: [] as { id: string; sku: string | null; name: string | null; order_name: string | null }[] })
-      : supabase.from("products").select("id, sku, name, order_name").in("id", stockIds),
-    supabase
-      .from("products")
-      .select("id, sku, name, order_name, low_stock_threshold")
-      .eq("company_id", companyId)
-      .eq("is_active", true)
-      .not("low_stock_threshold", "is", null),
-  ]);
-  if (watchedError) throw watchedError;
-
-  const productMap = new Map((named ?? []).map((product) => [product.id, product]));
-  const salonStock = stockIds
-    .map((productId) => {
-      const product = productMap.get(productId);
-      return {
-        productId,
-        sku: product?.sku ?? undefined,
-        name: productDisplayName(product) || undefined,
-        quantity: qtyByProduct.get(productId) ?? 0,
-      };
-    })
-    .filter((row) => row.quantity > 0);
-
-  const lowStock = (watched ?? [])
-    .map((product) => {
-      const onHand = qtyByProduct.get(product.id) ?? 0;
-      return {
-        id: product.id,
-        sku: product.sku,
-        name: productDisplayName(product),
-        onHand,
-        threshold: Number(product.low_stock_threshold),
-      };
-    })
-    .filter((row) => row.threshold != null && row.onHand <= row.threshold);
-
-  return { salonStock, lowStock };
-}
-
-type SalonStockRow = {
-  productId: string;
-  sku: string | undefined;
-  name: string | undefined;
-  quantity: number;
-};
-
-type LowStockRow = {
-  id: string;
-  sku: string | null;
-  name: string;
-  onHand: number;
-  threshold: number;
-};
-
 export async function getCurrentStock(supabase: Client) {
   const { data: rows, error } = await supabase
     .from("current_stock")
@@ -138,60 +56,324 @@ export async function getLowStock(supabase: Client) {
   return data ?? [];
 }
 
-export async function getRecentMovements(supabase: Client, companyId: string, branchId: string) {
+function nextMonth(month: string) {
+  const [year, monthNum] = month.split("-").map(Number);
+  return monthNum === 12 ? `${year + 1}-01` : `${year}-${String(monthNum + 1).padStart(2, "0")}`;
+}
+
+function monthStartIso(month: string) {
+  return `${month}-01T00:00:00.000Z`;
+}
+
+function monthRange(fromMonth: string, toMonth: string) {
+  const months: string[] = [];
+  let cursor = fromMonth;
+  // Guards against a reversed or absurdly wide range slipping past the
+  // page's own clamping and turning into a runaway loop.
+  for (let safety = 0; cursor <= toMonth && safety < 240; safety += 1) {
+    months.push(cursor);
+    cursor = nextMonth(cursor);
+  }
+  return months;
+}
+
+export type MonthlyCogsByTag = { tagName: string; values: number[] };
+export type MonthlyGroupedValues = { label: string; values: number[] };
+
+export type MonthlyInventoryReport = {
+  months: string[];
+  openingBalance: number[];
+  ordered: number[];
+  used: number[];
+  closingBalance: number[];
+  // Closing inventory $ balance for each month, grouped by brand (every
+  // product has exactly one brand or none, so these rows always add up to
+  // closingBalance exactly) and by tag (a multi-tagged product's balance is
+  // attributed to every tag it carries, so these rows can sum to more than
+  // closingBalance when that happens).
+  inventoryByBrand: MonthlyGroupedValues[];
+  inventoryByTag: MonthlyGroupedValues[];
+  // Cost-of-goods-sold breakdown by transaction type. These five rows
+  // always add up to `used` exactly for every month — cogsOther exists
+  // specifically to catch anything that doesn't fit the other four, so
+  // the breakdown never silently drops part of the total.
+  cogsRetail: number[];
+  cogsInhouse: number[];
+  cogsGwp: number[];
+  cogsWastage: number[];
+  cogsOther: number[];
+  // Same figures as cogsInhouse, split by each in-house product's tags.
+  // A multi-tagged product's cost is attributed to every tag it carries,
+  // so these rows can sum to more than cogsInhouse when that happens.
+  cogsInhouseByTag: MonthlyCogsByTag[];
+};
+
+function tagNameFrom(value: unknown) {
+  const row = Array.isArray(value) ? value[0] : value;
+  if (!row || typeof row !== "object" || !("name" in row)) return "";
+  return String((row as { name?: string | null }).name ?? "").trim();
+}
+
+function chunkIds<T>(items: T[], size = 200) {
+  const chunks: T[][] = [];
+  for (let index = 0; index < items.length; index += size) chunks.push(items.slice(index, index + size));
+  return chunks;
+}
+
+const NO_BRAND = "No brand";
+const UNTAGGED = "Untagged";
+
+function sortGroupLabels(labels: string[], lastLabel: string) {
+  return [...labels].sort((left, right) => {
+    if (left === lastLabel) return 1;
+    if (right === lastLabel) return -1;
+    return left.localeCompare(right, undefined, { sensitivity: "base" });
+  });
+}
+
+/**
+ * Monthly inventory-value roll-forward for a branch: for each month in
+ * [fromMonth, toMonth] ("YYYY-MM"), the opening $ balance, $ received
+ * ("ordered" — goods receipts plus count-driven surplus, both genuine
+ * inflows), $ consumed ("used" — retail/in-house/GWP use plus count-driven
+ * shortfall, both genuine outflows), and the closing balance (opening +
+ * ordered - used), plus a cost-of-goods-sold breakdown by retail vs
+ * in-house use (and in-house use by tag). Every inventory_transactions
+ * row's unit_cost is already the weighted-average cost at the moment that
+ * row happened (fn_recompute_branch_cost keeps it that way as the ledger
+ * changes), so quantity_change * unit_cost is exactly that row's dollar
+ * effect on inventory value — this reads the ledger directly instead of
+ * re-deriving costs itself.
+ */
+export async function getMonthlyInventoryReport(
+  supabase: Client,
+  companyId: string,
+  branchId: string,
+  fromMonth: string,
+  toMonth: string,
+): Promise<MonthlyInventoryReport> {
+  const months = monthRange(fromMonth, toMonth);
+  const empty: MonthlyInventoryReport = {
+    months,
+    openingBalance: months.map(() => 0),
+    ordered: months.map(() => 0),
+    used: months.map(() => 0),
+    closingBalance: months.map(() => 0),
+    cogsRetail: months.map(() => 0),
+    cogsInhouse: months.map(() => 0),
+    cogsGwp: months.map(() => 0),
+    cogsWastage: months.map(() => 0),
+    cogsOther: months.map(() => 0),
+    cogsInhouseByTag: [],
+    inventoryByBrand: [],
+    inventoryByTag: [],
+  };
+  if (months.length === 0) return empty;
+
   const { data: locations, error: locationError } = await supabase
     .from("store_locations")
-    .select("id, name")
+    .select("id")
     .eq("branch_id", branchId);
-
   if (locationError) throw locationError;
   const locationIds = (locations ?? []).map((location) => location.id);
-  if (locationIds.length === 0) return [];
+  if (locationIds.length === 0) return empty;
 
   const { data: rows, error } = await supabase
     .from("inventory_transactions")
-    .select("id, txn_type, quantity_change, txn_date, notes, product_id, store_location_id, reference_table, reference_id")
+    .select("product_id, txn_type, quantity_change, unit_cost, notes, txn_date")
     .eq("company_id", companyId)
     .in("store_location_id", locationIds)
-    .order("txn_date", { ascending: false })
-    .limit(40);
-
+    .lt("txn_date", monthStartIso(nextMonth(toMonth)));
   if (error) throw error;
-  if (!rows?.length) return [];
 
-  const productIds = [...new Set(rows.map((row) => row.product_id))];
-  const receiptIds = rows
-    .filter((row) => row.reference_table === "goods_receipt_items" && row.reference_id)
-    .map((row) => row.reference_id as string);
+  const fromBoundary = monthStartIso(fromMonth);
+  const orderedByMonth = new Map<string, number>();
+  const usedByMonth = new Map<string, number>();
+  const retailByMonth = new Map<string, number>();
+  const inhouseByMonth = new Map<string, number>();
+  const gwpByMonth = new Map<string, number>();
+  const wastageByMonth = new Map<string, number>();
+  const otherByMonth = new Map<string, number>();
+  const inhouseEntries: { productId: string; month: string; amount: number }[] = [];
+  // Per-product running value, independent of the ordered/used split above
+  // — this is what "Inventory summary" (by brand/by tag) is built from,
+  // since a closing $ balance has to be tracked per product before it can
+  // be grouped by that product's own brand or tags.
+  const openingCarryByProduct = new Map<string, number>();
+  const productMonthDelta = new Map<string, Map<string, number>>();
+  let openingCarry = 0;
 
-  const [{ data: products }, { data: receipts }] = await Promise.all([
-    supabase.from("products").select("id, sku, name, order_name").in("id", productIds),
-    receiptIds.length
-      ? supabase.from("goods_receipt_items").select("id, unit_cost").in("id", receiptIds)
-      : Promise.resolve({ data: [] }),
-  ]);
+  for (const row of rows ?? []) {
+    const value = Number(row.quantity_change) * Number(row.unit_cost ?? 0);
+    const isCountVariance = row.txn_type === "count_adjustment" && row.notes === "Count variance";
+    const isInflow = row.txn_type === "goods_receipt" || (isCountVariance && Number(row.quantity_change) > 0);
 
-  const productMap = new Map((products ?? []).map((product) => [product.id, product]));
-  const locationMap = new Map((locations ?? []).map((location) => [location.id, location]));
-  const costMap = new Map((receipts ?? []).map((item) => [item.id, Number(item.unit_cost)]));
+    if (row.txn_date < fromBoundary) {
+      openingCarry += value;
+      openingCarryByProduct.set(row.product_id, (openingCarryByProduct.get(row.product_id) ?? 0) + value);
+      continue;
+    }
 
-  return rows.map((row) => {
-    const product = productMap.get(row.product_id);
-    const unitCost = row.reference_id ? costMap.get(row.reference_id) : undefined;
-    return {
-      id: row.id,
-      txn_type: row.txn_type,
-      quantity_change: row.quantity_change,
-      txn_date: row.txn_date,
-      notes: row.notes,
-      sku: product?.sku,
-      name: productDisplayName(product),
-      location_name: locationMap.get(row.store_location_id)?.name,
-      unit_cost: unitCost,
-      movement_value:
-        unitCost === undefined ? null : Number(row.quantity_change) * unitCost,
-    };
-  });
+    const monthKey = row.txn_date.slice(0, 7);
+    const productDeltas = productMonthDelta.get(row.product_id) ?? new Map<string, number>();
+    productDeltas.set(monthKey, (productDeltas.get(monthKey) ?? 0) + value);
+    productMonthDelta.set(row.product_id, productDeltas);
+
+    if (isInflow) {
+      orderedByMonth.set(monthKey, (orderedByMonth.get(monthKey) ?? 0) + value);
+      continue;
+    }
+
+    // Everything that isn't a ground-truth inflow is a usage-side outflow
+    // here (retail/in-house/GWP use, a count shortfall, or some other rare
+    // ledger correction) — value is negative, so flip it to a positive
+    // "used"/cost amount. Every row lands in exactly one of the four named
+    // buckets or "other", so they always add back up to the month's total.
+    const amount = -value;
+    usedByMonth.set(monthKey, (usedByMonth.get(monthKey) ?? 0) + amount);
+
+    if (row.txn_type === "retail_use") {
+      retailByMonth.set(monthKey, (retailByMonth.get(monthKey) ?? 0) + amount);
+    } else if (row.txn_type === "inhouse_use") {
+      inhouseByMonth.set(monthKey, (inhouseByMonth.get(monthKey) ?? 0) + amount);
+      inhouseEntries.push({ productId: row.product_id, month: monthKey, amount });
+    } else if (row.txn_type === "gwp_use") {
+      gwpByMonth.set(monthKey, (gwpByMonth.get(monthKey) ?? 0) + amount);
+    } else if (isCountVariance) {
+      wastageByMonth.set(monthKey, (wastageByMonth.get(monthKey) ?? 0) + amount);
+    } else {
+      otherByMonth.set(monthKey, (otherByMonth.get(monthKey) ?? 0) + amount);
+    }
+  }
+
+  const inhouseProductIds = [...new Set(inhouseEntries.map((entry) => entry.productId))];
+  const tagNamesByProduct = new Map<string, string[]>();
+  if (inhouseProductIds.length > 0) {
+    const { data: tagRows, error: tagError } = await supabase
+      .from("product_tags")
+      .select("product_id, tags(name)")
+      .in("product_id", inhouseProductIds);
+    if (tagError) throw tagError;
+    for (const tagRow of tagRows ?? []) {
+      const name = tagNameFrom(tagRow.tags);
+      if (!name) continue;
+      const list = tagNamesByProduct.get(tagRow.product_id) ?? [];
+      list.push(name);
+      tagNamesByProduct.set(tagRow.product_id, list);
+    }
+  }
+
+  const byTagAndMonth = new Map<string, number>();
+  const tagNames = new Set<string>();
+  for (const entry of inhouseEntries) {
+    const names = tagNamesByProduct.get(entry.productId) ?? [];
+    for (const name of names.length > 0 ? names : [UNTAGGED]) {
+      tagNames.add(name);
+      const key = `${name}|${entry.month}`;
+      byTagAndMonth.set(key, (byTagAndMonth.get(key) ?? 0) + entry.amount);
+    }
+  }
+  const cogsInhouseByTag = sortGroupLabels([...tagNames], UNTAGGED).map((tagName) => ({
+    tagName,
+    values: months.map((month) => byTagAndMonth.get(`${tagName}|${month}`) ?? 0),
+  }));
+
+  // Every product that appears anywhere in this branch's history up to
+  // toMonth might carry a nonzero balance into the displayed range, even
+  // with no activity of its own within it — so this is every product key
+  // seen above, not just ones with a delta inside [fromMonth, toMonth].
+  const summaryProductIds = [...new Set([...openingCarryByProduct.keys(), ...productMonthDelta.keys()])];
+  const closingByProduct = new Map<string, number[]>();
+  for (const productId of summaryProductIds) {
+    const deltas = productMonthDelta.get(productId);
+    let running = openingCarryByProduct.get(productId) ?? 0;
+    const values = months.map((month) => {
+      running += deltas?.get(month) ?? 0;
+      return running;
+    });
+    closingByProduct.set(productId, values);
+  }
+
+  const brandByProduct = new Map<string, string>();
+  const tagNamesByProductForInventory = new Map<string, string[]>();
+  for (const idsChunk of chunkIds(summaryProductIds)) {
+    const { data: productRows, error: productError } = await supabase
+      .from("products")
+      .select("id, brands(name), product_tags(tags(name))")
+      .in("id", idsChunk);
+    if (productError) throw productError;
+    for (const productRow of productRows ?? []) {
+      brandByProduct.set(productRow.id, tagNameFrom(productRow.brands) || NO_BRAND);
+      const names = (productRow.product_tags ?? []).flatMap((productTag) => {
+        const name = tagNameFrom(productTag.tags);
+        return name ? [name] : [];
+      });
+      tagNamesByProductForInventory.set(productRow.id, names);
+    }
+  }
+
+  function groupInventoryBy(labelsFor: (productId: string) => string[], lastLabel: string) {
+    const totalsByLabel = new Map<string, number[]>();
+    for (const productId of summaryProductIds) {
+      const values = closingByProduct.get(productId) ?? months.map(() => 0);
+      for (const label of labelsFor(productId)) {
+        const totals = totalsByLabel.get(label) ?? months.map(() => 0);
+        for (let index = 0; index < months.length; index += 1) totals[index] += values[index];
+        totalsByLabel.set(label, totals);
+      }
+    }
+    return sortGroupLabels([...totalsByLabel.keys()], lastLabel).map((label) => ({
+      label,
+      values: totalsByLabel.get(label)!,
+    }));
+  }
+  const inventoryByBrand = groupInventoryBy((productId) => [brandByProduct.get(productId) ?? NO_BRAND], NO_BRAND);
+  const inventoryByTag = groupInventoryBy((productId) => {
+    const names = tagNamesByProductForInventory.get(productId) ?? [];
+    return names.length > 0 ? names : [UNTAGGED];
+  }, UNTAGGED);
+
+  const openingBalance: number[] = [];
+  const ordered: number[] = [];
+  const used: number[] = [];
+  const closingBalance: number[] = [];
+  const cogsRetail: number[] = [];
+  const cogsInhouse: number[] = [];
+  const cogsGwp: number[] = [];
+  const cogsWastage: number[] = [];
+  const cogsOther: number[] = [];
+  let runningOpen = openingCarry;
+  for (const month of months) {
+    const monthOrdered = orderedByMonth.get(month) ?? 0;
+    const monthUsed = usedByMonth.get(month) ?? 0;
+    const close = runningOpen + monthOrdered - monthUsed;
+    openingBalance.push(runningOpen);
+    ordered.push(monthOrdered);
+    used.push(monthUsed);
+    closingBalance.push(close);
+    cogsRetail.push(retailByMonth.get(month) ?? 0);
+    cogsInhouse.push(inhouseByMonth.get(month) ?? 0);
+    cogsGwp.push(gwpByMonth.get(month) ?? 0);
+    cogsWastage.push(wastageByMonth.get(month) ?? 0);
+    cogsOther.push(otherByMonth.get(month) ?? 0);
+    runningOpen = close;
+  }
+
+  return {
+    months,
+    openingBalance,
+    ordered,
+    used,
+    closingBalance,
+    inventoryByBrand,
+    inventoryByTag,
+    cogsRetail,
+    cogsInhouse,
+    cogsGwp,
+    cogsWastage,
+    cogsOther,
+    cogsInhouseByTag,
+  };
 }
 
 function firstOfOne<T>(value: T | T[] | null | undefined): T | null {

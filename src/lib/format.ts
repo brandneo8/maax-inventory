@@ -113,6 +113,14 @@ export function formatDate(value: string | null | undefined) {
   });
 }
 
+/** "2026-09" -> "Sep 2026", for a monthly report's column headers. */
+export function formatMonthLabel(month: string) {
+  const match = /^(\d{4})-(\d{2})$/.exec(month);
+  if (!match) return month;
+  const date = new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, 1));
+  return date.toLocaleDateString("en-SG", { timeZone: "UTC", month: "short", year: "numeric" });
+}
+
 export function formatDateTime(value: string | null | undefined) {
   if (!value) return "—";
   const date = new Date(value);
