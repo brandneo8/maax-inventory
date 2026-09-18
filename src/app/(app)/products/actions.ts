@@ -5,8 +5,9 @@ import { requireAdmin, requireBranch } from "@/lib/auth";
 import { catalogSize, normalizeOptionalText, parseMoney } from "@/lib/catalog-import";
 import { createBrandResolver, resolveBrandId } from "@/lib/data/brands";
 import { persistProductComponents, syncBundleTag } from "@/lib/data/product-components";
+import { reconcilePosAllowedForProducts } from "@/lib/data/pos-rules";
 import { formatDate, productLabel } from "@/lib/format";
-import { countStatusLabel, defaultPosAllowed, salonName, type ProductClassification } from "@/lib/labels";
+import { countStatusLabel, salonName, type ProductClassification } from "@/lib/labels";
 import { parseSize } from "@/lib/product-size";
 import { createAdminClient } from "@/lib/supabase/admin";
 import type { createClient } from "@/lib/supabase/server";
@@ -160,45 +161,6 @@ async function stampCatalogSaved(companyId: string, email: string | undefined) {
   if (error) throw new Error(error.message);
 }
 
-export async function setProductPosAllowed(productId: string, allowed: boolean) {
-  const { supabase, companyId } = await requireAdmin();
-  const { error } = await supabase
-    .from("products")
-    .update({ pos_allowed: allowed })
-    .eq("id", productId)
-    .eq("company_id", companyId);
-  if (error) throw new Error(error.message || "Could not update this product's POS status.");
-  revalidatePath("/admin/pos");
-}
-
-// Applies a tag-filtered batch decision in one go. Anything set here is a
-// plain overwrite of pos_allowed, same as the single-product toggle — there
-// is no separate "rule" record kept, so a product touched afterward by
-// setProductPosAllowed (an exception) simply stays at whatever it was last
-// set to until this bulk action is run again for a filter that includes it.
-export async function setProductsPosAllowedBulk(productIds: string[], allowed: boolean) {
-  const { supabase, companyId } = await requireAdmin();
-  const ids = [...new Set(productIds)];
-  if (ids.length === 0) return;
-
-  // A single .in("id", ids) call URL-encodes every id into the query
-  // string — with a few hundred+ UUIDs that string gets long enough to be
-  // rejected outright (400 Bad Request) before Postgres ever sees it, so
-  // this batches the update instead.
-  const BATCH_SIZE = 200;
-  for (let index = 0; index < ids.length; index += BATCH_SIZE) {
-    const batch = ids.slice(index, index + BATCH_SIZE);
-    const { error } = await supabase
-      .from("products")
-      .update({ pos_allowed: allowed })
-      .eq("company_id", companyId)
-      .in("id", batch);
-    if (error) throw new Error(error.message || "Could not update these products' POS status.");
-  }
-
-  revalidatePath("/admin/pos");
-}
-
 export async function quickCreateProduct(input: {
   order_name: string;
   sku: string;
@@ -241,10 +203,11 @@ export async function quickCreateProduct(input: {
       tax_rate_id: defaultTax?.id ?? null,
       size_label: parsedSize?.label ?? null,
       size_ml: parsedSize?.ml ?? null,
-      // No tags exist yet at quick-create time, so this only ever
-      // evaluates the "no excluded tag" branch today — kept explicit so
-      // it stays correct if quick-create ever gains a tag field.
-      pos_allowed: defaultPosAllowed([]),
+      // No tags exist yet at quick-create time, so the POS exclude-by-tag
+      // rule can't match anything — it starts allowed, and if it's tagged
+      // with an excluded tag afterward on /admin/branches, that tagging
+      // action corrects pos_allowed itself (see reconcilePosAllowedForProducts).
+      pos_allowed: true,
     })
     .select("id, sku, order_name, name")
     .single();
@@ -388,8 +351,10 @@ export async function saveProducts(drafts: ProductDraft[]) {
           company_id: companyId,
           tax_rate_id: defaultTax?.id ?? null,
           // Tags are assigned separately, later, on /admin/branches — none
-          // exist yet at creation, so this is the "no excluded tag" default.
-          pos_allowed: defaultPosAllowed([]),
+          // exist yet at creation, so it starts allowed (see
+          // reconcilePosAllowedForProducts below for the bundle tag this
+          // same save might add).
+          pos_allowed: true,
         })
         .select("id")
         .single();
@@ -411,6 +376,10 @@ export async function saveProducts(drafts: ProductDraft[]) {
     saved.push({ clientKey: draft.clientKey ?? null, id: productId });
   }
 
+  // Catches drift from the Bundle tag this save may have just added or
+  // removed via syncBundleTag above — a no-op for any product whose tags
+  // didn't change.
+  await reconcilePosAllowedForProducts(supabase, companyId, saved.map((row) => row.id));
   await stampCatalogSaved(companyId, user.email);
   revalidateCatalog();
   return { saved };

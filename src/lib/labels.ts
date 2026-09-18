@@ -53,18 +53,6 @@ export function isRetailFacing(values: ProductClassification[] | null | undefine
   return (values ?? []).some((value) => RETAIL_FACING_CLASSIFICATIONS.includes(value));
 }
 
-const POS_EXCLUDED_TAG_NAMES = ["colour"];
-
-/**
- * Starting pos_allowed value for a brand-new product, decided purely by
- * tag name at creation time — explicit and easy to extend later. Only
- * ever used as the initial value; after creation, pos_allowed is manual
- * and only ever changes through /pos, regardless of later tag edits.
- */
-export function defaultPosAllowed(tagNames: string[]) {
-  return !tagNames.some((name) => POS_EXCLUDED_TAG_NAMES.includes(name.trim().toLowerCase()));
-}
-
 export function poStatusLabel(value: PoStatus) {
   return PO_STATUSES.find((item) => item.value === value)?.label ?? value;
 }

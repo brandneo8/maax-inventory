@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { requireAdmin } from "@/lib/auth";
+import { reconcilePosAllowedForProducts } from "@/lib/data/pos-rules";
 import type { ProductClassification } from "@/lib/labels";
 
 const VALID_CLASSIFICATIONS = new Set<ProductClassification>(["retail", "inhouse", "gwp"]);
@@ -190,6 +191,8 @@ export async function bulkAddTagToProducts(productIds: string[], tagId: string) 
     );
   if (insertError) throw new Error(insertError.message || "Could not add the tag.");
 
+  await reconcilePosAllowedForProducts(supabase, companyId, targetIds);
+  revalidatePath("/admin/pos");
   revalidateBranchAssignment();
 }
 
@@ -252,5 +255,7 @@ export async function updateProductTags(productId: string, tagIds: string[]) {
     if (insertError) throw new Error(insertError.message || "Could not update tags.");
   }
 
+  await reconcilePosAllowedForProducts(supabase, companyId, [productId]);
+  revalidatePath("/admin/pos");
   revalidateBranchAssignment();
 }
