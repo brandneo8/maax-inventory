@@ -7,7 +7,6 @@ import { salonName } from "@/lib/labels";
 
 export const DEFAULT_ADMIN_EMAIL = "brand1998@gmail.com";
 export const BRANCH_COOKIE = "maax-branch-id";
-export const ADMIN_EDIT_COOKIE = "maax-admin-edit";
 
 export type BranchOption = {
   id: string;
@@ -162,9 +161,4 @@ export async function requireAdmin() {
     redirect("/home");
   }
   return ctx;
-}
-
-export async function isAdminEditUnlocked() {
-  const cookieStore = await cookies();
-  return cookieStore.get(ADMIN_EDIT_COOKIE)?.value === "1";
 }

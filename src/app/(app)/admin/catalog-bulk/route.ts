@@ -31,8 +31,8 @@ function asString(value: unknown) {
 function revalidateCatalog() {
   revalidatePath("/admin");
   revalidatePath("/admin/products");
-  revalidatePath("/home/tunai");
   revalidatePath("/home");
+  revalidatePath("/stock-in");
   revalidatePath("/orders");
   revalidatePath("/reports");
 }

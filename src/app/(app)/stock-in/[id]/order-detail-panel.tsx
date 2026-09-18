@@ -382,8 +382,8 @@ export function OrderDetailPanel({
   return (
     <div className="space-y-6">
       <div>
-        <Link href="/orders" className="text-sm text-muted underline">
-          Back to orders
+        <Link href="/stock-in" className="text-sm text-muted underline">
+          Back to stock-in
         </Link>
         <div className="mt-2 flex flex-wrap items-end justify-between gap-4">
           <div>
@@ -410,7 +410,7 @@ export function OrderDetailPanel({
                   </button>
                 ) : null}
                 {canReceiveNow ? (
-                  <Link className={btnClass} href={`/orders/${purchaseOrderId}/receive`}>
+                  <Link className={btnClass} href={`/stock-in/${purchaseOrderId}/receive`}>
                     Confirm &amp; receive
                   </Link>
                 ) : null}

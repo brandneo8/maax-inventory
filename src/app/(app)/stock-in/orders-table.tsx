@@ -195,7 +195,7 @@ export function OrdersTable({ orders }: { orders: OrderRow[] }) {
             sortedOrders.map((order) => (
               <tr key={order.id}>
                 <td className={tdClass}>
-                  <Link className="underline" href={`/orders/${order.id}`}>
+                  <Link className="underline" href={`/stock-in/${order.id}`}>
                     {order.poNumber}
                   </Link>
                 </td>

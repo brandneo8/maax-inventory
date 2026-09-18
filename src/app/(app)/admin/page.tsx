@@ -22,6 +22,11 @@ const sections = [
     title: "Suppliers",
     body: "Maintain supplier contacts, channels, and GST registration.",
   },
+  {
+    href: "/admin/pos",
+    title: "POS",
+    body: "Decide which products may appear in the POS system, and download the Min and Kin allowlists.",
+  },
 ];
 
 export default async function AdminPage() {

@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { requireBranch } from "@/lib/auth";
+import { assertNoActiveCount } from "@/lib/data/counts";
 import { getDefaultStoreLocationId } from "@/lib/data/lookups";
 import { getBundleComponents } from "@/lib/data/product-components";
 import { businessTxnDate } from "@/lib/format";
@@ -113,7 +114,11 @@ async function insertStockOutLine(
       company_id: input.companyId,
       product_id: line.productId,
       store_location_id: input.storeLocationId,
-      txn_type: "retail_use" as const,
+      // Stock-out is Pulse's own manual entry, not a POS-tracked sale —
+      // it's always inhouse_use now. Genuine retail sales only ever come
+      // from the external POS-report import pathway (src/app/(app)/import),
+      // which writes retail_use directly.
+      txn_type: "inhouse_use" as const,
       quantity_change: -line.quantity,
       reference_table: "retail_use_entries",
       reference_id: entry.id,
@@ -163,6 +168,7 @@ export async function recordStockOutReport(
   attachmentFile?: File | null,
 ) {
   const { supabase, companyId, user, branch } = await requireBranch();
+  await assertNoActiveCount(supabase, companyId, branch.id, "record stock-out");
   if (input.branch_id && input.branch_id !== branch.id) {
     throw new Error("The form is for a different salon. Switch branch and try again.");
   }
@@ -232,6 +238,7 @@ export async function updateStockOutReport(
   attachmentFile?: File | null,
 ) {
   const { supabase, companyId, user, branch } = await requireBranch();
+  await assertNoActiveCount(supabase, companyId, branch.id, "record stock-out");
   if (input.type !== "retail" && input.type !== "inhouse") {
     throw new Error("Select a type before adding lines.");
   }

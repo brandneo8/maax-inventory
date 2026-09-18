@@ -9,7 +9,6 @@ const VALID_CLASSIFICATIONS = new Set<ProductClassification>(["retail", "inhouse
 function revalidateBranchAssignment() {
   revalidatePath("/admin/branches");
   revalidatePath("/admin/products");
-  revalidatePath("/home/tunai");
   revalidatePath("/home");
 }
 

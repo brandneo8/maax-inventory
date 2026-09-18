@@ -42,10 +42,27 @@ export function classificationTagsLabel(values: ProductClassification[] | null |
     .join(", ");
 }
 
-const TUNAI_CLASSIFICATIONS: ProductClassification[] = ["retail", "gwp", "retail_inhouse"];
+const RETAIL_FACING_CLASSIFICATIONS: ProductClassification[] = ["retail", "gwp", "retail_inhouse"];
 
-export function isAvailableInTunai(values: ProductClassification[] | null | undefined) {
-  return (values ?? []).some((value) => TUNAI_CLASSIFICATIONS.includes(value));
+// Whether a classification set makes a product retail-facing at a branch —
+// used to bucket the stock-out picker into retail vs in-house. This is a
+// classification check only; whether a product may appear in the POS
+// system itself is now a separate, manual decision (products.pos_allowed,
+// set on /pos), not derived from classification.
+export function isRetailFacing(values: ProductClassification[] | null | undefined) {
+  return (values ?? []).some((value) => RETAIL_FACING_CLASSIFICATIONS.includes(value));
+}
+
+const POS_EXCLUDED_TAG_NAMES = ["colour"];
+
+/**
+ * Starting pos_allowed value for a brand-new product, decided purely by
+ * tag name at creation time — explicit and easy to extend later. Only
+ * ever used as the initial value; after creation, pos_allowed is manual
+ * and only ever changes through /pos, regardless of later tag edits.
+ */
+export function defaultPosAllowed(tagNames: string[]) {
+  return !tagNames.some((name) => POS_EXCLUDED_TAG_NAMES.includes(name.trim().toLowerCase()));
 }
 
 export function poStatusLabel(value: PoStatus) {
@@ -85,7 +102,8 @@ export function countTypeLabel(countType: string) {
 
 const MOVEMENT_TYPE_LABELS: Record<string, string> = {
   goods_receipt: "Goods receipt",
-  retail_use: "Retail / in-house use",
+  retail_use: "Retail use",
+  inhouse_use: "In-house use",
   count_adjustment: "Count adjustment",
   transfer: "Transfer",
   waste: "Waste",

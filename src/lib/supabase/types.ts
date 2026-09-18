@@ -633,6 +633,78 @@ export type Database = {
           },
         ]
       }
+      pos_tag_rule_tags: {
+        Row: {
+          rule_id: string
+          tag_id: string
+        }
+        Insert: {
+          rule_id: string
+          tag_id: string
+        }
+        Update: {
+          rule_id?: string
+          tag_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "pos_tag_rule_tags_rule_id_fkey"
+            columns: ["rule_id"]
+            isOneToOne: false
+            referencedRelation: "pos_tag_rules"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "pos_tag_rule_tags_tag_id_fkey"
+            columns: ["tag_id"]
+            isOneToOne: false
+            referencedRelation: "product_tag_branch_summary"
+            referencedColumns: ["tag_id"]
+          },
+          {
+            foreignKeyName: "pos_tag_rule_tags_tag_id_fkey"
+            columns: ["tag_id"]
+            isOneToOne: false
+            referencedRelation: "tags"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      pos_tag_rules: {
+        Row: {
+          allowed: boolean
+          company_id: string
+          created_at: string
+          id: string
+          label: string | null
+          updated_at: string
+        }
+        Insert: {
+          allowed: boolean
+          company_id: string
+          created_at?: string
+          id?: string
+          label?: string | null
+          updated_at?: string
+        }
+        Update: {
+          allowed?: boolean
+          company_id?: string
+          created_at?: string
+          id?: string
+          label?: string | null
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "pos_tag_rules_company_id_fkey"
+            columns: ["company_id"]
+            isOneToOne: false
+            referencedRelation: "companies"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       product_branch_classifications: {
         Row: {
           branch_id: string
@@ -966,6 +1038,7 @@ export type Database = {
           name: string | null
           order_name: string
           picture_url: string | null
+          pos_allowed: boolean
           rrp: number | null
           size_label: string | null
           size_ml: number | null
@@ -992,6 +1065,7 @@ export type Database = {
           name?: string | null
           order_name: string
           picture_url?: string | null
+          pos_allowed?: boolean
           rrp?: number | null
           size_label?: string | null
           size_ml?: number | null
@@ -1018,6 +1092,7 @@ export type Database = {
           name?: string | null
           order_name?: string
           picture_url?: string | null
+          pos_allowed?: boolean
           rrp?: number | null
           size_label?: string | null
           size_ml?: number | null
@@ -1691,6 +1766,17 @@ export type Database = {
         }
         Returns: undefined
       }
+      fn_average_monthly_use: {
+        Args: {
+          p_branch_id: string
+          p_months?: number
+          p_product_ids: string[]
+        }
+        Returns: {
+          avg_monthly_use: number
+          product_id: string
+        }[]
+      }
       fn_business_txn_date: {
         Args: { p_business_date: string }
         Returns: string
@@ -1760,6 +1846,7 @@ export type Database = {
         | "waste"
         | "gwp_use"
         | "initial_stock"
+        | "inhouse_use"
       order_channel: "email" | "phone" | "portal" | "whatsapp" | "other"
       po_status:
         | "draft"
@@ -1912,6 +1999,7 @@ export const Constants = {
         "waste",
         "gwp_use",
         "initial_stock",
+        "inhouse_use",
       ],
       order_channel: ["email", "phone", "portal", "whatsapp", "other"],
       po_status: [

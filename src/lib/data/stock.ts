@@ -193,3 +193,115 @@ export async function getRecentMovements(supabase: Client, companyId: string, br
     };
   });
 }
+
+function firstOfOne<T>(value: T | T[] | null | undefined): T | null {
+  if (!value) return null;
+  return Array.isArray(value) ? (value[0] ?? null) : value;
+}
+
+export type ProductLedgerRow = {
+  id: string;
+  txnType: string;
+  quantityChange: number;
+  txnDate: string;
+  notes: string | null;
+  reference: { label: string; href?: string } | null;
+};
+
+/**
+ * The full inventory history for one product at one branch — every
+ * addition (goods receipts), deduction (retail/in-house use), and count
+ * adjustment, newest first, each resolved to a link back to its source
+ * (the PO, stock-out report, or count that caused it). Adapted from the
+ * former /movement page's ledger query, scoped down to a single product
+ * instead of the whole branch.
+ */
+export async function getProductLedger(supabase: Client, companyId: string, branchId: string, productId: string) {
+  const { data: locations, error: locationError } = await supabase
+    .from("store_locations")
+    .select("id")
+    .eq("branch_id", branchId);
+  if (locationError) throw locationError;
+  const locationIds = (locations ?? []).map((location) => location.id);
+  if (locationIds.length === 0) return [] as ProductLedgerRow[];
+
+  const { data: rows, error } = await supabase
+    .from("inventory_transactions")
+    .select("id, txn_type, quantity_change, txn_date, notes, reference_table, reference_id")
+    .eq("company_id", companyId)
+    .eq("product_id", productId)
+    .in("store_location_id", locationIds)
+    .order("txn_date", { ascending: false })
+    .order("id", { ascending: false });
+  if (error) throw error;
+  if (!rows?.length) return [] as ProductLedgerRow[];
+
+  const receiptItemIds = rows
+    .filter((row) => row.reference_table === "goods_receipt_items" && row.reference_id)
+    .map((row) => row.reference_id as string);
+  const countItemIds = rows
+    .filter((row) => row.reference_table === "inventory_count_items" && row.reference_id)
+    .map((row) => row.reference_id as string);
+  const retailEntryIds = rows
+    .filter((row) => row.reference_table === "retail_use_entries" && row.reference_id)
+    .map((row) => row.reference_id as string);
+
+  const [{ data: receiptItems }, { data: countItems }, { data: retailEntries }] = await Promise.all([
+    receiptItemIds.length
+      ? supabase
+          .from("goods_receipt_items")
+          .select("id, goods_receipts(purchase_order_id, purchase_orders(po_number))")
+          .in("id", receiptItemIds)
+      : Promise.resolve({ data: [] as { id: string; goods_receipts: unknown }[] }),
+    countItemIds.length
+      ? supabase
+          .from("inventory_count_items")
+          .select("id, inventory_count_id, inventory_counts(count_date)")
+          .in("id", countItemIds)
+      : Promise.resolve({ data: [] as { id: string; inventory_count_id: string; inventory_counts: unknown }[] }),
+    retailEntryIds.length
+      ? supabase.from("retail_use_entries").select("id, stock_out_report_id").in("id", retailEntryIds)
+      : Promise.resolve({ data: [] as { id: string; stock_out_report_id: string | null }[] }),
+  ]);
+
+  const receiptMap = new Map((receiptItems ?? []).map((item) => [item.id, item]));
+  const countItemMap = new Map((countItems ?? []).map((item) => [item.id, item]));
+  const retailEntryMap = new Map((retailEntries ?? []).map((entry) => [entry.id, entry]));
+
+  return rows.map((row): ProductLedgerRow => {
+    let reference: ProductLedgerRow["reference"] = null;
+
+    if (row.reference_table === "goods_receipt_items" && row.reference_id) {
+      const item = receiptMap.get(row.reference_id) as
+        | { goods_receipts: { purchase_order_id: string | null; purchase_orders: unknown } | null }
+        | undefined;
+      const receipt = firstOfOne(item?.goods_receipts ?? null);
+      const po = firstOfOne((receipt?.purchase_orders as { po_number: string } | { po_number: string }[]) ?? null);
+      reference = po?.po_number
+        ? { label: po.po_number, href: receipt?.purchase_order_id ? `/stock-in/${receipt.purchase_order_id}` : undefined }
+        : { label: "Purchase order" };
+    } else if (row.reference_table === "inventory_count_items" && row.reference_id) {
+      const item = countItemMap.get(row.reference_id) as
+        | { inventory_count_id: string; inventory_counts: unknown }
+        | undefined;
+      const inventoryCount = firstOfOne((item?.inventory_counts as { count_date: string } | { count_date: string }[]) ?? null);
+      reference = item
+        ? { label: inventoryCount ? `Count ${inventoryCount.count_date}` : "Count", href: `/counts/${item.inventory_count_id}` }
+        : { label: "Count" };
+    } else if (row.reference_table === "retail_use_entries" && row.reference_id) {
+      const entry = retailEntryMap.get(row.reference_id) as { stock_out_report_id: string | null } | undefined;
+      reference = entry?.stock_out_report_id
+        ? { label: "Stock-out", href: `/stock-out/${entry.stock_out_report_id}` }
+        : { label: "Stock-out" };
+    }
+
+    return {
+      id: row.id,
+      txnType: row.txn_type,
+      quantityChange: Number(row.quantity_change),
+      txnDate: row.txn_date,
+      notes: row.notes,
+      reference,
+    };
+  });
+}

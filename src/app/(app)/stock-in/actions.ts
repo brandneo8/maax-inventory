@@ -3,10 +3,17 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { requireBranch } from "@/lib/auth";
+import { assertNoActiveCount } from "@/lib/data/counts";
 import { nextPoNumber } from "@/lib/data/orders";
 import { getDefaultStoreLocationId } from "@/lib/data/lookups";
 import { createAdminClient } from "@/lib/supabase/admin";
 import type { ProductClassification } from "@/lib/labels";
+
+function revalidatePurchaseOrderPaths(orderId?: string) {
+  revalidatePath("/stock-in");
+  revalidatePath("/orders");
+  if (orderId) revalidatePath(`/stock-in/${orderId}`);
+}
 
 const MAX_INVOICE_BYTES = 10 * 1024 * 1024;
 const INVOICE_MIME_EXTENSIONS: Record<string, string> = {
@@ -89,9 +96,9 @@ export async function createPurchaseOrder(input: {
 
   if (itemsError) throw itemsError;
 
-  revalidatePath("/orders");
+  revalidatePurchaseOrderPaths(order.id);
   revalidatePath("/");
-  redirect(`/orders/${order.id}`);
+  redirect(`/stock-in/${order.id}`);
 }
 
 export async function updatePurchaseOrder(input: {
@@ -150,8 +157,7 @@ export async function updatePurchaseOrder(input: {
   );
   if (insertError) throw insertError;
 
-  revalidatePath(`/orders/${order.id}`);
-  revalidatePath("/orders");
+  revalidatePurchaseOrderPaths(order.id);
 }
 
 export async function receivePurchaseOrder(
@@ -173,6 +179,7 @@ export async function receivePurchaseOrder(
   invoiceFile?: File | null,
 ) {
   const { supabase, companyId, user, branch } = await requireBranch();
+  await assertNoActiveCount(supabase, companyId, branch.id, "receive stock");
   const lines = input.lines.filter((line) => line.quantity_received > 0 && line.store_location_id);
 
   if (lines.length === 0) {
@@ -254,11 +261,9 @@ export async function receivePurchaseOrder(
     if (assignError) throw assignError;
   }
 
-  revalidatePath(`/orders/${order.id}`);
-  revalidatePath("/orders");
-  revalidatePath("/home/tunai");
+  revalidatePurchaseOrderPaths(order.id);
   revalidatePath("/home");
-  redirect(`/orders/${order.id}`);
+  redirect(`/stock-in/${order.id}`);
 }
 
 export async function addFreeGoodsReceipt(input: {
@@ -268,6 +273,7 @@ export async function addFreeGoodsReceipt(input: {
   lines: { product_id: string; quantity_received: number; classification: ProductClassification }[];
 }) {
   const { supabase, companyId, user, branch } = await requireBranch();
+  await assertNoActiveCount(supabase, companyId, branch.id, "receive stock");
   const lines = input.lines.filter((line) => line.quantity_received > 0 && line.product_id);
 
   if (lines.length === 0) {
@@ -331,9 +337,7 @@ export async function addFreeGoodsReceipt(input: {
     if (assignError) throw assignError;
   }
 
-  revalidatePath(`/orders/${order.id}`);
-  revalidatePath("/orders");
-  revalidatePath("/home/tunai");
+  revalidatePurchaseOrderPaths(order.id);
   revalidatePath("/home");
 }
 
@@ -348,10 +352,9 @@ export async function voidPurchaseOrder(formData: FormData) {
   });
 
   if (error) throw new Error(error.message || "Could not void this order.");
-  revalidatePath(`/orders/${id}`);
-  revalidatePath("/orders");
+  revalidatePurchaseOrderPaths(id);
   revalidatePath("/");
-  redirect(`/orders/${id}`);
+  redirect(`/stock-in/${id}`);
 }
 
 export async function duplicatePurchaseOrder(formData: FormData) {
@@ -404,9 +407,9 @@ export async function duplicatePurchaseOrder(formData: FormData) {
   );
   if (newItemsError) throw newItemsError;
 
-  revalidatePath("/orders");
+  revalidatePurchaseOrderPaths(newOrder.id);
   revalidatePath("/");
-  redirect(`/orders/${newOrder.id}`);
+  redirect(`/stock-in/${newOrder.id}`);
 }
 
 export async function removeGoodsReceipt(goodsReceiptId: string) {
@@ -425,8 +428,7 @@ export async function removeGoodsReceipt(goodsReceiptId: string) {
   const { error } = await supabase.rpc("fn_reverse_goods_receipt", { p_goods_receipt_id: receipt.id });
   if (error) throw new Error(error.message || "Could not remove this receipt.");
 
-  if (receipt.purchase_order_id) revalidatePath(`/orders/${receipt.purchase_order_id}`);
-  revalidatePath("/orders");
+  revalidatePurchaseOrderPaths(receipt.purchase_order_id ?? undefined);
 }
 
 export async function updateGoodsReceiptInvoice(
@@ -479,6 +481,5 @@ export async function updateGoodsReceiptInvoice(
     if (auditError) throw auditError;
   }
 
-  if (receipt.purchase_order_id) revalidatePath(`/orders/${receipt.purchase_order_id}`);
-  revalidatePath("/orders");
+  revalidatePurchaseOrderPaths(receipt.purchase_order_id ?? undefined);
 }

@@ -30,7 +30,7 @@ export default async function AdminBranchesPage() {
         <h1 className="text-2xl font-semibold tracking-tight">Branches</h1>
         <p className="mt-1 text-sm text-muted">
           Decide which products belong at each salon, and prepare whole series for future buys. This is a
-          planning list, not a restriction — branch managers can still search for and add anything in Orders or
+          planning list, not a restriction — branch managers can still search for and add anything in Stock-in or
           Counts.
         </p>
       </div>

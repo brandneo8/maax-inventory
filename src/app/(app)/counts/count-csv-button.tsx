@@ -22,7 +22,7 @@ export function CountCsvButton({
         "Order name": line.orderName,
         Name: line.name,
         Brand: line.brand,
-        Brand_sub: line.brandSub,
+        "Brand sub": line.brandSub,
         Size: line.sizeLabel,
         Expected: line.expected,
         Counted: line.counted ?? "",

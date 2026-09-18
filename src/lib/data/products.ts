@@ -1,7 +1,7 @@
 import type { createClient } from "@/lib/supabase/server";
 import { getProducts, getStoreLocations } from "@/lib/data/lookups";
-import { productDisplayName, productLabel } from "@/lib/format";
-import { isAvailableInTunai, type ProductClassification } from "@/lib/labels";
+import { productDisplayName, productLabel, singaporeToday } from "@/lib/format";
+import { isRetailFacing, type ProductClassification } from "@/lib/labels";
 
 type Client = Awaited<ReturnType<typeof createClient>>;
 
@@ -34,6 +34,7 @@ export type CatalogProduct = {
   supplierIds: string[];
   supplierName: string;
   gstRegistered: boolean;
+  posAllowed: boolean;
   components: BundleComponent[];
 };
 
@@ -61,25 +62,28 @@ export type StockOutProductOption = {
   tagNames: string[];
 };
 
-export type TunaiListProduct = {
+export type OrderBalanceProduct = {
   id: string;
-  sku: string | null;
-  barcode: string | null;
   name: string;
   orderName: string;
+  sku: string | null;
+  barcode: string | null;
   brand: string;
+  brandSub: string;
   sizeLabel: string | null;
-  sizeMl: number | null;
   unitCost: number;
-  rrp: number | null;
   onHand: number;
+  monthToDateUse: number;
+  monthlyUse: number;
   classifications: ProductClassification[];
+  tagNames: string[];
+  supplierIds: string[];
 };
 
 const PAGE_SIZE = 1000;
 const IN_CHUNK = 200;
 const PICKER_SELECT =
-  "id, sku, barcode, name, order_name, unit_cost_price, rrp, size_label, size_ml, brands(name), product_tags(tags(name)), product_branch_classifications(branch_id, classification), supplier_products(supplier_id)";
+  "id, sku, barcode, name, order_name, brand_sub, unit_cost_price, rrp, size_label, size_ml, brands(name), product_tags(tags(name)), product_branch_classifications(branch_id, classification), supplier_products(supplier_id)";
 
 type PickerRow = {
   id: string;
@@ -87,6 +91,7 @@ type PickerRow = {
   barcode: string | null;
   name: string | null;
   order_name: string;
+  brand_sub: string | null;
   unit_cost_price: number | string | null;
   rrp: number | string | null;
   size_label: string | null;
@@ -220,26 +225,6 @@ export function pickPrimaryClassification(
   return (tags ?? [])[0] ?? null;
 }
 
-export async function getBranchClassifications(supabase: Client, branchId: string) {
-  const byProduct = new Map<string, ProductClassification[]>();
-  const pageSize = 1000;
-  for (let from = 0; ; from += pageSize) {
-    const { data, error } = await supabase
-      .from("product_branch_classifications")
-      .select("product_id, classification")
-      .eq("branch_id", branchId)
-      .range(from, from + pageSize - 1);
-    if (error) throw new Error(error.message || "Could not load product types for this salon.");
-    for (const row of data ?? []) {
-      const list = byProduct.get(row.product_id) ?? [];
-      list.push(row.classification);
-      byProduct.set(row.product_id, list);
-    }
-    if (!data || data.length < pageSize) break;
-  }
-  return byProduct;
-}
-
 function pickSupplier(
   links: { supplier_id: string; is_preferred: boolean }[],
   supplierById: Map<string, { supplier_name: string; gst_registered: boolean }>,
@@ -323,6 +308,7 @@ export async function getCatalogProducts(supabase: Client, companyId: string): P
       supplierIds: supplier.supplierIds,
       supplierName: supplier.supplierName,
       gstRegistered: supplier.gstRegistered,
+      posAllowed: Boolean(product.pos_allowed),
       components: (product.product_components ?? []).map((row) => {
         const component = byId.get(row.component_product_id);
         return {
@@ -411,49 +397,135 @@ export async function getBranchStockOutProducts(supabase: Client, companyId: str
   for (const product of rows) {
     const classifications = classificationsForBranch(product, branchId);
     const option = toStockOutOption(product);
-    if (isAvailableInTunai(classifications)) retail.push(option);
+    if (isRetailFacing(classifications)) retail.push(option);
     if (classifications.includes("inhouse")) inhouse.push(option);
   }
   return { retail, inhouse };
 }
 
-export async function countTunaiProducts(supabase: Client, branchId: string) {
-  const assignedIds = await getAssignedProductIds(supabase, branchId);
-  if (assignedIds.length === 0) return 0;
-  const classified = await getBranchClassifications(supabase, branchId);
-  let total = 0;
-  for (const id of assignedIds) {
-    if (isAvailableInTunai(classified.get(id))) total += 1;
+
+/**
+ * Sum of product consumption posted against this branch since the 1st of
+ * the current calendar month, in Singapore time: retail_use (genuine POS
+ * sales, imported externally), inhouse_use (Pulse's own stock-out entries),
+ * gwp_use, plus count-driven corrections (both shortfalls and surpluses,
+ * magnitude either way — a count moving a SKU's quantity is itself a form
+ * of usage/variance worth counting here). Still deliberately narrower than
+ * "every stock decrease": voided-count reversals, removed-receipt
+ * reversals, waste, and transfers are excluded — those are corrections to
+ * the ledger itself, not usage.
+ */
+export async function getMonthToDateUsage(supabase: Client, branchId: string, productIds: string[]) {
+  const usage = new Map<string, number>();
+  if (productIds.length === 0) return usage;
+
+  const { data: locations, error: locationError } = await supabase
+    .from("store_locations")
+    .select("id")
+    .eq("branch_id", branchId);
+  if (locationError) throw new Error(locationError.message || "Could not load storage locations.");
+  const locationIds = (locations ?? []).map((location) => location.id);
+  if (locationIds.length === 0) return usage;
+
+  const monthStart = `${singaporeToday().slice(0, 7)}-01`;
+
+  function accumulate(rows: { product_id: string; quantity_change: number }[]) {
+    for (const row of rows) {
+      usage.set(row.product_id, (usage.get(row.product_id) ?? 0) + Math.abs(Number(row.quantity_change)));
+    }
   }
-  return total;
+
+  for (const ids of chunkIds(productIds)) {
+    const [{ data: useRows, error: useError }, { data: countRows, error: countError }] = await Promise.all([
+      supabase
+        .from("inventory_transactions")
+        .select("product_id, quantity_change")
+        .in("product_id", ids)
+        .in("store_location_id", locationIds)
+        .in("txn_type", ["retail_use", "gwp_use", "inhouse_use"])
+        .gte("txn_date", monthStart),
+      supabase
+        .from("inventory_transactions")
+        .select("product_id, quantity_change")
+        .in("product_id", ids)
+        .in("store_location_id", locationIds)
+        .eq("txn_type", "count_adjustment")
+        .eq("notes", "Count variance")
+        .gte("txn_date", monthStart),
+    ]);
+    if (useError) throw new Error(useError.message || "Could not load month-to-date usage.");
+    if (countError) throw new Error(countError.message || "Could not load month-to-date usage.");
+    accumulate(useRows ?? []);
+    accumulate(countRows ?? []);
+  }
+  return usage;
 }
 
-export async function getTunaiProducts(supabase: Client, companyId: string, branchId: string) {
+const AVERAGE_MONTHLY_USE_WINDOW = 3;
+
+/**
+ * Average usage per month — retail/in-house/GWP use plus count-driven
+ * corrections (both directions, see getMonthToDateUsage) — over the last
+ * AVERAGE_MONTHLY_USE_WINDOW complete calendar months (this month
+ * excluded) — a baseline to weigh month-to-date use against when deciding
+ * how much to reorder. Computed as
+ * a single grouped aggregate in Postgres (fn_average_monthly_use) rather
+ * than pulling every transaction in that window to the client and summing
+ * in JS: one row back per product with any usage, regardless of how many
+ * transactions fed into it, and no per-branch/product chunking needed since
+ * the product list travels as a single array parameter rather than a URL
+ * query string.
+ */
+export async function getAverageMonthlyUsage(supabase: Client, branchId: string, productIds: string[]) {
+  const usage = new Map<string, number>();
+  if (productIds.length === 0) return usage;
+
+  const { data, error } = await supabase.rpc("fn_average_monthly_use", {
+    p_branch_id: branchId,
+    p_product_ids: productIds,
+    p_months: AVERAGE_MONTHLY_USE_WINDOW,
+  });
+  if (error) throw new Error(error.message || "Could not load average monthly usage.");
+  for (const row of data ?? []) {
+    usage.set(row.product_id, Number(row.avg_monthly_use));
+  }
+  return usage;
+}
+
+export async function getOrderBalanceProducts(supabase: Client, companyId: string, branchId: string) {
   const assignedIds = await getAssignedProductIds(supabase, branchId);
-  const [rows, onHand] = await Promise.all([
+  const [rows, onHand, monthToDateUse, monthlyUse] = await Promise.all([
     loadPickerRows(supabase, companyId, assignedIds),
     getBranchOnHand(supabase, companyId, branchId, assignedIds),
+    getMonthToDateUsage(supabase, branchId, assignedIds),
+    getAverageMonthlyUsage(supabase, branchId, assignedIds),
   ]);
-  const products: TunaiListProduct[] = [];
-  for (const product of rows) {
-    const classifications = classificationsForBranch(product, branchId);
-    if (!isAvailableInTunai(classifications)) continue;
-    products.push({
+  return rows
+    .map((product) => ({
       id: product.id,
-      sku: product.sku,
-      barcode: product.barcode,
       name: product.name?.trim() ?? "",
       orderName: product.order_name,
+      sku: product.sku,
+      barcode: product.barcode,
       brand: nestedName(product.brands),
+      brandSub: product.brand_sub?.trim() ?? "",
       sizeLabel: product.size_label,
-      sizeMl: product.size_ml == null ? null : Number(product.size_ml),
       unitCost: Number(product.unit_cost_price),
-      rrp: product.rrp == null ? null : Number(product.rrp),
       onHand: onHand.get(product.id) ?? 0,
-      classifications,
-    });
-  }
-  return products;
+      monthToDateUse: monthToDateUse.get(product.id) ?? 0,
+      // fn_average_monthly_use only looks at complete prior months, so a
+      // product with no usage history before this month reports 0 there
+      // even while it's actively being used right now — misleading, since
+      // "0 average, but 9 used so far this month" reads as a contradiction.
+      // Floor it at MTD use: at least this month counts as one month.
+      monthlyUse: Math.max(monthlyUse.get(product.id) ?? 0, monthToDateUse.get(product.id) ?? 0),
+      classifications: classificationsForBranch(product, branchId),
+      tagNames: tagNamesFrom(product),
+      supplierIds: (product.supplier_products ?? []).map((row) => row.supplier_id),
+    }))
+    .sort((left, right) =>
+      (left.name || left.orderName).localeCompare(right.name || right.orderName, undefined, { sensitivity: "base" }),
+    );
 }
 
 export async function getBranchProductIds(supabase: Client, companyId: string, branchId: string) {

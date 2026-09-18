@@ -4,7 +4,7 @@ import { requireBranch } from "@/lib/auth";
 import { getStoreLocations, getTaxRates } from "@/lib/data/lookups";
 import { canReceive, getPurchaseOrder } from "@/lib/data/orders";
 import { getBundleContents, getBranchAvgCosts, getOrderProductOptions } from "@/lib/data/products";
-import { productDisplayName, productLabel } from "@/lib/format";
+import { productDisplayName } from "@/lib/format";
 import { ReceiveForm } from "./receive-form";
 
 export default async function ReceiveOrderPage({
@@ -37,7 +37,7 @@ export default async function ReceiveOrderPage({
   return (
     <div className="space-y-6">
       <div>
-        <Link href={`/orders/${order.id}`} className="text-sm text-muted underline">
+        <Link href={`/stock-in/${order.id}`} className="text-sm text-muted underline">
           Back to {order.po_number}
         </Link>
         <h1 className="mt-2 text-2xl font-semibold tracking-tight">Confirm &amp; receive {order.po_number}</h1>

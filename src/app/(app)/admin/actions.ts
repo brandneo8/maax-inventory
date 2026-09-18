@@ -1,37 +1,11 @@
 "use server";
 
-import { cookies } from "next/headers";
 import { revalidatePath } from "next/cache";
-import { redirect } from "next/navigation";
-import { ADMIN_EDIT_COOKIE, isAdminEditUnlocked, requireAdmin } from "@/lib/auth";
+import { requireAdmin } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
-
-export async function unlockAdminEdit(formData: FormData) {
-  await requireAdmin();
-  const expected = process.env.ADMIN_EDIT_PASSWORD?.trim() ?? "";
-  const password = String(formData.get("password") ?? "");
-
-  if (!expected || password !== expected) {
-    redirect("/admin/users?error=" + encodeURIComponent("That password did not unlock editing."));
-  }
-
-  const cookieStore = await cookies();
-  cookieStore.set(ADMIN_EDIT_COOKIE, "1", {
-    httpOnly: true,
-    sameSite: "lax",
-    path: "/",
-    maxAge: 60 * 60 * 8,
-  });
-
-  revalidatePath("/admin/users");
-  redirect("/admin/users");
-}
 
 export async function saveBranchAccess(formData: FormData) {
   const { supabase, companyId } = await requireAdmin();
-  if (!(await isAdminEditUnlocked())) {
-    throw new Error("Unlock Admin editing first.");
-  }
 
   const { data: branches, error: branchError } = await supabase
     .from("branches")

@@ -3,11 +3,11 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
-  ArrowLeftRight,
   BarChart3,
   ClipboardList,
   Home,
   PackageMinus,
+  PackagePlus,
   ShieldCheck,
   ShoppingBag,
 } from "lucide-react";
@@ -15,8 +15,8 @@ import { cn } from "@/lib/utils";
 
 const links = [
   { href: "/home", label: "Home", icon: Home },
-  { href: "/movement", label: "Movements", icon: ArrowLeftRight },
   { href: "/orders", label: "Orders", icon: ShoppingBag },
+  { href: "/stock-in", label: "Stock-in", icon: PackagePlus },
   { href: "/stock-out", label: "Stock-out", icon: PackageMinus },
   { href: "/counts", label: "Counts", icon: ClipboardList },
   { href: "/reports", label: "Reports", icon: BarChart3 },

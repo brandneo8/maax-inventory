@@ -17,7 +17,7 @@ export type BulkEditFields = {
 
 const FIELD_LABELS: Record<BulkEditFieldKey, string> = {
   brand: "Brand",
-  brandSub: "Brand_sub",
+  brandSub: "Brand sub",
   size: "Size",
   supplierId: "Supplier",
   threshold: "Threshold",

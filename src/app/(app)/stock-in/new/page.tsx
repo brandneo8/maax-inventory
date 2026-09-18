@@ -16,10 +16,10 @@ export default async function NewOrderPage() {
   return (
     <div className="space-y-6">
       <div>
-        <Link href="/orders" className="text-sm text-muted underline">
-          Back to orders
+        <Link href="/stock-in" className="text-sm text-muted underline">
+          Back to stock-in
         </Link>
-        <h1 className="mt-2 text-2xl font-semibold tracking-tight">New purchase order</h1>
+        <h1 className="mt-2 text-2xl font-semibold tracking-tight">New stock-in</h1>
         <p className="mt-1 text-sm text-muted">
           Working in {branch.displayName}. Classification is set on each line. Stock is not added
           until the order is received.

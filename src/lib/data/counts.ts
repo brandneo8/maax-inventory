@@ -1,4 +1,4 @@
-import type { ProductClassification } from "@/lib/labels";
+import { movementTypeLabel, type ProductClassification } from "@/lib/labels";
 import { normalizeSearchText } from "@/lib/search";
 import { createAdminClient } from "@/lib/supabase/admin";
 import type { createClient } from "@/lib/supabase/server";
@@ -692,12 +692,145 @@ export async function voidCompletedCount(
   supabase: Client,
   args: { companyId: string; countId: string; createdBy: string | null },
 ) {
-  // Reverses the posted ledger quantity and unwinds any weighted-average-cost
-  // blend a surplus line applied (see fn_void_inventory_count) — atomically,
-  // so a partial reversal never gets left behind if a later receipt/count
-  // makes an exact unwind impossible for one of the lines.
+  // Reverses the posted ledger quantity by posting an offsetting entry dated
+  // now. Cost correctness is handled automatically by fn_recompute_branch_cost
+  // (the after-insert trigger on inventory_transactions), which replays this
+  // product+branch's full history in date order — no manual unwind algebra
+  // or "has something newer touched this" guard needed.
   const { error } = await supabase.rpc("fn_void_inventory_count", { p_count_id: args.countId });
   if (error) throw queryError(error, "Could not void the count.");
+}
+
+export function hasActiveCount(supabase: Client, companyId: string, branchId: string) {
+  return supabase
+    .from("inventory_counts")
+    .select("id", { head: true, count: "exact" })
+    .eq("company_id", companyId)
+    .eq("branch_id", branchId)
+    .eq("status", "in_progress")
+    .then(({ count, error }) => {
+      if (error) throw queryError(error, "Could not check for an active count.");
+      return (count ?? 0) > 0;
+    });
+}
+
+export async function assertNoActiveCount(
+  supabase: Client,
+  companyId: string,
+  branchId: string,
+  action: "receive stock" | "record stock-out",
+) {
+  if (await hasActiveCount(supabase, companyId, branchId)) {
+    throw new Error(
+      `An inventory count is currently in progress for this salon. Complete or void it before you ${action}.`,
+    );
+  }
+}
+
+export const COUNT_LEDGER_CONFLICT_PREFIX = "COUNT_POST_BLOCKED::";
+
+export type CountLedgerConflict = {
+  id: string;
+  txnType: string;
+  quantityChange: number;
+  txnDate: string;
+  productName: string;
+  label: string;
+  href: string | null;
+};
+
+function firstOf<T>(value: T | T[] | null | undefined): T | null {
+  if (!value) return null;
+  return Array.isArray(value) ? (value[0] ?? null) : value;
+}
+
+/**
+ * Orders received or stock deducted, dated on/after this count's own date,
+ * that aren't this count's own postings — i.e. things that landed in the
+ * ledger for a date the count is supposed to own. These are exactly what
+ * assertNoActiveCount is meant to prevent going forward; this is the
+ * complementary check at completion time, catching anything that slipped
+ * through (a count started before the freeze existed, a gap, etc).
+ */
+export async function getPostCountLedgerConflicts(
+  supabase: Client,
+  companyId: string,
+  branchId: string,
+  countDate: string,
+) {
+  const { data: locations, error: locationError } = await supabase
+    .from("store_locations")
+    .select("id")
+    .eq("branch_id", branchId);
+  if (locationError) throw queryError(locationError, "Could not load storage locations.");
+  const locationIds = (locations ?? []).map((location) => location.id);
+  if (locationIds.length === 0) return [];
+
+  const { data: rows, error } = await supabase
+    .from("inventory_transactions")
+    .select("id, txn_type, quantity_change, txn_date, product_id, reference_table, reference_id")
+    .eq("company_id", companyId)
+    .in("store_location_id", locationIds)
+    .in("txn_type", ["goods_receipt", "retail_use", "gwp_use", "inhouse_use"])
+    .gte("txn_date", `${countDate}T00:00:00.000Z`)
+    .order("txn_date");
+  if (error) throw queryError(error, "Could not check for later transactions.");
+  if (!rows?.length) return [];
+
+  const productIds = [...new Set(rows.map((row) => row.product_id))];
+  const receiptItemIds = rows
+    .filter((row) => row.reference_table === "goods_receipt_items" && row.reference_id)
+    .map((row) => row.reference_id as string);
+  const retailEntryIds = rows
+    .filter((row) => row.reference_table === "retail_use_entries" && row.reference_id)
+    .map((row) => row.reference_id as string);
+
+  const [{ data: products }, { data: receiptItems }, { data: retailEntries }] = await Promise.all([
+    supabase.from("products").select("id, sku, name, order_name").in("id", productIds),
+    receiptItemIds.length
+      ? supabase
+          .from("goods_receipt_items")
+          .select("id, goods_receipts(purchase_order_id, purchase_orders(po_number))")
+          .in("id", receiptItemIds)
+      : Promise.resolve({ data: [] as { id: string; goods_receipts: unknown }[] }),
+    retailEntryIds.length
+      ? supabase.from("retail_use_entries").select("id, stock_out_report_id").in("id", retailEntryIds)
+      : Promise.resolve({ data: [] as { id: string; stock_out_report_id: string | null }[] }),
+  ]);
+
+  const productMap = new Map((products ?? []).map((product) => [product.id, product]));
+  const receiptMap = new Map((receiptItems ?? []).map((item) => [item.id, item]));
+  const retailEntryMap = new Map((retailEntries ?? []).map((entry) => [entry.id, entry]));
+
+  return rows.map((row): CountLedgerConflict => {
+    const product = productMap.get(row.product_id);
+    const productName = product?.name?.trim() || product?.order_name?.trim() || product?.sku || row.product_id;
+    let label = movementTypeLabel(row.txn_type);
+    let href: string | null = null;
+
+    if (row.reference_table === "goods_receipt_items" && row.reference_id) {
+      const item = receiptMap.get(row.reference_id) as
+        | { goods_receipts: { purchase_order_id: string | null; purchase_orders: unknown } | null }
+        | undefined;
+      const receipt = firstOf(item?.goods_receipts ?? null);
+      const po = firstOf((receipt?.purchase_orders as { po_number: string } | { po_number: string }[]) ?? null);
+      if (po?.po_number) label = po.po_number;
+      if (receipt?.purchase_order_id) href = `/stock-in/${receipt.purchase_order_id}`;
+    } else if (row.reference_table === "retail_use_entries" && row.reference_id) {
+      const entry = retailEntryMap.get(row.reference_id) as { stock_out_report_id: string | null } | undefined;
+      if (entry?.stock_out_report_id) href = `/stock-out/${entry.stock_out_report_id}`;
+    }
+
+    return {
+      id: row.id,
+      txnType: row.txn_type,
+      quantityChange: Number(row.quantity_change),
+      txnDate: row.txn_date,
+      productName,
+      label,
+      href,
+    };
+  });
 }
 
 /**
@@ -731,22 +864,6 @@ export async function getCostsAsOfDate(
   return costs;
 }
 
-/** Current weighted-average cost per product for a branch. Missing = never costed (0). */
-export async function getCurrentCosts(supabase: Client, branchId: string, productIds: string[]) {
-  const costs = new Map<string, number>();
-  const wanted = [...new Set(productIds.filter(Boolean))];
-  if (wanted.length === 0) return costs;
-  for (const ids of chunkList(wanted)) {
-    const { data, error } = await supabase
-      .from("product_branch_costs")
-      .select("product_id, avg_unit_cost")
-      .eq("branch_id", branchId)
-      .in("product_id", ids);
-    if (error) throw queryError(error, "Could not look up current cost.");
-    for (const row of data ?? []) costs.set(row.product_id, Number(row.avg_unit_cost));
-  }
-  return costs;
-}
 
 // getVoidBlockers was removed: cost correctness on void is now handled
 // automatically by fn_recompute_branch_cost regardless of insertion order,

@@ -23,6 +23,6 @@ export async function POST(request: Request) {
   revalidatePath("/admin");
   revalidatePath("/admin/suppliers");
   revalidatePath("/admin/products");
-  revalidatePath("/orders/new");
+  revalidatePath("/stock-in/new");
   return NextResponse.json({ ok: true });
 }

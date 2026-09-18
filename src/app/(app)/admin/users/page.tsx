@@ -1,18 +1,12 @@
-import { requireAdmin, isAdminEditUnlocked } from "@/lib/auth";
+import { requireAdmin } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getBranches } from "@/lib/data/lookups";
 import { salonName } from "@/lib/labels";
-import { btnClass, fieldClass, tableClass, tdClass, thClass } from "@/lib/ui";
-import { saveBranchAccess, unlockAdminEdit } from "../actions";
+import { btnClass, tableClass, tdClass, thClass } from "@/lib/ui";
+import { saveBranchAccess } from "../actions";
 
-export default async function AdminUsersPage({
-  searchParams,
-}: {
-  searchParams: Promise<{ error?: string }>;
-}) {
-  const params = await searchParams;
+export default async function AdminUsersPage() {
   const { supabase, companyId } = await requireAdmin();
-  const unlocked = await isAdminEditUnlocked();
   const admin = createAdminClient();
   const [branches, members, usersResult] = await Promise.all([
     getBranches(supabase, companyId),
@@ -35,30 +29,8 @@ export default async function AdminUsersPage({
     <div className="space-y-4">
       <div>
         <h1 className="text-2xl font-semibold tracking-tight">Users</h1>
-        <p className="mt-1 text-sm text-muted">
-          Editing users needs the admin password.
-        </p>
+        <p className="mt-1 text-sm text-muted">Tick a salon to grant that user access.</p>
       </div>
-
-      {params.error ? (
-        <p className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
-          {params.error}
-        </p>
-      ) : null}
-
-      {!unlocked ? (
-        <form action={unlockAdminEdit} className="flex max-w-md flex-wrap items-end gap-2">
-          <label className="min-w-56 flex-1 space-y-1 text-sm">
-            <span>Unlock editing</span>
-            <input className={fieldClass} type="password" name="password" required />
-          </label>
-          <button className={btnClass} type="submit">
-            Unlock
-          </button>
-        </form>
-      ) : (
-        <p className="text-sm text-ok">Editing is unlocked for this session.</p>
-      )}
 
       <form action={saveBranchAccess}>
         <div className="overflow-x-auto rounded-xl border border-border bg-card">
@@ -92,7 +64,6 @@ export default async function AdminUsersPage({
                           type="checkbox"
                           name={`branch:${member.user_id}:${branch.id}`}
                           defaultChecked={accessSet.has(`${member.user_id}:${branch.id}`)}
-                          disabled={!unlocked}
                         />
                       </td>
                     ))}
@@ -102,11 +73,9 @@ export default async function AdminUsersPage({
             </tbody>
           </table>
         </div>
-        {unlocked ? (
-          <button className={`${btnClass} mt-3`} type="submit">
-            Save users
-          </button>
-        ) : null}
+        <button className={`${btnClass} mt-3`} type="submit">
+          Save users
+        </button>
       </form>
     </div>
   );

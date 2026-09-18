@@ -46,7 +46,7 @@ function revalidateSuppliers() {
   revalidatePath("/admin");
   revalidatePath("/admin/suppliers");
   revalidatePath("/admin/products");
-  revalidatePath("/orders/new");
+  revalidatePath("/stock-in/new");
 }
 
 export async function saveSuppliers(drafts: SupplierDraft[]) {

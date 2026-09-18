@@ -9,8 +9,8 @@ import {
   saveCountQuantities,
   searchCountProductsAction,
 } from "../actions";
-import type { CountType } from "@/lib/data/counts";
-import { formatDateTime, formatQty } from "@/lib/format";
+import { COUNT_LEDGER_CONFLICT_PREFIX, type CountLedgerConflict, type CountType } from "@/lib/data/counts";
+import { formatDate, formatDateTime, formatQty } from "@/lib/format";
 import { keepOnSalonLabel, salonName } from "@/lib/labels";
 import { searchFieldsMatch } from "@/lib/search";
 import type { CountEntryLine, CountLine } from "../count-lines";
@@ -155,14 +155,14 @@ function BrandTableFilters({
         </select>
       </label>
       <label className="min-w-48 space-y-1 text-sm">
-        <span>Brand_sub</span>
+        <span>Brand sub</span>
         <select
           className={fieldClass}
           value={brandSub}
           onChange={(event) => onBrandSubChange(event.target.value)}
         >
           <option value="">All product lines</option>
-          <option value="__none__">No Brand_sub</option>
+          <option value="__none__">No brand sub</option>
           {brandSubs.map((option) => (
             <option key={option} value={option}>
               {option}
@@ -261,7 +261,7 @@ function CountLinesTable({
             <th className={thClass}>Order name</th>
             <th className={thClass}>Name</th>
             <th className={thClass}>Brand</th>
-            <th className={thClass}>Brand_sub</th>
+            <th className={thClass}>Brand sub</th>
             <th className={thClass}>Size</th>
             <th className={thClass}>Expected</th>
             <th className={thClass}>Counted</th>
@@ -372,6 +372,7 @@ export function CountItemsForm({
   const entries = liveEntries;
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  const [blockers, setBlockers] = useState<CountLedgerConflict[] | null>(null);
   const [pending, setPending] = useState<
     "save" | "complete" | "count" | "review" | "zero" | "keep" | null
   >(null);
@@ -703,6 +704,7 @@ export function CountItemsForm({
     setPending(kind);
     setError(null);
     setMessage(null);
+    setBlockers(null);
     try {
       if (kind === "review") {
         router.push(`/counts/${countId}/review`);
@@ -712,7 +714,16 @@ export function CountItemsForm({
       if (kind === "save") setMessage("Draft saved. You can leave and finish this count later.");
     } catch (err) {
       unstable_rethrow(err);
-      setError(err instanceof Error ? err.message : "Could not update the count.");
+      const message = err instanceof Error ? err.message : "Could not update the count.";
+      if (message.startsWith(COUNT_LEDGER_CONFLICT_PREFIX)) {
+        try {
+          setBlockers(JSON.parse(message.slice(COUNT_LEDGER_CONFLICT_PREFIX.length)));
+        } catch {
+          setError("Could not complete the count — some later transactions need to be checked first.");
+        }
+      } else {
+        setError(message);
+      }
     } finally {
       setPending(null);
     }
@@ -1136,6 +1147,56 @@ export function CountItemsForm({
           </div>
         </div>
       )}
+
+      {blockers ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="w-full max-w-lg rounded-xl border border-border bg-white p-4 shadow-lg">
+            <h2 className="text-lg font-semibold">This count can&apos;t post yet</h2>
+            <p className="mt-1 text-sm text-muted">
+              {blockers.length} transaction{blockers.length === 1 ? "" : "s"} landed for this salon on or after
+              this count&apos;s date, outside this count. Void or remove each one below, then come back and
+              confirm this count again.
+            </p>
+
+            <div className="mt-3 max-h-64 overflow-y-auto rounded-lg border border-border">
+              <table className={tableClass}>
+                <thead>
+                  <tr>
+                    <th className={thClass}>Product</th>
+                    <th className={thClass}>Type</th>
+                    <th className={thClass}>Date</th>
+                    <th className={thClass} />
+                  </tr>
+                </thead>
+                <tbody>
+                  {blockers.map((blocker) => (
+                    <tr key={blocker.id}>
+                      <td className={tdClass}>{blocker.productName}</td>
+                      <td className={tdClass}>{blocker.label}</td>
+                      <td className={tdClass}>{formatDate(blocker.txnDate.slice(0, 10))}</td>
+                      <td className={tdClass}>
+                        {blocker.href ? (
+                          <a className="text-blue-600 underline" href={blocker.href} target="_blank" rel="noreferrer">
+                            Open
+                          </a>
+                        ) : (
+                          "—"
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="mt-4 flex justify-end">
+              <button className={btnSecondaryClass} type="button" onClick={() => setBlockers(null)}>
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

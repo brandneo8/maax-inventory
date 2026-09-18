@@ -17,7 +17,7 @@ import { downloadCsv } from "@/lib/csv";
 import { formatCatalogSavedLabel, formatMoney, formatPercent, formatQty, productDisplayName, productLabel } from "@/lib/format";
 import { searchFieldsMatch, searchTextMatches } from "@/lib/search";
 import { BrandSubFilter, NO_BRAND_SUB } from "@/components/brand-sub-filter";
-import { CLASSIFICATIONS, classificationTagsLabel, isAvailableInTunai, salonChipLabel, type ProductClassification } from "@/lib/labels";
+import { CLASSIFICATIONS, classificationTagsLabel, salonChipLabel, type ProductClassification } from "@/lib/labels";
 import { parseSize, sizesMatch } from "@/lib/product-size";
 import { btnClass, btnDangerClass, btnSecondaryClass, checkboxClass, fieldClass, tableClass, tdClass, thClass } from "@/lib/ui";
 import { cn } from "@/lib/utils";
@@ -155,7 +155,7 @@ type GroupBy = "none" | "brandSub" | "brand" | "salon" | "tags" | "type" | "supp
 
 const GROUP_BY_OPTIONS: { value: GroupBy; label: string }[] = [
   { value: "none", label: "None" },
-  { value: "brandSub", label: "Brand_sub" },
+  { value: "brandSub", label: "Brand sub" },
   { value: "brand", label: "Brand" },
   { value: "salon", label: "Salon" },
   { value: "tags", label: "Tags" },
@@ -504,7 +504,7 @@ function catalogCsvRow(
     SKU: row.sku,
     Barcode: row.barcode,
     Brand: row.brand,
-    Brand_sub: row.brandSub,
+    "Brand sub": row.brandSub,
     Size: row.size,
     Type: branchClassificationsSummary(row.classificationsByBranch, options.branches),
     Tags: row.tagNames.filter(Boolean).join(", "),
@@ -980,7 +980,7 @@ export function ProductsTable({
   const pageCount = Math.max(1, Math.ceil(displayGrouped.length / pageSize));
   const currentPage = Math.min(page, pageCount - 1);
   const visible = displayGrouped.slice(currentPage * pageSize, currentPage * pageSize + pageSize);
-  const columnCount = 24 + branches.length;
+  const columnCount = 23 + branches.length;
   const usedInBundles = useMemo(() => {
     const byChild = new Map<string, string[]>();
     for (const row of rows) {
@@ -1808,7 +1808,7 @@ export function ProductsTable({
               </th>
               <th className={cn(thClass, wField, stickyHead)}>
                 <SortableHeader column="brandSub" active={sortColumn === "brandSub"} direction={sortDirection} onSort={toggleSort}>
-                  Brand_sub
+                  Brand sub
                 </SortableHeader>
               </th>
               <th className={cn(thClass, wField, stickyHead)}>
@@ -1821,7 +1821,6 @@ export function ProductsTable({
                   Type
                 </SortableHeader>
               </th>
-              <th className={cn(thClass, wField, stickyHead)}>Available in Tunai</th>
               <th className={cn(thClass, wSupplier, stickyHead)}>
                 <SortableHeader column="supplier" active={sortColumn === "supplier"} direction={sortDirection} onSort={toggleSort}>
                   Supplier
@@ -2091,11 +2090,6 @@ export function ProductsTable({
                     </td>
                     <td className={cn(tdClass, wType)} title="Set per salon on Home &gt; Products">
                       <ViewValue>{branchClassificationsSummary(row.classificationsByBranch, branches) || "—"}</ViewValue>
-                    </td>
-                    <td className={cn(tdClass, wField)}>
-                      <ViewValue>
-                        {isAvailableInTunai(flattenClassifications(row.classificationsByBranch)) ? "Yes" : "No"}
-                      </ViewValue>
                     </td>
                     <td className={cn(tdClass, wSupplier)}>
                       {editing ? (

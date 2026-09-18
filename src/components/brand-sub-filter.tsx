@@ -40,7 +40,7 @@ export function BrandSubFilter({
 
   const summary = useMemo(() => {
     if (selected.length === 0) return "All product lines";
-    const labels = selected.map((value) => (value === NO_BRAND_SUB ? "No Brand_sub" : value));
+    const labels = selected.map((value) => (value === NO_BRAND_SUB ? "No brand sub" : value));
     if (labels.length === 1) return labels[0];
     if (labels.length === 2) return labels.join(", ");
     return `${labels.length} selected`;
@@ -70,15 +70,15 @@ export function BrandSubFilter({
   if (!brand) {
     return (
       <label className="space-y-1 text-sm">
-        <span>Brand_sub</span>
-        <p className={cn(fieldClass, "text-muted")}>Select a brand to choose Brand_sub.</p>
+        <span>Brand sub</span>
+        <p className={cn(fieldClass, "text-muted")}>Select a brand to choose a brand sub.</p>
       </label>
     );
   }
 
   return (
     <div className="relative space-y-1 text-sm" ref={rootRef}>
-      <span>Brand_sub</span>
+      <span>Brand sub</span>
       <button
         className={cn(fieldClass, "flex items-center justify-between gap-2 text-left")}
         type="button"
@@ -98,8 +98,8 @@ export function BrandSubFilter({
             className={cn(fieldClass, "mb-2")}
             value={query}
             disabled={disabled}
-            placeholder="Search or create Brand_sub"
-            aria-label="Search Brand_sub"
+            placeholder="Search or create brand sub"
+            aria-label="Search brand sub"
             autoFocus
             onChange={(event) => setQuery(event.target.value)}
             onKeyDown={(event) => {
@@ -118,7 +118,7 @@ export function BrandSubFilter({
                 disabled={disabled}
                 onChange={() => toggle(NO_BRAND_SUB)}
               />
-              <span>No Brand_sub</span>
+              <span>No brand sub</span>
             </label>
             {matches.map((name) => (
               <label key={name} className="flex items-center gap-2 rounded-md px-1 py-1 hover:bg-slate-50">
@@ -132,7 +132,7 @@ export function BrandSubFilter({
               </label>
             ))}
             {matches.length === 0 && !canCreate ? (
-              <p className="px-1 py-1 text-muted">No Brand_sub for this brand.</p>
+              <p className="px-1 py-1 text-muted">No brand sub for this brand.</p>
             ) : null}
           </div>
           {canCreate ? (

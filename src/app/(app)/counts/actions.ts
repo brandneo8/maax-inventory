@@ -7,9 +7,10 @@ import {
   addCountEntry,
   assignProductsToSalon,
   chunkList,
+  COUNT_LEDGER_CONFLICT_PREFIX,
   fillUncountedItems,
-  getCurrentCosts,
   getLatestPostedCountDate,
+  getPostCountLedgerConflicts,
   getScannedProductIds,
   queryError,
   resolveCountItems,
@@ -36,7 +37,12 @@ function assertCountDateAllowed(
   kind: "start" | "confirm",
 ) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(countDate)) throw new Error("Enter a valid count date.");
-  if (countDate < today) throw new Error("Count date cannot be in the past.");
+  // Only a freshly-started count needs this — an existing count is expected
+  // to still get confirmed after its count_date has slipped into the past
+  // (e.g. a large catalog that takes more than one sitting to finish
+  // counting). Confirming a stale-dated count is exactly the normal flow;
+  // it's the "latest count wins" check below that guards ordering for it.
+  if (kind === "start" && countDate < today) throw new Error("Count date cannot be in the past.");
   if (kind === "confirm" && countDate > today) {
     throw new Error(`This count is scheduled for ${formatDate(countDate)}. Confirm it on that day.`);
   }
@@ -384,6 +390,11 @@ export async function completeInventoryCount(formData: FormData) {
   const latestPostedDate = await getLatestPostedCountDate(supabase, companyId, branch.id);
   assertCountDateAllowed(count.count_date, today, latestPostedDate, "confirm");
 
+  const conflicts = await getPostCountLedgerConflicts(supabase, companyId, branch.id, count.count_date);
+  if (conflicts.length > 0) {
+    throw new Error(`${COUNT_LEDGER_CONFLICT_PREFIX}${JSON.stringify(conflicts)}`);
+  }
+
   const { data: sameDay, error: sameDayError } = await supabase
     .from("inventory_counts")
     .select("id")
@@ -435,15 +446,16 @@ export async function completeInventoryCount(formData: FormData) {
   const shortfall = adjustments.filter((item) => Number(item.variance) < 0);
   const txnDate = businessTxnDate(count.count_date);
 
-  // A surplus needs a ground-truth cost decided and recorded: the branch's
-  // current average for a regular count (blending at the existing average
-  // leaves it unchanged unless there wasn't one — i.e. it stays at $0), or
-  // whatever the admin entered for an opening-balance count. Everything
-  // else — folding this into the running average, and re-costing
-  // shortfalls at whatever the average is once this count's date is
-  // correctly slotted into history — happens automatically via
-  // fn_recompute_branch_cost the moment these rows are inserted.
-  let surplusCosts = new Map<string, number>();
+  // A surplus needs a ground-truth cost decided and recorded. For an
+  // opening-balance count, that's whatever the admin entered. For a
+  // regular count, a surplus found during counting is treated the same
+  // as a free product landing in stock — costed at $0, which dilutes the
+  // running average down exactly like a free goods receipt would (see
+  // fn_recompute_branch_cost's "ground-truth inflow" blend). Everything
+  // else — the blend itself, and re-costing shortfalls at whatever the
+  // average is once this count's date is correctly slotted into history —
+  // happens automatically the moment these rows are inserted.
+  const surplusCosts = new Map<string, number>();
   if (countType === "opening_balance") {
     const missing: string[] = [];
     for (const item of surplus) {
@@ -458,12 +470,6 @@ export async function completeInventoryCount(formData: FormData) {
     if (missing.length > 0) {
       throw new Error("Enter a cost for every counted product before completing this opening-balance count.");
     }
-  } else {
-    surplusCosts = await getCurrentCosts(
-      supabase,
-      branch.id,
-      surplus.map((item) => item.product_id),
-    );
   }
 
   for (const batch of chunkList(surplus)) {
