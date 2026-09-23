@@ -1,9 +1,8 @@
 "use client";
 
 import { Fragment, useMemo, useState } from "react";
-import { deletePosTagRule, savePosTagRule } from "./actions";
+import { deletePosTagRule, getPosBranchExportRows, savePosTagRule } from "./actions";
 import type { PosTagRule } from "@/lib/data/pos-rules";
-import { catalogTax, confirmedRetailPrice } from "@/lib/catalog-pricing";
 import { downloadCsv } from "@/lib/csv";
 import { productDisplayName } from "@/lib/format";
 import { btnClass, btnSecondaryClass, tableClass, tdClass, thClass } from "@/lib/ui";
@@ -18,8 +17,6 @@ type PosProduct = {
   brand: string;
   typeLabel: string;
   sizeLabel: string | null;
-  unitCost: number;
-  rrp: number | null;
   posAllowed: boolean;
   branchIds: string[];
   tagIds: string[];
@@ -42,13 +39,11 @@ export function PosTable({
   branches,
   tags,
   rules,
-  gstRate,
 }: {
   products: PosProduct[];
   branches: BranchOption[];
   tags: TagOption[];
   rules: PosTagRule[];
-  gstRate: number;
 }) {
   const activeRule = rules[0] ?? null;
 
@@ -59,6 +54,7 @@ export function PosTable({
   const [clearingFilter, setClearingFilter] = useState(false);
   const [tab, setTab] = useState<"allowed" | "not_allowed">("allowed");
   const [error, setError] = useState<string | null>(null);
+  const [downloadingBranchId, setDownloadingBranchId] = useState<string | null>(null);
 
   function toggleFilterTag(tagId: string) {
     setFilterTagIds((current) =>
@@ -138,19 +134,37 @@ export function PosTable({
     }));
   }, [visible]);
 
-  function downloadBranchList(branch: BranchOption) {
-    const rows = products
-      .filter((product) => product.posAllowed && Boolean(product.sku) && product.branchIds.includes(branch.id))
-      .map((product) => ({
-        SKU: product.sku,
-        Name: productDisplayName(product) || product.sku || "",
-        Size: product.sizeLabel || "",
-        "Name with size": nameWithSize(product),
-        Type: product.typeLabel || "",
-        "Cost incl. tax": catalogTax(product.unitCost, true, gstRate).unitCostWithTax.toFixed(2),
-        "Retail price": confirmedRetailPrice(product.unitCost, product.rrp).toFixed(2),
-      }));
-    downloadCsv(`pos-allowed-${branch.label.toLowerCase().replace(/\s+/g, "-")}.csv`, rows);
+  // Shown next to each download button so the count on screen matches what
+  // the file will contain — same filter as getPosBranchExportRows (allowed,
+  // has a SKU, assigned to this salon). Company-wide "Allowed in POS" above
+  // is a different, larger number since it isn't scoped to a salon at all.
+  const branchCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const branch of branches) {
+      counts.set(
+        branch.id,
+        products.filter((product) => product.posAllowed && Boolean(product.sku) && product.branchIds.includes(branch.id))
+          .length,
+      );
+    }
+    return counts;
+  }, [products, branches]);
+
+  async function downloadBranchList(branch: BranchOption) {
+    setDownloadingBranchId(branch.id);
+    setError(null);
+    try {
+      // Re-fetched fresh here rather than filtered from `products` — branch
+      // tagging on /admin/branches can change at any point while this page
+      // sits open, so the file itself always reads the database directly
+      // instead of whatever this tab happened to load with.
+      const rows = await getPosBranchExportRows(branch.id);
+      downloadCsv(`pos-allowed-${branch.label.toLowerCase().replace(/\s+/g, "-")}.csv`, rows);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not prepare this download.");
+    } finally {
+      setDownloadingBranchId(null);
+    }
   }
 
   const filterDirty =
@@ -162,7 +176,9 @@ export function PosTable({
       <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-card p-4">
         <p className="text-sm text-muted">
           Download the current POS-allowed list for each salon — unique SKUs allowed in POS and assigned to
-          that salon.
+          that salon. The file is read fresh from the database at download time, so it reflects the latest
+          branch tagging even if this page has been open a while — reload the page to refresh the counts
+          shown here.
         </p>
         <div className="flex flex-wrap gap-2">
           {branches.map((branch) => (
@@ -170,9 +186,12 @@ export function PosTable({
               key={branch.id}
               type="button"
               className={btnSecondaryClass}
-              onClick={() => downloadBranchList(branch)}
+              onClick={() => void downloadBranchList(branch)}
+              disabled={downloadingBranchId === branch.id}
             >
-              Download {branch.label} list
+              {downloadingBranchId === branch.id
+                ? "Preparing…"
+                : `Download ${branch.label} list (${branchCounts.get(branch.id) ?? 0})`}
             </button>
           ))}
         </div>

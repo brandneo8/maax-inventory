@@ -1,5 +1,5 @@
 import { requireAdmin } from "@/lib/auth";
-import { getBranches, getTags, getTaxRates } from "@/lib/data/lookups";
+import { getBranches, getTags } from "@/lib/data/lookups";
 import { getCatalogProducts } from "@/lib/data/products";
 import { getPosTagRules } from "@/lib/data/pos-rules";
 import { classificationTagsLabel, salonName } from "@/lib/labels";
@@ -7,14 +7,12 @@ import { PosTable } from "./pos-table";
 
 export default async function PosPage() {
   const { supabase, companyId } = await requireAdmin();
-  const [products, branches, taxRates, tags, rules] = await Promise.all([
+  const [products, branches, tags, rules] = await Promise.all([
     getCatalogProducts(supabase, companyId),
     getBranches(supabase, companyId),
-    getTaxRates(supabase, companyId),
     getTags(supabase, companyId),
     getPosTagRules(supabase, companyId),
   ]);
-  const gstRate = Number(taxRates.find((rate) => rate.is_default)?.rate_percentage ?? 9);
 
   return (
     <div className="space-y-6">
@@ -36,8 +34,6 @@ export default async function PosPage() {
           brand: product.brand,
           typeLabel: classificationTagsLabel([...new Set(Object.values(product.classificationsByBranch).flat())]),
           sizeLabel: product.sizeLabel,
-          unitCost: product.unitCost,
-          rrp: product.rrp,
           posAllowed: product.posAllowed,
           branchIds: product.branchIds,
           tagIds: product.tagIds,
@@ -46,7 +42,6 @@ export default async function PosPage() {
         branches={branches.map((branch) => ({ id: branch.id, label: salonName(branch.name) }))}
         tags={tags.map((tag) => ({ id: tag.id, name: tag.name }))}
         rules={rules}
-        gstRate={gstRate}
       />
     </div>
   );

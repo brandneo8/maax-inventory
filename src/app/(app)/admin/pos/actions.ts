@@ -2,6 +2,11 @@
 
 import { revalidatePath } from "next/cache";
 import { requireAdmin } from "@/lib/auth";
+import { catalogTax, confirmedRetailPrice } from "@/lib/catalog-pricing";
+import { getTaxRates } from "@/lib/data/lookups";
+import { getCatalogProducts } from "@/lib/data/products";
+import { productDisplayName } from "@/lib/format";
+import { classificationTagsLabel } from "@/lib/labels";
 
 const BATCH_SIZE = 200;
 const PAGE_SIZE = 1000;
@@ -118,6 +123,49 @@ export async function savePosTagRule(input: { id: string | null; label: string; 
 
   revalidatePath("/admin/pos");
   return { id: ruleId };
+}
+
+export type PosBranchExportRow = {
+  SKU: string | null;
+  Name: string;
+  Size: string;
+  "Name with size": string;
+  Type: string;
+  "Cost incl. tax": string;
+  "Retail price": string;
+};
+
+/**
+ * Rows for one salon's POS-allowed CSV, read fresh from the database at
+ * call time rather than from whatever the admin/pos page happened to have
+ * loaded in the browser — branch tagging (product_branches) can change on
+ * /admin/branches at any point while this page sits open, so the download
+ * itself has to re-fetch instead of trusting stale client state.
+ */
+export async function getPosBranchExportRows(branchId: string): Promise<PosBranchExportRow[]> {
+  const { supabase, companyId } = await requireAdmin();
+  const [products, taxRates] = await Promise.all([
+    getCatalogProducts(supabase, companyId),
+    getTaxRates(supabase, companyId),
+  ]);
+  const gstRate = Number(taxRates.find((rate) => rate.is_default)?.rate_percentage ?? 9);
+
+  return products
+    .filter((product) => product.posAllowed && Boolean(product.sku) && product.branchIds.includes(branchId))
+    .map((product) => {
+      const name = productDisplayName(product) || product.sku || "";
+      const typeLabel = classificationTagsLabel([...new Set(Object.values(product.classificationsByBranch).flat())]);
+      return {
+        SKU: product.sku,
+        Name: name,
+        Size: product.sizeLabel || "",
+        "Name with size": product.sizeLabel ? `${name} ${product.sizeLabel}`.trim() : name,
+        Type: typeLabel || "",
+        "Cost incl. tax": catalogTax(product.unitCost, true, gstRate).unitCostWithTax.toFixed(2),
+        "Retail price": confirmedRetailPrice(product.unitCost, product.rrp).toFixed(2),
+      };
+    })
+    .sort((a, b) => a.Name.localeCompare(b.Name, undefined, { sensitivity: "base" }));
 }
 
 export async function deletePosTagRule(ruleId: string) {
