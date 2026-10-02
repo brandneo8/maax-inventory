@@ -974,6 +974,119 @@ export type Database = {
           },
         ]
       }
+      product_sale_items: {
+        Row: {
+          created_at: string
+          id: string
+          line_total: number | null
+          linked_count_txn_id: string | null
+          linked_quantity: number | null
+          product_id: string
+          product_sale_id: string
+          quantity: number
+          sale_date: string
+          unit_sale_price: number
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          line_total?: number | null
+          linked_count_txn_id?: string | null
+          linked_quantity?: number | null
+          product_id: string
+          product_sale_id: string
+          quantity: number
+          sale_date: string
+          unit_sale_price: number
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          line_total?: number | null
+          linked_count_txn_id?: string | null
+          linked_quantity?: number | null
+          product_id?: string
+          product_sale_id?: string
+          quantity?: number
+          sale_date?: string
+          unit_sale_price?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "product_sale_items_linked_count_txn_id_fkey"
+            columns: ["linked_count_txn_id"]
+            isOneToOne: false
+            referencedRelation: "inventory_transactions"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "product_sale_items_product_id_fkey"
+            columns: ["product_id"]
+            isOneToOne: false
+            referencedRelation: "low_stock_alerts"
+            referencedColumns: ["product_id"]
+          },
+          {
+            foreignKeyName: "product_sale_items_product_id_fkey"
+            columns: ["product_id"]
+            isOneToOne: false
+            referencedRelation: "products"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "product_sale_items_product_sale_id_fkey"
+            columns: ["product_sale_id"]
+            isOneToOne: false
+            referencedRelation: "product_sales"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      product_sales: {
+        Row: {
+          branch_id: string
+          company_id: string
+          created_at: string
+          id: string
+          keyed_in_by: string | null
+          notes: string | null
+          sale_date: string
+        }
+        Insert: {
+          branch_id: string
+          company_id: string
+          created_at?: string
+          id?: string
+          keyed_in_by?: string | null
+          notes?: string | null
+          sale_date: string
+        }
+        Update: {
+          branch_id?: string
+          company_id?: string
+          created_at?: string
+          id?: string
+          keyed_in_by?: string | null
+          notes?: string | null
+          sale_date?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "product_sales_branch_id_fkey"
+            columns: ["branch_id"]
+            isOneToOne: false
+            referencedRelation: "branches"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "product_sales_company_id_fkey"
+            columns: ["company_id"]
+            isOneToOne: false
+            referencedRelation: "companies"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       product_tags: {
         Row: {
           product_id: string

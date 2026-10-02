@@ -8,6 +8,7 @@ import {
   Home,
   PackageMinus,
   PackagePlus,
+  Receipt,
   ShieldCheck,
   ShoppingBag,
 } from "lucide-react";
@@ -18,6 +19,7 @@ const links = [
   { href: "/orders", label: "Orders", icon: ShoppingBag },
   { href: "/stock-in", label: "Stock-in", icon: PackagePlus },
   { href: "/stock-out", label: "Stock-out", icon: PackageMinus },
+  { href: "/product-sales", label: "Product sales", icon: Receipt },
   { href: "/counts", label: "Counts", icon: ClipboardList },
   { href: "/reports", label: "Reports", icon: BarChart3 },
   { href: "/admin", label: "Admin", icon: ShieldCheck, adminOnly: true },

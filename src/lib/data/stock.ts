@@ -1,5 +1,6 @@
 import type { createClient } from "@/lib/supabase/server";
 import { productDisplayName } from "@/lib/format";
+import { SALE_RECLASS_NOTE } from "@/lib/data/usage-ledger";
 
 type Client = Awaited<ReturnType<typeof createClient>>;
 
@@ -239,7 +240,10 @@ export async function getMonthlyInventoryReport(
       inhouseEntries.push({ productId: row.product_id, month: monthKey, amount });
     } else if (row.txn_type === "gwp_use") {
       gwpByMonth.set(monthKey, (gwpByMonth.get(monthKey) ?? 0) + amount);
-    } else if (isCountVariance) {
+    } else if (isCountVariance || (row.txn_type === "count_adjustment" && row.notes === SALE_RECLASS_NOTE)) {
+      // A reclassification row is a count shortfall that turned out to be a
+      // product sale: it adds that unit back (a negative amount here), so it
+      // reduces wastage while its sale row lands in Cost of retail.
       wastageByMonth.set(monthKey, (wastageByMonth.get(monthKey) ?? 0) + amount);
     } else {
       otherByMonth.set(monthKey, (otherByMonth.get(monthKey) ?? 0) + amount);
@@ -427,8 +431,11 @@ export async function getProductLedger(supabase: Client, companyId: string, bran
   const retailEntryIds = rows
     .filter((row) => row.reference_table === "retail_use_entries" && row.reference_id)
     .map((row) => row.reference_id as string);
+  const saleItemIds = rows
+    .filter((row) => row.reference_table === "product_sale_items" && row.reference_id)
+    .map((row) => row.reference_id as string);
 
-  const [{ data: receiptItems }, { data: countItems }, { data: retailEntries }] = await Promise.all([
+  const [{ data: receiptItems }, { data: countItems }, { data: retailEntries }, { data: saleItems }] = await Promise.all([
     receiptItemIds.length
       ? supabase
           .from("goods_receipt_items")
@@ -444,11 +451,15 @@ export async function getProductLedger(supabase: Client, companyId: string, bran
     retailEntryIds.length
       ? supabase.from("retail_use_entries").select("id, stock_out_report_id").in("id", retailEntryIds)
       : Promise.resolve({ data: [] as { id: string; stock_out_report_id: string | null }[] }),
+    saleItemIds.length
+      ? supabase.from("product_sale_items").select("id, product_sale_id").in("id", saleItemIds)
+      : Promise.resolve({ data: [] as { id: string; product_sale_id: string }[] }),
   ]);
 
   const receiptMap = new Map((receiptItems ?? []).map((item) => [item.id, item]));
   const countItemMap = new Map((countItems ?? []).map((item) => [item.id, item]));
   const retailEntryMap = new Map((retailEntries ?? []).map((entry) => [entry.id, entry]));
+  const saleItemMap = new Map((saleItems ?? []).map((item) => [item.id, item]));
 
   return rows.map((row): ProductLedgerRow => {
     let reference: ProductLedgerRow["reference"] = null;
@@ -475,6 +486,11 @@ export async function getProductLedger(supabase: Client, companyId: string, bran
       reference = entry?.stock_out_report_id
         ? { label: "Stock-out", href: `/stock-out/${entry.stock_out_report_id}` }
         : { label: "Stock-out" };
+    } else if (row.reference_table === "product_sale_items" && row.reference_id) {
+      const item = saleItemMap.get(row.reference_id);
+      reference = item
+        ? { label: "Product sale", href: `/product-sales/${item.product_sale_id}` }
+        : { label: "Product sale" };
     }
 
     return {

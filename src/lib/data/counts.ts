@@ -688,6 +688,53 @@ export async function getLatestPostedCountDate(
   return data?.count_date ?? null;
 }
 
+/**
+ * A product-sale line linked to one of this count's shortfalls added that
+ * unit back via a reclassification row; voiding the count would reverse the
+ * shortfall too and leave the unit counted twice. The sale has to go first.
+ */
+async function assertNoLinkedProductSales(supabase: Client, countId: string) {
+  const itemIds: string[] = [];
+  for (let from = 0; ; from += 1000) {
+    const { data, error } = await supabase
+      .from("inventory_count_items")
+      .select("id")
+      .eq("inventory_count_id", countId)
+      .order("id")
+      .range(from, from + 999);
+    if (error) throw queryError(error, "Could not check this count for linked product sales.");
+    itemIds.push(...(data ?? []).map((row) => row.id));
+    if (!data || data.length < 1000) break;
+  }
+  if (itemIds.length === 0) return;
+
+  const shortfallTxnIds: string[] = [];
+  for (const ids of chunkList(itemIds)) {
+    const { data, error } = await supabase
+      .from("inventory_transactions")
+      .select("id")
+      .eq("reference_table", "inventory_count_items")
+      .eq("notes", "Count variance")
+      .lt("quantity_change", 0)
+      .in("reference_id", ids);
+    if (error) throw queryError(error, "Could not check this count for linked product sales.");
+    shortfallTxnIds.push(...(data ?? []).map((row) => row.id));
+  }
+
+  for (const ids of chunkList(shortfallTxnIds)) {
+    const { count, error } = await supabase
+      .from("product_sale_items")
+      .select("id", { count: "exact", head: true })
+      .in("linked_count_txn_id", ids);
+    if (error) throw queryError(error, "Could not check this count for linked product sales.");
+    if ((count ?? 0) > 0) {
+      throw new Error(
+        "This count has shortfalls linked to product sales. Delete those product sales first, then void the count.",
+      );
+    }
+  }
+}
+
 export async function voidCompletedCount(
   supabase: Client,
   args: { companyId: string; countId: string; createdBy: string | null },
@@ -697,6 +744,7 @@ export async function voidCompletedCount(
   // (the after-insert trigger on inventory_transactions), which replays this
   // product+branch's full history in date order — no manual unwind algebra
   // or "has something newer touched this" guard needed.
+  await assertNoLinkedProductSales(supabase, args.countId);
   const { error } = await supabase.rpc("fn_void_inventory_count", { p_count_id: args.countId });
   if (error) throw queryError(error, "Could not void the count.");
 }
@@ -718,7 +766,7 @@ export async function assertNoActiveCount(
   supabase: Client,
   companyId: string,
   branchId: string,
-  action: "receive stock" | "record stock-out",
+  action: "receive stock" | "record stock-out" | "record product sales",
 ) {
   if (await hasActiveCount(supabase, companyId, branchId)) {
     throw new Error(

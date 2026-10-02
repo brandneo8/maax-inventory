@@ -1,5 +1,8 @@
 import type { createClient } from "@/lib/supabase/server";
 import { getProducts } from "@/lib/data/lookups";
+import { isOnSalonPosList } from "@/lib/data/pos-rules";
+import { getBundleComponentsForProducts } from "@/lib/data/product-components";
+import { SALE_RECLASS_NOTE } from "@/lib/data/usage-ledger";
 import { productDisplayName, productLabel, singaporeToday } from "@/lib/format";
 import { isRetailFacing, type ProductClassification } from "@/lib/labels";
 
@@ -83,7 +86,7 @@ export type OrderBalanceProduct = {
 const PAGE_SIZE = 1000;
 const IN_CHUNK = 200;
 const PICKER_SELECT =
-  "id, sku, barcode, name, order_name, brand_sub, unit_cost_price, rrp, size_label, size_ml, brands(name), product_tags(tags(name)), product_branch_classifications(branch_id, classification), supplier_products(supplier_id)";
+  "id, sku, barcode, name, order_name, brand_sub, unit_cost_price, rrp, size_label, size_ml, pos_allowed, brands(name), product_tags(tags(name)), product_branch_classifications(branch_id, classification), supplier_products(supplier_id)";
 
 type PickerRow = {
   id: string;
@@ -96,6 +99,7 @@ type PickerRow = {
   rrp: number | string | null;
   size_label: string | null;
   size_ml: number | string | null;
+  pos_allowed: boolean | null;
   brands: { name: string | null } | { name: string | null }[] | null;
   product_tags: { tags: { name: string | null } | { name: string | null }[] | null }[] | null;
   product_branch_classifications: { branch_id: string; classification: ProductClassification }[] | null;
@@ -403,6 +407,79 @@ export async function getBranchStockOutProducts(supabase: Client, companyId: str
   return { retail, inhouse };
 }
 
+export type PosSaleProductOption = StockOutProductOption & {
+  costPrice: number;
+  isBundle: boolean;
+  /** This salon's current on-hand quantity (0 for a bundle — see components). */
+  onHand: number;
+  /** For a bundle: what selling one deducts, with each component's on-hand. Empty otherwise. */
+  components: { productId: string; label: string; quantity: number; onHand: number }[];
+};
+
+/**
+ * This salon's POS list — the same products its /admin/pos download
+ * contains — each with the cost a sale of it will actually be booked at:
+ * the salon's current average cost, which is $0 for a product with no cost
+ * recorded here yet (no receipt or opening-balance count at this salon). A
+ * bundle has no cost of its own — selling it deducts its components — so
+ * its cost is the sum of its components' averages.
+ */
+export async function getBranchPosProducts(
+  supabase: Client,
+  companyId: string,
+  branchId: string,
+): Promise<PosSaleProductOption[]> {
+  const assignedIds = await getAssignedProductIds(supabase, branchId);
+  const [rows, avgCosts] = await Promise.all([
+    loadPickerRows(supabase, companyId, assignedIds),
+    getBranchAvgCosts(supabase, companyId, branchId),
+  ]);
+  const posRows = rows.filter((product) =>
+    isOnSalonPosList({ posAllowed: Boolean(product.pos_allowed), sku: product.sku, branchIds: [branchId] }, branchId),
+  );
+  const componentsByProduct = await getBundleComponentsForProducts(
+    supabase,
+    posRows.map((product) => product.id),
+  );
+
+  // A bundle never holds stock itself, so its on-hand lives on its
+  // components — those are fetched too, with names, since a component
+  // needn't be on the POS list.
+  const componentIds = [...new Set([...componentsByProduct.values()].flat().map((component) => component.productId))];
+  const [onHand, componentLabels] = await Promise.all([
+    getBranchOnHand(supabase, companyId, branchId, [...posRows.map((product) => product.id), ...componentIds]),
+    (async () => {
+      const labels = new Map<string, string>();
+      for (const ids of chunkIds(componentIds)) {
+        const { data, error } = await supabase.from("products").select("id, sku, name, order_name").in("id", ids);
+        if (error) throw new Error(error.message || "Could not load bundle components.");
+        for (const row of data ?? []) labels.set(row.id, productDisplayName(row) || row.sku || "—");
+      }
+      return labels;
+    })(),
+  ]);
+
+  return posRows.map((product) => {
+    const components = componentsByProduct.get(product.id) ?? [];
+    const costPrice =
+      components.length > 0
+        ? components.reduce((sum, component) => sum + (avgCosts[component.productId] ?? 0) * component.quantity, 0)
+        : (avgCosts[product.id] ?? 0);
+    return {
+      ...toStockOutOption(product),
+      costPrice,
+      isBundle: components.length > 0,
+      onHand: onHand.get(product.id) ?? 0,
+      components: components.map((component) => ({
+        productId: component.productId,
+        label: componentLabels.get(component.productId) ?? "—",
+        quantity: component.quantity,
+        onHand: onHand.get(component.productId) ?? 0,
+      })),
+    };
+  });
+}
+
 
 /**
  * Sum of product consumption posted against this branch since the 1st of
@@ -429,14 +506,18 @@ export async function getMonthToDateUsage(supabase: Client, branchId: string, pr
 
   const monthStart = `${singaporeToday().slice(0, 7)}-01`;
 
-  function accumulate(rows: { product_id: string; quantity_change: number }[]) {
+  function accumulate(rows: { product_id: string; quantity_change: number }[], sign: 1 | -1 = 1) {
     for (const row of rows) {
-      usage.set(row.product_id, (usage.get(row.product_id) ?? 0) + Math.abs(Number(row.quantity_change)));
+      usage.set(row.product_id, (usage.get(row.product_id) ?? 0) + sign * Math.abs(Number(row.quantity_change)));
     }
   }
 
   for (const ids of chunkIds(productIds)) {
-    const [{ data: useRows, error: useError }, { data: countRows, error: countError }] = await Promise.all([
+    const [
+      { data: useRows, error: useError },
+      { data: countRows, error: countError },
+      { data: reclassRows, error: reclassError },
+    ] = await Promise.all([
       supabase
         .from("inventory_transactions")
         .select("product_id, quantity_change")
@@ -452,11 +533,23 @@ export async function getMonthToDateUsage(supabase: Client, branchId: string, pr
         .eq("txn_type", "count_adjustment")
         .eq("notes", "Count variance")
         .gte("txn_date", monthStart),
+      // A shortfall reclassified as a product sale is one unit of usage (the
+      // sale), not two — this offsets the shortfall it cancels.
+      supabase
+        .from("inventory_transactions")
+        .select("product_id, quantity_change")
+        .in("product_id", ids)
+        .in("store_location_id", locationIds)
+        .eq("txn_type", "count_adjustment")
+        .eq("notes", SALE_RECLASS_NOTE)
+        .gte("txn_date", monthStart),
     ]);
     if (useError) throw new Error(useError.message || "Could not load month-to-date usage.");
     if (countError) throw new Error(countError.message || "Could not load month-to-date usage.");
+    if (reclassError) throw new Error(reclassError.message || "Could not load month-to-date usage.");
     accumulate(useRows ?? []);
     accumulate(countRows ?? []);
+    accumulate(reclassRows ?? [], -1);
   }
   return usage;
 }

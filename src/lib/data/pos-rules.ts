@@ -10,6 +10,18 @@ function chunkIds<T>(items: T[], size = BATCH_SIZE) {
   return chunks;
 }
 
+/**
+ * Whether a product is on a salon's POS list — what that salon's /admin/pos
+ * download contains and what /product-sales offers: allowed in POS, has a
+ * SKU (the POS keys products by it), and assigned to the salon.
+ */
+export function isOnSalonPosList(
+  product: { posAllowed: boolean; sku: string | null; branchIds: string[] },
+  branchId: string,
+) {
+  return product.posAllowed && Boolean(product.sku?.trim()) && product.branchIds.includes(branchId);
+}
+
 export type PosTagRule = {
   id: string;
   label: string | null;

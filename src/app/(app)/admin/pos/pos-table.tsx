@@ -2,7 +2,7 @@
 
 import { Fragment, useMemo, useState } from "react";
 import { deletePosTagRule, getPosBranchExportRows, savePosTagRule } from "./actions";
-import type { PosTagRule } from "@/lib/data/pos-rules";
+import { isOnSalonPosList, type PosTagRule } from "@/lib/data/pos-rules";
 import { downloadCsv } from "@/lib/csv";
 import { productDisplayName } from "@/lib/format";
 import { btnClass, btnSecondaryClass, tableClass, tdClass, thClass } from "@/lib/ui";
@@ -141,11 +141,7 @@ export function PosTable({
   const branchCounts = useMemo(() => {
     const counts = new Map<string, number>();
     for (const branch of branches) {
-      counts.set(
-        branch.id,
-        products.filter((product) => product.posAllowed && Boolean(product.sku) && product.branchIds.includes(branch.id))
-          .length,
-      );
+      counts.set(branch.id, products.filter((product) => isOnSalonPosList(product, branch.id)).length);
     }
     return counts;
   }, [products, branches]);

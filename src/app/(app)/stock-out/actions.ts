@@ -6,8 +6,7 @@ import { redirect } from "next/navigation";
 import { requireBranch } from "@/lib/auth";
 import { assertNoActiveCount } from "@/lib/data/counts";
 import { getDefaultStoreLocationId } from "@/lib/data/lookups";
-import { getBundleComponentsForProducts } from "@/lib/data/product-components";
-import { businessTxnDate } from "@/lib/format";
+import { insertUsageLedgerRows } from "@/lib/data/usage-ledger";
 import { createAdminClient } from "@/lib/supabase/admin";
 
 export type StockOutType = "retail" | "inhouse";
@@ -50,14 +49,8 @@ function assertLineDateWithinReport(lineDate: string, reportDate: string) {
   if (lineDate > reportDate) throw new Error("A line's use date cannot be after the stock-out date.");
 }
 
-// Writes every line of a stock-out report in one pass instead of one
-// insertStockOutLine round trip per line: a single retail_use_entries
-// insert, one batched bundle-component lookup, one batched cost lookup,
-// then a single inventory_transactions insert covering every line (and
-// every bundle-unpacked component row). This doesn't reduce how many times
-// fn_recompute_branch_cost replays a product's history — that fires once per
-// inventory_transactions row regardless — but it cuts the network round
-// trips for an N-line stock-out from roughly 5N to a small constant.
+// Writes every line of a stock-out report in one pass: a single
+// retail_use_entries insert, then the shared batched ledger write.
 async function insertStockOutLines(
   supabase: Client,
   input: {
@@ -91,64 +84,25 @@ async function insertStockOutLines(
   );
   if (entriesError) throw entriesError;
 
-  const baseNote = input.notes ?? `Stock-out (${input.type})`;
-  const componentsByProduct = await getBundleComponentsForProducts(
-    supabase,
-    entries.map((entry) => entry.productId),
-  );
-
-  // A bundle SKU never carries its own stock/cost (mirrors receiving — see
-  // fn_after_goods_receipt_item_insert): using it fans out to deduct each
-  // component by its recipe quantity, costed at the component's own current
-  // average. Nothing is written against the bundle's own product_id.
-  const txnLines = entries.flatMap((entry) => {
-    const qtyUsed = Math.abs(entry.quantityUsed);
-    const txnDate = businessTxnDate(entry.entryDate);
-    const components = componentsByProduct.get(entry.productId) ?? [];
-    if (components.length > 0) {
-      return components.map((component) => ({
-        entryId: entry.entryId,
-        productId: component.productId,
-        quantity: qtyUsed * component.quantity,
-        notes: `${baseNote} (unpacked from bundle usage)`,
-        txnDate,
-      }));
-    }
-    return [{ entryId: entry.entryId, productId: entry.productId, quantity: qtyUsed, notes: baseNote, txnDate }];
-  });
-
-  const { data: costs } = await supabase
-    .from("product_branch_costs")
-    .select("product_id, avg_unit_cost")
-    .eq("branch_id", input.branchId)
-    .in(
-      "product_id",
-      [...new Set(txnLines.map((line) => line.productId))],
-    );
-  const costByProduct = new Map((costs ?? []).map((row) => [row.product_id, row.avg_unit_cost]));
-
-  const { error: txnError } = await supabase.from("inventory_transactions").insert(
-    txnLines.map((line) => ({
-      company_id: input.companyId,
-      product_id: line.productId,
-      store_location_id: input.storeLocationId,
-      // Stock-out is Pulse's own manual entry, not a POS-tracked sale —
-      // it's always inhouse_use now. Genuine retail sales only ever come
-      // from the external POS-report import pathway (src/app/(app)/import),
-      // which writes retail_use directly.
-      txn_type: "inhouse_use" as const,
-      quantity_change: -line.quantity,
-      reference_table: "retail_use_entries",
-      reference_id: line.entryId,
-      created_by: input.userEmail,
-      notes: line.notes,
-      unit_cost: costByProduct.get(line.productId) ?? 0,
-      classification: input.type,
-      txn_date: line.txnDate,
+  await insertUsageLedgerRows(supabase, {
+    companyId: input.companyId,
+    branchId: input.branchId,
+    storeLocationId: input.storeLocationId,
+    userEmail: input.userEmail,
+    // Stock-out is Pulse's own manual entry, not a POS-tracked sale — it's
+    // always inhouse_use. Genuine POS sales are entered on /product-sales,
+    // which writes retail_use.
+    txnType: "inhouse_use",
+    classification: input.type,
+    referenceTable: "retail_use_entries",
+    baseNote: input.notes ?? `Stock-out (${input.type})`,
+    lines: entries.map((entry) => ({
+      referenceId: entry.entryId,
+      productId: entry.productId,
+      quantity: entry.quantityUsed,
+      entryDate: entry.entryDate,
     })),
-  );
-
-  if (txnError) throw txnError;
+  });
 }
 
 async function clearReportLines(supabase: Client, reportId: string) {

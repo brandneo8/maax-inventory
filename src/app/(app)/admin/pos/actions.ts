@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { requireAdmin } from "@/lib/auth";
 import { catalogTax, confirmedRetailPrice } from "@/lib/catalog-pricing";
 import { getTaxRates } from "@/lib/data/lookups";
+import { isOnSalonPosList } from "@/lib/data/pos-rules";
 import { getCatalogProducts } from "@/lib/data/products";
 import { productDisplayName } from "@/lib/format";
 import { classificationTagsLabel } from "@/lib/labels";
@@ -151,7 +152,7 @@ export async function getPosBranchExportRows(branchId: string): Promise<PosBranc
   const gstRate = Number(taxRates.find((rate) => rate.is_default)?.rate_percentage ?? 9);
 
   return products
-    .filter((product) => product.posAllowed && Boolean(product.sku) && product.branchIds.includes(branchId))
+    .filter((product) => isOnSalonPosList(product, branchId))
     .map((product) => {
       const name = productDisplayName(product) || product.sku || "";
       const typeLabel = classificationTagsLabel([...new Set(Object.values(product.classificationsByBranch).flat())]);
