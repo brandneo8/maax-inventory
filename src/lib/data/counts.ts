@@ -722,9 +722,11 @@ async function assertNoLinkedProductSales(supabase: Client, countId: string) {
   }
 
   for (const ids of chunkList(shortfallTxnIds)) {
+    // Only confirmed sales posted a reclassification row; a draft hasn't.
     const { count, error } = await supabase
       .from("product_sale_items")
-      .select("id", { count: "exact", head: true })
+      .select("id, product_sales!inner(status)", { count: "exact", head: true })
+      .eq("product_sales.status", "confirmed")
       .in("linked_count_txn_id", ids);
     if (error) throw queryError(error, "Could not check this count for linked product sales.");
     if ((count ?? 0) > 0) {

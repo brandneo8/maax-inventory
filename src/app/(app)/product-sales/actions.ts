@@ -122,20 +122,29 @@ async function validateCountLinks(
   return byTxn;
 }
 
-export async function recordProductSale(input: {
+/**
+ * Saves a product sale as a draft, or confirms it. A draft stores its lines
+ * (products, dates, prices, count links) but writes nothing to the ledger, so
+ * it can be reopened and edited; confirming posts it. Passing `sale_id`
+ * replaces an existing draft's details and lines — a confirmed sale can only
+ * have its report date and remarks changed (updateProductSaleDetails).
+ */
+export async function saveProductSale(input: {
+  sale_id?: string | null;
   branch_id: string;
   sale_date: string;
   notes: string;
   lines: ProductSaleLineInput[];
+  confirm: boolean;
 }) {
   const { supabase, companyId, user, branch } = await requireBranch();
-  await assertNoActiveCount(supabase, companyId, branch.id, "record product sales");
+  if (input.confirm) await assertNoActiveCount(supabase, companyId, branch.id, "record product sales");
   if (input.branch_id && input.branch_id !== branch.id) {
     throw new Error("The form is for a different salon. Switch branch and try again.");
   }
   const today = singaporeToday();
-  if (!ISO_DATE.test(input.sale_date)) throw new Error("Enter a valid sale date.");
-  if (input.sale_date > today) throw new Error("The sale date can't be after today.");
+  if (!ISO_DATE.test(input.sale_date)) throw new Error("Enter a valid report date.");
+  if (input.sale_date > today) throw new Error("The report date can't be after today.");
 
   const lines = input.lines.filter((line) => line.product_id && line.quantity > 0);
   if (lines.length === 0) throw new Error("Add at least one product with a quantity.");
@@ -144,31 +153,58 @@ export async function recordProductSale(input: {
       throw new Error("Each line needs a unit price of 0 or more.");
     }
     if (!ISO_DATE.test(line.sale_date)) throw new Error("Each line needs a valid date sold.");
-    if (line.sale_date > input.sale_date) throw new Error("A line's date sold can't be after the sale date.");
+    if (line.sale_date > input.sale_date) throw new Error("A line's date sold can't be after the report date.");
   }
   const shortfallByTxn = await validateCountLinks(supabase, companyId, branch.id, lines);
 
-  const storeLocationId = await getDefaultStoreLocationId(supabase, branch.id);
   const notes = input.notes.trim() || null;
+  let saleId: string;
+  let createdNow = false;
 
-  const { data: sale, error: saleError } = await supabase
-    .from("product_sales")
-    .insert({
-      company_id: companyId,
-      branch_id: branch.id,
-      sale_date: input.sale_date,
-      notes,
-      keyed_in_by: user.email,
-    })
-    .select("id")
-    .single();
-  if (saleError || !sale) throw saleError ?? new Error("Could not create the product sale.");
+  if (input.sale_id) {
+    const { data: existing, error: existingError } = await supabase
+      .from("product_sales")
+      .select("id, status")
+      .eq("id", input.sale_id)
+      .eq("company_id", companyId)
+      .eq("branch_id", branch.id)
+      .single();
+    if (existingError || !existing) throw existingError ?? new Error("Product sale not found.");
+    if (existing.status !== "draft") {
+      throw new Error("This sale is already confirmed — only its report date and remarks can be changed.");
+    }
+    const { error: updateError } = await supabase
+      .from("product_sales")
+      .update({ sale_date: input.sale_date, notes })
+      .eq("id", existing.id);
+    if (updateError) throw updateError;
+    // A draft has no ledger rows, so its lines can simply be replaced.
+    const { error: clearError } = await supabase.from("product_sale_items").delete().eq("product_sale_id", existing.id);
+    if (clearError) throw clearError;
+    saleId = existing.id;
+  } else {
+    const { data: created, error: saleError } = await supabase
+      .from("product_sales")
+      .insert({
+        company_id: companyId,
+        branch_id: branch.id,
+        sale_date: input.sale_date,
+        notes,
+        keyed_in_by: user.email,
+        status: "draft",
+      })
+      .select("id")
+      .single();
+    if (saleError || !created) throw saleError ?? new Error("Could not create the product sale.");
+    saleId = created.id;
+    createdNow = true;
+  }
 
   const items = lines.map((line) => ({ ...line, itemId: randomUUID() }));
   const { error: itemsError } = await supabase.from("product_sale_items").insert(
     items.map((item) => ({
       id: item.itemId,
-      product_sale_id: sale.id,
+      product_sale_id: saleId,
       product_id: item.product_id,
       quantity: item.quantity,
       unit_sale_price: item.unit_sale_price,
@@ -178,10 +214,16 @@ export async function recordProductSale(input: {
     })),
   );
   if (itemsError) {
-    await supabase.from("product_sales").delete().eq("id", sale.id);
+    if (createdNow) await supabase.from("product_sales").delete().eq("id", saleId);
     throw itemsError;
   }
 
+  if (!input.confirm) {
+    revalidateProductSales(saleId);
+    redirect(`/product-sales/${saleId}`);
+  }
+
+  const storeLocationId = await getDefaultStoreLocationId(supabase, branch.id);
   try {
     await insertUsageLedgerRows(supabase, {
       companyId,
@@ -230,19 +272,87 @@ export async function recordProductSale(input: {
       const { error: reclassError } = await supabase.from("inventory_transactions").insert(reclassRows);
       if (reclassError) throw reclassError;
     }
+
+    const { error: statusError } = await supabase.from("product_sales").update({ status: "confirmed" }).eq("id", saleId);
+    if (statusError) throw statusError;
   } catch (err) {
+    // Undo whatever reached the ledger; the sale itself stays behind as a
+    // draft so nothing the user entered is lost.
     await removeSaleLedgerRows(
       supabase,
       companyId,
       branch.id,
       items.map((item) => item.itemId),
     );
-    await supabase.from("product_sales").delete().eq("id", sale.id);
+    revalidateProductSales(saleId);
     throw err;
   }
 
+  revalidateProductSales(saleId);
+  redirect(`/product-sales/${saleId}`);
+}
+
+/**
+ * The parts of a confirmed sale that can change after it's posted: the
+ * report date and remarks. Each line posted on its own date sold, so moving
+ * the report date doesn't touch stock — it just can't go after today or
+ * before any line's date sold. Remarks also become the notes on the sale's
+ * retail_use ledger rows, so those are updated to match.
+ */
+export async function updateProductSaleDetails(input: { sale_id: string; sale_date: string; notes: string }) {
+  const { supabase, companyId, branch } = await requireBranch();
+  const today = singaporeToday();
+  if (!ISO_DATE.test(input.sale_date)) throw new Error("Enter a valid report date.");
+  if (input.sale_date > today) throw new Error("The report date can't be after today.");
+
+  const { data: sale, error: saleError } = await supabase
+    .from("product_sales")
+    .select("id, status")
+    .eq("id", input.sale_id)
+    .eq("company_id", companyId)
+    .eq("branch_id", branch.id)
+    .single();
+  if (saleError || !sale) throw saleError ?? new Error("Product sale not found.");
+
+  const { data: items, error: itemsError } = await supabase
+    .from("product_sale_items")
+    .select("id, sale_date")
+    .eq("product_sale_id", sale.id);
+  if (itemsError) throw itemsError;
+  const latestLineDate = (items ?? []).reduce((latest, item) => (item.sale_date > latest ? item.sale_date : latest), "");
+  if (latestLineDate && input.sale_date < latestLineDate) {
+    throw new Error(`The report date can't be before the latest line's date sold (${latestLineDate}).`);
+  }
+
+  const notes = input.notes.trim() || null;
+  const { error: updateError } = await supabase
+    .from("product_sales")
+    .update({ sale_date: input.sale_date, notes })
+    .eq("id", sale.id);
+  if (updateError) throw updateError;
+
+  const itemIds = (items ?? []).map((item) => item.id);
+  if (sale.status === "confirmed" && itemIds.length > 0) {
+    const baseNote = notes ?? "Product sale (POS)";
+    const { error: plainError } = await supabase
+      .from("inventory_transactions")
+      .update({ notes: baseNote })
+      .eq("reference_table", REFERENCE_TABLE)
+      .eq("txn_type", "retail_use")
+      .in("reference_id", itemIds)
+      .not("notes", "like", "%(unpacked from bundle usage)");
+    if (plainError) throw plainError;
+    const { error: bundleError } = await supabase
+      .from("inventory_transactions")
+      .update({ notes: `${baseNote} (unpacked from bundle usage)` })
+      .eq("reference_table", REFERENCE_TABLE)
+      .eq("txn_type", "retail_use")
+      .in("reference_id", itemIds)
+      .like("notes", "%(unpacked from bundle usage)");
+    if (bundleError) throw bundleError;
+  }
+
   revalidateProductSales(sale.id);
-  redirect(`/product-sales/${sale.id}`);
 }
 
 export async function deleteProductSale(formData: FormData) {

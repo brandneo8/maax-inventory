@@ -2,16 +2,87 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { requireBranch } from "@/lib/auth";
 import { getProductSale } from "@/lib/data/product-sales";
-import { formatDate, formatDateTime, formatMoney, formatQty, formatSku, productDisplayName } from "@/lib/format";
+import { getBranchPosProducts } from "@/lib/data/products";
+import {
+  formatDate,
+  formatDateTime,
+  formatMoney,
+  formatQty,
+  formatSku,
+  productDisplayName,
+  singaporeToday,
+} from "@/lib/format";
 import { btnSecondaryClass, tableClass, tdClass, thClass } from "@/lib/ui";
 import { cn } from "@/lib/utils";
 import { DeleteProductSaleButton } from "../delete-product-sale-button";
+import { NewProductSaleForm } from "../new/new-product-sale-form";
+import { EditSaleDetails } from "./edit-sale-details";
 
 export default async function ProductSaleDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const { supabase, companyId, branch } = await requireBranch();
   const sale = await getProductSale(supabase, companyId, branch.id, id).catch(() => null);
   if (!sale) notFound();
+  const today = singaporeToday();
+
+  // A draft hasn't posted anything, so it reopens in the full editing form.
+  if (sale.status === "draft") {
+    const products = await getBranchPosProducts(supabase, companyId, branch.id);
+    const onPosList = new Set(products.map((product) => product.id));
+    const keptItems = sale.items.filter((item) => onPosList.has(item.product_id));
+    const droppedLabels = sale.items
+      .filter((item) => !onPosList.has(item.product_id))
+      .map((item) => {
+        const product = Array.isArray(item.products) ? item.products[0] : item.products;
+        return productDisplayName(product) || product?.sku || "A product";
+      });
+    return (
+      <div className="space-y-6">
+        <div className="flex items-end justify-between gap-4">
+          <div>
+            <Link href="/product-sales" className="text-sm text-muted underline">
+              ← Back to Product sales
+            </Link>
+            <h1 className="mt-2 flex items-center gap-2 text-2xl font-semibold tracking-tight">
+              Product sale · {formatDate(sale.sale_date)}
+              <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800">Draft</span>
+            </h1>
+            <p className="mt-1 text-sm text-muted">
+              {branch.displayName} · started by {sale.keyed_in_by || "—"} on {formatDateTime(sale.created_at)}. Nothing
+              is posted to stock until you confirm.
+            </p>
+          </div>
+          <DeleteProductSaleButton saleId={sale.id} />
+        </div>
+        {droppedLabels.length > 0 ? (
+          <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+            Left out because they&apos;re no longer on this salon&apos;s POS list: {droppedLabels.join(", ")}. Saving
+            removes them from this draft.
+          </p>
+        ) : null}
+        <NewProductSaleForm
+          branchId={branch.id}
+          branchName={branch.displayName}
+          products={products}
+          today={today}
+          saleId={sale.id}
+          initialSaleDate={sale.sale_date}
+          initialNotes={sale.notes ?? ""}
+          initialLines={keptItems.map((item) => ({
+            key: item.id,
+            productId: item.product_id,
+            quantity: Number(item.quantity),
+            unitSalePrice: Number(item.unit_sale_price),
+            saleDate: item.sale_date,
+            linkedTxnId: item.linked_count_txn_id,
+            linkedQuantity: item.linked_quantity == null ? 0 : Number(item.linked_quantity),
+          }))}
+        />
+      </div>
+    );
+  }
+
+  const latestLineDate = sale.items.reduce((latest, item) => (item.sale_date > latest ? item.sale_date : latest), "");
 
   const items = sale.items.map((item) => {
     const product = Array.isArray(item.products) ? item.products[0] : item.products;
@@ -44,9 +115,9 @@ export default async function ProductSaleDetailPage({ params }: { params: Promis
           </Link>
           <h1 className="mt-2 text-2xl font-semibold tracking-tight">Product sale · {formatDate(sale.sale_date)}</h1>
           <p className="mt-1 text-sm text-muted">
-            {branch.displayName} · keyed in by {sale.keyed_in_by || "—"} on {formatDateTime(sale.created_at)}
+            {branch.displayName} · confirmed · keyed in by {sale.keyed_in_by || "—"} on{" "}
+            {formatDateTime(sale.created_at)}
           </p>
-          {sale.notes ? <p className="mt-1 text-sm text-slate-700">{sale.notes}</p> : null}
         </div>
         <div className="flex gap-2">
           <Link className={btnSecondaryClass} href={`/product-sales/new?from=${sale.id}`}>
@@ -55,6 +126,14 @@ export default async function ProductSaleDetailPage({ params }: { params: Promis
           <DeleteProductSaleButton saleId={sale.id} />
         </div>
       </div>
+
+      <EditSaleDetails
+        saleId={sale.id}
+        saleDate={sale.sale_date}
+        notes={sale.notes}
+        today={today}
+        earliestAllowed={latestLineDate}
+      />
 
       <div className="overflow-x-auto rounded-xl border border-border bg-card">
         <table className={tableClass}>

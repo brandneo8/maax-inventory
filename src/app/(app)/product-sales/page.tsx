@@ -29,7 +29,8 @@ export default async function ProductSalesPage() {
         <table className={tableClass}>
           <thead>
             <tr>
-              <th className={thClass}>Sale date</th>
+              <th className={thClass}>Report date</th>
+              <th className={thClass}>Status</th>
               <th className={thClass}>Lines</th>
               <th className={cn(thClass, "text-right")}>Total quantity</th>
               <th className={cn(thClass, "text-right")}>Total sales</th>
@@ -40,7 +41,7 @@ export default async function ProductSalesPage() {
           <tbody>
             {sales.length === 0 ? (
               <tr>
-                <td className={tdClass} colSpan={6}>
+                <td className={tdClass} colSpan={7}>
                   No product sales recorded yet.
                 </td>
               </tr>
@@ -51,6 +52,15 @@ export default async function ProductSalesPage() {
                     <Link className="underline" href={`/product-sales/${sale.id}`}>
                       {formatDate(sale.sale_date)}
                     </Link>
+                  </td>
+                  <td className={tdClass}>
+                    {sale.status === "draft" ? (
+                      <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800">Draft</span>
+                    ) : (
+                      <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-800">
+                        Confirmed
+                      </span>
+                    )}
                   </td>
                   <td className={tdClass}>{sale.lineCount}</td>
                   <td className={cn(tdClass, "text-right text-red-600")}>{formatQty(sale.totalQuantity)}</td>

@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { Trash2 } from "lucide-react";
-import { getLinkableCountShortfalls, recordProductSale } from "../actions";
+import { getLinkableCountShortfalls, saveProductSale } from "../actions";
 import { ProductPicker } from "@/components/product-picker";
 import type { CountShortfall } from "@/lib/data/product-sales";
 import type { PosSaleProductOption } from "@/lib/data/products";
@@ -142,23 +142,36 @@ export function NewProductSaleForm({
   branchName,
   products,
   today,
+  saleId = null,
+  initialSaleDate,
+  initialNotes = "",
   initialLines = [],
 }: {
   branchId: string;
   branchName: string;
   products: PosSaleProductOption[];
   today: string;
-  initialLines?: Omit<SaleLine, "linkedTxnId" | "linkedQuantity" | "saleDate">[];
+  /** Set when reopening a saved draft — saving then updates it instead of creating a new sale. */
+  saleId?: string | null;
+  initialSaleDate?: string;
+  initialNotes?: string;
+  initialLines?: (Omit<SaleLine, "linkedTxnId" | "linkedQuantity" | "saleDate"> &
+    Partial<Pick<SaleLine, "linkedTxnId" | "linkedQuantity" | "saleDate">>)[];
 }) {
-  const [saleDate, setSaleDate] = useState(today);
-  const [notes, setNotes] = useState("");
+  const [saleDate, setSaleDate] = useState(() => clampDate(initialSaleDate ?? today, today));
+  const [notes, setNotes] = useState(initialNotes);
   const [lines, setLines] = useState<SaleLine[]>(() =>
-    initialLines.map((line) => ({ ...line, saleDate: today, linkedTxnId: null, linkedQuantity: 0 })),
+    initialLines.map((line) => ({
+      ...line,
+      saleDate: clampDate(line.saleDate ?? initialSaleDate ?? today, initialSaleDate ?? today),
+      linkedTxnId: line.linkedTxnId ?? null,
+      linkedQuantity: line.linkedTxnId ? (line.linkedQuantity ?? 0) : 0,
+    })),
   );
   const [countRows, setCountRows] = useState<CountShortfall[] | null>(null);
   const [onlyThisSale, setOnlyThisSale] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [pending, setPending] = useState(false);
+  const [pending, setPending] = useState<"draft" | "confirm" | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -340,11 +353,13 @@ export function NewProductSaleForm({
   const totalSales = lines.reduce((sum, line) => sum + line.quantity * line.unitSalePrice, 0);
   const hasZeroCostLine = lines.some((line) => productById.get(line.productId)?.costPrice === 0);
 
-  async function onSubmit() {
-    setPending(true);
+  async function save(confirm: boolean) {
+    setPending(confirm ? "confirm" : "draft");
     setError(null);
     try {
-      await recordProductSale({
+      await saveProductSale({
+        sale_id: saleId,
+        confirm,
         branch_id: branchId,
         sale_date: saleDate,
         notes,
@@ -359,19 +374,21 @@ export function NewProductSaleForm({
       });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not save this product sale.");
-      setPending(false);
+      setPending(null);
     }
   }
 
+  const cannotSave = pending !== null || lines.length === 0 || lines.some((line) => line.quantity <= 0);
+
   return (
-    <form action={onSubmit} className="space-y-6">
+    <form onSubmit={(event) => event.preventDefault()} className="space-y-6">
       {error ? (
         <p className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">{error}</p>
       ) : null}
 
       <div className="grid gap-3 rounded-xl border border-border bg-card p-4 md:grid-cols-2">
         <label className="space-y-1 text-sm">
-          <span>Sale date</span>
+          <span>Report date</span>
           <input
             className={fieldClass}
             type="date"
@@ -708,13 +725,17 @@ export function NewProductSaleForm({
         </section>
       ) : null}
 
-      <button
-        className={btnClass}
-        disabled={pending || lines.length === 0 || lines.some((line) => line.quantity <= 0)}
-        type="submit"
-      >
-        {pending ? "Saving…" : `Save product sale for ${branchName}`}
-      </button>
+      <div className="flex flex-wrap items-center gap-3">
+        <button className={btnSecondaryClass} type="button" disabled={cannotSave} onClick={() => void save(false)}>
+          {pending === "draft" ? "Saving draft…" : "Save draft"}
+        </button>
+        <button className={btnClass} type="button" disabled={cannotSave} onClick={() => void save(true)}>
+          {pending === "confirm" ? "Confirming…" : `Confirm sale for ${branchName}`}
+        </button>
+        <p className="text-xs text-muted">
+          A draft saves everything but doesn&apos;t touch stock or costs. Confirming posts it.
+        </p>
+      </div>
     </form>
   );
 }

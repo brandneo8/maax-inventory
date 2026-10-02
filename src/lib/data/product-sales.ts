@@ -107,11 +107,14 @@ export async function getCountShortfalls(
     }
   }
 
+  // Only confirmed sales have cleared anything — a draft hasn't posted, so
+  // its links are re-checked against what's left when it's confirmed.
   const linkedByTxn = new Map<string, number>();
   for (const ids of chunk(rows.map((row) => row.id))) {
     const { data, error } = await supabase
       .from("product_sale_items")
-      .select("linked_count_txn_id, linked_quantity, quantity")
+      .select("linked_count_txn_id, linked_quantity, quantity, product_sales!inner(status)")
+      .eq("product_sales.status", "confirmed")
       .in("linked_count_txn_id", ids);
     if (error) throw error;
     for (const link of data ?? []) {
@@ -151,7 +154,7 @@ export async function getCountShortfalls(
 export async function getProductSales(supabase: Client, companyId: string, branchId: string) {
   const { data: sales, error } = await supabase
     .from("product_sales")
-    .select("id, sale_date, notes, keyed_in_by, created_at")
+    .select("id, sale_date, notes, keyed_in_by, created_at, status")
     .eq("company_id", companyId)
     .eq("branch_id", branchId)
     .order("sale_date", { ascending: false })
@@ -189,7 +192,7 @@ export async function getProductSales(supabase: Client, companyId: string, branc
 export async function getProductSale(supabase: Client, companyId: string, branchId: string, id: string) {
   const { data: sale, error } = await supabase
     .from("product_sales")
-    .select("id, sale_date, notes, keyed_in_by, created_at")
+    .select("id, sale_date, notes, keyed_in_by, created_at, status")
     .eq("company_id", companyId)
     .eq("branch_id", branchId)
     .eq("id", id)

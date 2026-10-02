@@ -1051,6 +1051,7 @@ export type Database = {
           keyed_in_by: string | null
           notes: string | null
           sale_date: string
+          status: string
         }
         Insert: {
           branch_id: string
@@ -1060,6 +1061,7 @@ export type Database = {
           keyed_in_by?: string | null
           notes?: string | null
           sale_date: string
+          status?: string
         }
         Update: {
           branch_id?: string
@@ -1069,6 +1071,7 @@ export type Database = {
           keyed_in_by?: string | null
           notes?: string | null
           sale_date?: string
+          status?: string
         }
         Relationships: [
           {
