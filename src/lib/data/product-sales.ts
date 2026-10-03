@@ -33,10 +33,10 @@ function firstOf<T>(value: T | T[] | null | undefined): T | null {
 }
 
 /**
- * Count shortfalls at this salon a product-sale line could be linked to:
- * count_adjustment rows noted "Count variance" with a negative quantity,
- * from counts that haven't been voided, with how much of each is already
- * claimed by saved sale lines. Filter to every product at the salon (the
+ * Count shortfalls at this salon a product-sale or stock-out line could be
+ * linked to: count_adjustment rows noted "Count variance" with a negative
+ * quantity, from counts that haven't been voided, with how much of each is
+ * already claimed by confirmed sale lines and assigned stock-out lines. Filter to every product at the salon (the
  * form's count table) or by ledger row id (validating a save).
  */
 export async function getCountShortfalls(
@@ -122,6 +122,44 @@ export async function getCountShortfalls(
       const applied = Number(link.linked_quantity ?? link.quantity);
       linkedByTxn.set(link.linked_count_txn_id, (linkedByTxn.get(link.linked_count_txn_id) ?? 0) + applied);
     }
+    // Stock-out lines assigned to a shortfall claim it too (they post as soon as they're saved).
+    const { data: useLinks, error: useLinksError } = await supabase
+      .from("retail_use_entries")
+      .select("linked_count_txn_id, linked_quantity")
+      .in("linked_count_txn_id", ids);
+    if (useLinksError) throw useLinksError;
+    for (const link of useLinks ?? []) {
+      if (!link.linked_count_txn_id) continue;
+      linkedByTxn.set(
+        link.linked_count_txn_id,
+        (linkedByTxn.get(link.linked_count_txn_id) ?? 0) + Number(link.linked_quantity ?? 0),
+      );
+    }
+  }
+
+  // Shortfall a removed receipt gave back (it was that receipt's units, not
+  // usage) can't be claimed either — spread over that count item's rows.
+  const givenBackByItem = new Map<string, number>();
+  for (const ids of chunk(countItemIds)) {
+    const { data, error } = await supabase
+      .from("inventory_transactions")
+      .select("reference_id, quantity_change")
+      .eq("reference_table", "inventory_count_items")
+      .eq("notes", "Count true-up: removed receipt (offsets count shortfall)")
+      .in("reference_id", ids);
+    if (error) throw error;
+    for (const row of data ?? []) {
+      if (!row.reference_id) continue;
+      givenBackByItem.set(row.reference_id, (givenBackByItem.get(row.reference_id) ?? 0) + Math.abs(Number(row.quantity_change)));
+    }
+  }
+  for (const row of rows) {
+    const givenBack = row.reference_id ? (givenBackByItem.get(row.reference_id) ?? 0) : 0;
+    if (givenBack <= 0 || !row.reference_id) continue;
+    const free = Math.max(0, Math.abs(Number(row.quantity_change)) - (linkedByTxn.get(row.id) ?? 0));
+    const take = Math.min(free, givenBack);
+    linkedByTxn.set(row.id, (linkedByTxn.get(row.id) ?? 0) + take);
+    givenBackByItem.set(row.reference_id, givenBack - take);
   }
 
   return rows

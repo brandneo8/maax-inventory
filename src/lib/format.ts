@@ -14,6 +14,12 @@ export function singaporeToday() {
   return SINGAPORE_DATE.format(new Date());
 }
 
+/** "YYYY-MM-DD" shifted by whole days, e.g. addDays("2026-09-30", 1) is "2026-10-01". */
+export function addDays(date: string, days: number) {
+  const [year, month, day] = date.split("-").map(Number);
+  return new Date(Date.UTC(year, month - 1, day + days)).toISOString().slice(0, 10);
+}
+
 /** "YYYY-MM" shifted by whole months, e.g. shiftMonth("2026-01", -1) is "2025-12". */
 export function shiftMonth(month: string, delta: number) {
   const [year, monthNum] = month.split("-").map(Number);

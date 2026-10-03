@@ -1,5 +1,5 @@
 import { getDefaultStoreLocationId } from "@/lib/data/lookups";
-import { LATE_RECEIPT_SURPLUS_NOTE } from "@/lib/data/usage-ledger";
+import { LATE_RECEIPT_SURPLUS_NOTE, REMOVED_RECEIPT_SHORTFALL_NOTE } from "@/lib/data/usage-ledger";
 import type { createClient } from "@/lib/supabase/server";
 
 type Client = Awaited<ReturnType<typeof createClient>>;
@@ -65,6 +65,25 @@ export async function applyLateReceiptTrueUps(
   supabase: Client,
   input: { companyId: string; branchId: string; receiptId: string; createdBy: string | undefined },
 ) {
+  const { data: receipt, error } = await supabase
+    .from("goods_receipts")
+    .select("voided_at")
+    .eq("id", input.receiptId)
+    .single();
+  if (error || !receipt) throw error ?? new Error("Receipt not found.");
+  // A removed receipt: every count that included it gives its units back.
+  if (receipt.voided_at) return applyRemovedReceiptTrueUps(supabase, input, "removed");
+  // A live receipt: counts that missed it but it's dated before (late), and
+  // counts that included it but it's now dated after (moved past the count).
+  await applyLateModeTrueUps(supabase, input);
+  await applyRemovedReceiptTrueUps(supabase, input, "moved");
+}
+
+/** The late-receipt direction of applyLateReceiptTrueUps (see its comment). */
+async function applyLateModeTrueUps(
+  supabase: Client,
+  input: { companyId: string; branchId: string; receiptId: string; createdBy: string | undefined },
+) {
   const { data: receiptItems, error: itemsError } = await supabase
     .from("goods_receipt_items")
     .select("id, product_id, quantity_received")
@@ -72,11 +91,25 @@ export async function applyLateReceiptTrueUps(
   if (itemsError) throw itemsError;
   if (!receiptItems?.length) return;
 
+  // When the receipt was keyed in. Receiving is blocked while a count is in
+  // progress, so a receipt keyed before a count was started was already in
+  // that count's expected quantities — only counts started before the
+  // receipt was keyed (i.e. confirmed without it) need a true-up, however
+  // early the receipt is dated.
+  const { data: receipt, error: receiptError } = await supabase
+    .from("goods_receipts")
+    .select("created_at, voided_at")
+    .eq("id", input.receiptId)
+    .single();
+  if (receiptError || !receipt) throw receiptError ?? new Error("Receipt not found.");
+  // A removed receipt's corrections run the other way (see applyRemovedReceiptTrueUps).
+
   const { data: receiptRows, error: rowsError } = await supabase
     .from("inventory_transactions")
     .select("reference_id, product_id, quantity_change, txn_date")
     .eq("reference_table", "goods_receipt_items")
     .eq("txn_type", "goods_receipt")
+    .gt("quantity_change", 0)
     .in(
       "reference_id",
       receiptItems.map((item) => item.id),
@@ -92,6 +125,7 @@ export async function applyLateReceiptTrueUps(
     .eq("branch_id", input.branchId)
     .eq("status", "completed")
     .gte("count_date", receiptTs.slice(0, 10))
+    .lt("created_at", receipt.created_at)
     .order("count_date");
   if (countsError) throw countsError;
   if (!counts?.length) return;
@@ -272,6 +306,20 @@ export async function removeLateReceiptTrueUps(
       "A product sale is applied to a count shortfall this receipt created. Remove that sale (or its link) first.",
     );
   }
+  const { data: useLinks, error: useLinksError } = await supabase
+    .from("retail_use_entries")
+    .select("id")
+    .in(
+      "linked_count_txn_id",
+      (rows ?? []).map((row) => row.id),
+    )
+    .limit(1);
+  if (useLinksError) throw useLinksError;
+  if (useLinks?.length) {
+    throw new Error(
+      "A stock-out line is assigned to a count shortfall this receipt created. Set it back to an extra deduction first.",
+    );
+  }
 
   const { error: deleteError } = await supabase
     .from("inventory_transactions")
@@ -287,4 +335,190 @@ export async function removeLateReceiptTrueUps(
     });
     if (recomputeError) throw new Error(recomputeError.message || "Could not update product costs.");
   }
+}
+
+/**
+ * The reverse of the late-receipt true-up, for a count that had already
+ * included a receipt in its starting balance (the receipt was keyed in
+ * before the count started) when that receipt turns out not to belong
+ * there:
+ *   - "removed": the receipt is being removed — its units never arrived;
+ *   - "moved": the receipt is now dated after the count — they arrived later.
+ * Either way the count measured the shelf without those units, so its
+ * shortfall already took them off, and the reversal (or the receipt's later
+ * date) would take them off again. So, on the first such count that counted
+ * each product, give the units back: up to the count's unclaimed shortfall as
+ * REMOVED_RECEIPT_SHORTFALL_NOTE (it cancels that much shortfall), and any
+ * more as a surplus the count really found (+'Count variance' at $0). The
+ * counted balance stays exactly as counted. Rows are tagged with the
+ * receipt, so removeLateReceiptTrueUps takes them back out (on re-dating, or
+ * if a removal doesn't go through).
+ */
+export async function applyRemovedReceiptTrueUps(
+  supabase: Client,
+  input: { companyId: string; branchId: string; receiptId: string; createdBy: string | undefined },
+  mode: "removed" | "moved" = "removed",
+) {
+  const { data: receipt, error: receiptError } = await supabase
+    .from("goods_receipts")
+    .select("created_at")
+    .eq("id", input.receiptId)
+    .single();
+  if (receiptError || !receipt) throw receiptError ?? new Error("Receipt not found.");
+
+  const { data: receiptItems, error: itemsError } = await supabase
+    .from("goods_receipt_items")
+    .select("id")
+    .eq("goods_receipt_id", input.receiptId);
+  if (itemsError) throw itemsError;
+  if (!receiptItems?.length) return;
+
+  // What the receipt put into stock, per product (bundles are already unpacked here).
+  const { data: receiptRows, error: rowsError } = await supabase
+    .from("inventory_transactions")
+    .select("product_id, quantity_change, txn_date")
+    .eq("reference_table", "goods_receipt_items")
+    .eq("txn_type", "goods_receipt")
+    .gt("quantity_change", 0)
+    .in(
+      "reference_id",
+      receiptItems.map((item) => item.id),
+    );
+  if (rowsError) throw rowsError;
+  if (!receiptRows?.length) return;
+  const receiptTs = receiptRows.reduce((min, row) => (row.txn_date < min ? row.txn_date : min), receiptRows[0].txn_date);
+  const quantityByProduct = new Map<string, number>();
+  for (const row of receiptRows) {
+    quantityByProduct.set(row.product_id, (quantityByProduct.get(row.product_id) ?? 0) + Number(row.quantity_change));
+  }
+
+  // Counts that included it: started after it was keyed in. When removing,
+  // all of them; when it's been moved, only those it's now dated after.
+  const { data: counts, error: countsError } = await supabase
+    .from("inventory_counts")
+    .select("id, count_date")
+    .eq("company_id", input.companyId)
+    .eq("branch_id", input.branchId)
+    .eq("status", "completed")
+    .gt("created_at", receipt.created_at)
+    .order("count_date");
+  if (countsError) throw countsError;
+  if (!counts?.length) return;
+  const includingCounts: CountRow[] = [];
+  for (const count of counts) {
+    const ts = await countTimestamp(supabase, count.id, count.count_date);
+    if (mode === "removed" || ts < receiptTs) includingCounts.push({ id: count.id, countDate: count.count_date, ts });
+  }
+  if (includingCounts.length === 0) return;
+  includingCounts.sort((left, right) => left.ts.localeCompare(right.ts));
+
+  const productIds = [...quantityByProduct.keys()];
+  const countItems: CountItem[] = [];
+  for (const ids of chunk(productIds)) {
+    const { data, error } = await supabase
+      .from("inventory_count_items")
+      .select("id, inventory_count_id, product_id, counted_quantity, variance")
+      .in(
+        "inventory_count_id",
+        includingCounts.map((count) => count.id),
+      )
+      .in("product_id", ids);
+    if (error) throw error;
+    for (const row of data ?? []) {
+      countItems.push({
+        id: row.id,
+        countId: row.inventory_count_id,
+        productId: row.product_id,
+        counted: row.counted_quantity == null ? null : Number(row.counted_quantity),
+        variance: Number(row.variance ?? 0),
+      });
+    }
+  }
+
+  // Each count item's shortfall still free to give back: its shortfall rows,
+  // less what product sales and stock-outs have claimed and what earlier
+  // removed receipts already gave back.
+  const shortfallLeft = new Map<string, number>();
+  const shortfallCost = new Map<string, number>();
+  for (const ids of chunk(countItems.map((item) => item.id))) {
+    const { data: rows, error } = await supabase
+      .from("inventory_transactions")
+      .select("id, reference_id, quantity_change, unit_cost, notes")
+      .eq("reference_table", "inventory_count_items")
+      .eq("txn_type", "count_adjustment")
+      .in("notes", ["Count variance", REMOVED_RECEIPT_SHORTFALL_NOTE])
+      .in("reference_id", ids);
+    if (error) throw error;
+    const shortfallRowIds: string[] = [];
+    const itemByRow = new Map<string, string>();
+    for (const row of rows ?? []) {
+      if (!row.reference_id) continue;
+      const quantity = Number(row.quantity_change);
+      if (row.notes === "Count variance" && quantity < 0) {
+        shortfallLeft.set(row.reference_id, (shortfallLeft.get(row.reference_id) ?? 0) + Math.abs(quantity));
+        shortfallCost.set(row.reference_id, Number(row.unit_cost ?? 0));
+        shortfallRowIds.push(row.id);
+        itemByRow.set(row.id, row.reference_id);
+      } else if (row.notes === REMOVED_RECEIPT_SHORTFALL_NOTE) {
+        shortfallLeft.set(row.reference_id, (shortfallLeft.get(row.reference_id) ?? 0) - Math.abs(quantity));
+      }
+    }
+    for (const rowIds of chunk(shortfallRowIds)) {
+      const [{ data: sales, error: salesError }, { data: uses, error: usesError }] = await Promise.all([
+        supabase
+          .from("product_sale_items")
+          .select("linked_count_txn_id, linked_quantity, quantity, product_sales!inner(status)")
+          .eq("product_sales.status", "confirmed")
+          .in("linked_count_txn_id", rowIds),
+        supabase.from("retail_use_entries").select("linked_count_txn_id, linked_quantity").in("linked_count_txn_id", rowIds),
+      ]);
+      if (salesError) throw salesError;
+      if (usesError) throw usesError;
+      for (const link of [...(sales ?? []), ...(uses ?? [])]) {
+        if (!link.linked_count_txn_id) continue;
+        const item = itemByRow.get(link.linked_count_txn_id);
+        if (!item) continue;
+        const claimed = Number(link.linked_quantity ?? ("quantity" in link ? link.quantity : 0));
+        shortfallLeft.set(item, (shortfallLeft.get(item) ?? 0) - claimed);
+      }
+    }
+  }
+
+  const storeLocationId = await getDefaultStoreLocationId(supabase, input.branchId);
+  const rows = [];
+  for (const [productId, quantity] of quantityByProduct) {
+    const count = includingCounts.find((candidate) =>
+      countItems.some((item) => item.countId === candidate.id && item.productId === productId && item.counted != null),
+    );
+    if (!count) continue;
+    const item = countItems.find((candidate) => candidate.countId === count.id && candidate.productId === productId)!;
+    const giveBack = Math.min(quantity, Math.max(0, shortfallLeft.get(item.id) ?? 0));
+    const base = {
+      company_id: input.companyId,
+      product_id: productId,
+      store_location_id: storeLocationId,
+      txn_type: "count_adjustment" as const,
+      reference_table: "inventory_count_items",
+      reference_id: item.id,
+      created_by: input.createdBy,
+      txn_date: count.ts,
+      trueup_goods_receipt_id: input.receiptId,
+    };
+    if (giveBack > 0) {
+      rows.push({
+        ...base,
+        quantity_change: giveBack,
+        notes: REMOVED_RECEIPT_SHORTFALL_NOTE,
+        unit_cost: shortfallCost.get(item.id) ?? 0,
+      });
+      shortfallLeft.set(item.id, (shortfallLeft.get(item.id) ?? 0) - giveBack);
+    }
+    if (quantity > giveBack) {
+      rows.push({ ...base, quantity_change: quantity - giveBack, notes: "Count variance", unit_cost: 0 });
+    }
+  }
+
+  if (rows.length === 0) return;
+  const { error: insertError } = await supabase.from("inventory_transactions").insert(rows);
+  if (insertError) throw insertError;
 }

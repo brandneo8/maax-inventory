@@ -735,6 +735,16 @@ async function assertNoLinkedProductSales(supabase: Client, countId: string) {
         "This count has shortfalls linked to product sales. Delete those product sales first, then void the count.",
       );
     }
+    const { count: useCount, error: useError } = await supabase
+      .from("retail_use_entries")
+      .select("id", { count: "exact", head: true })
+      .in("linked_count_txn_id", ids);
+    if (useError) throw queryError(useError, "Could not check this count for linked stock-outs.");
+    if ((useCount ?? 0) > 0) {
+      throw new Error(
+        "This count has shortfalls that stock-out lines are assigned to. Set those lines back to extra deductions first, then void the count.",
+      );
+    }
   }
 }
 

@@ -1,6 +1,11 @@
 import type { createClient } from "@/lib/supabase/server";
 import { productDisplayName } from "@/lib/format";
-import { LATE_RECEIPT_SURPLUS_NOTE, SALE_RECLASS_NOTE } from "@/lib/data/usage-ledger";
+import {
+  LATE_RECEIPT_SURPLUS_NOTE,
+  REMOVED_RECEIPT_SHORTFALL_NOTE,
+  SALE_RECLASS_NOTE,
+  USE_RECLASS_NOTE,
+} from "@/lib/data/usage-ledger";
 
 type Client = Awaited<ReturnType<typeof createClient>>;
 
@@ -281,7 +286,13 @@ export async function getMonthlyInventoryReport(
       inhouseEntries.push({ productId: row.product_id, month: monthKey, amount });
     } else if (row.txn_type === "gwp_use") {
       gwpByMonth.set(monthKey, (gwpByMonth.get(monthKey) ?? 0) + amount);
-    } else if (isCountVariance || (row.txn_type === "count_adjustment" && row.notes === SALE_RECLASS_NOTE)) {
+    } else if (
+      isCountVariance ||
+      (row.txn_type === "count_adjustment" &&
+        (row.notes === SALE_RECLASS_NOTE ||
+          row.notes === USE_RECLASS_NOTE ||
+          row.notes === REMOVED_RECEIPT_SHORTFALL_NOTE))
+    ) {
       // A reclassification row is a count shortfall that turned out to be a
       // product sale: it adds that unit back (a negative amount here), so it
       // reduces wastage while its sale row lands in Cost of retail.

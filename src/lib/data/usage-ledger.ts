@@ -14,12 +14,28 @@ type Client = Awaited<ReturnType<typeof createClient>>;
 export const SALE_RECLASS_NOTE = "Reclassified as product sale";
 
 /**
+ * The stock-out counterpart of SALE_RECLASS_NOTE: a +qty count_adjustment
+ * that cancels part of a count shortfall when a stock-out line opened on or
+ * before that count is assigned to it (see
+ * 20261004110000_stock_out_count_links.sql). Same handling everywhere.
+ */
+export const USE_RECLASS_NOTE = "Reclassified as in-house use";
+
+/**
  * Note on the negative count_adjustment that takes back part of a count's
  * surplus when a receipt dated before that count turns out to explain it (see
  * 20261003130000_late_receipt_count_trueups.sql) — the cost engine, usage
  * metrics and monthly report key off this exact text.
  */
 export const LATE_RECEIPT_SURPLUS_NOTE = "Count true-up: late receipt (offsets count surplus)";
+
+/**
+ * The reverse: a +qty count_adjustment that gives back part of a count's
+ * shortfall when a receipt the count had already included is removed (see
+ * 20261004170000_removed_receipt_trueups.sql). Treated like a sale
+ * reclassification by the cost engine, usage metrics and report.
+ */
+export const REMOVED_RECEIPT_SHORTFALL_NOTE = "Count true-up: removed receipt (offsets count shortfall)";
 
 export type UsageLedgerLine = {
   referenceId: string;

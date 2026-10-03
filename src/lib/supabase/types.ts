@@ -1512,6 +1512,8 @@ export type Database = {
           external_reference: string | null
           id: string
           keyed_in_by: string | null
+          linked_count_txn_id: string | null
+          linked_quantity: number | null
           notes: string | null
           product_id: string
           quantity_used: number
@@ -1526,6 +1528,8 @@ export type Database = {
           external_reference?: string | null
           id?: string
           keyed_in_by?: string | null
+          linked_count_txn_id?: string | null
+          linked_quantity?: number | null
           notes?: string | null
           product_id: string
           quantity_used: number
@@ -1540,6 +1544,8 @@ export type Database = {
           external_reference?: string | null
           id?: string
           keyed_in_by?: string | null
+          linked_count_txn_id?: string | null
+          linked_quantity?: number | null
           notes?: string | null
           product_id?: string
           quantity_used?: number
@@ -1559,6 +1565,20 @@ export type Database = {
             columns: ["company_id"]
             isOneToOne: false
             referencedRelation: "companies"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "retail_use_entries_linked_count_txn_id_fkey"
+            columns: ["linked_count_txn_id"]
+            isOneToOne: false
+            referencedRelation: "inventory_transactions"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "retail_use_entries_linked_count_txn_id_fkey"
+            columns: ["linked_count_txn_id"]
+            isOneToOne: false
+            referencedRelation: "inventory_transactions_effective"
             referencedColumns: ["id"]
           },
           {
@@ -1602,6 +1622,7 @@ export type Database = {
           id: string
           keyed_in_by: string | null
           notes: string | null
+          period_start: string | null
         }
         Insert: {
           attachment_url?: string | null
@@ -1613,6 +1634,7 @@ export type Database = {
           id?: string
           keyed_in_by?: string | null
           notes?: string | null
+          period_start?: string | null
         }
         Update: {
           attachment_url?: string | null
@@ -1624,6 +1646,7 @@ export type Database = {
           id?: string
           keyed_in_by?: string | null
           notes?: string | null
+          period_start?: string | null
         }
         Relationships: [
           {

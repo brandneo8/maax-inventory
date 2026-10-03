@@ -1,11 +1,15 @@
 import Link from "next/link";
 import { requireBranch } from "@/lib/auth";
 import { getBranchStockOutProducts } from "@/lib/data/products";
+import { getStockOutPeriodBounds } from "@/lib/data/stock-out";
 import { NewStockOutForm } from "./new-stock-out-form";
 
 export default async function NewStockOutPage() {
   const { supabase, companyId, branch } = await requireBranch();
-  const { inhouse } = await getBranchStockOutProducts(supabase, companyId, branch.id);
+  const [{ inhouse }, period] = await Promise.all([
+    getBranchStockOutProducts(supabase, companyId, branch.id),
+    getStockOutPeriodBounds(supabase, companyId, branch.id),
+  ]);
 
   return (
     <div className="space-y-6">
@@ -27,6 +31,8 @@ export default async function NewStockOutPage() {
         branchId={branch.id}
         branchName={branch.displayName}
         inhouseProducts={inhouse}
+        periodStart={period.start}
+        maxEnd={period.maxEnd}
       />
     </div>
   );

@@ -6,7 +6,11 @@ import { requireBranch } from "@/lib/auth";
 import { assertNoActiveCount } from "@/lib/data/counts";
 import { nextDraftNumber, nextPoNumber } from "@/lib/data/orders";
 import { getDefaultStoreLocationId } from "@/lib/data/lookups";
-import { applyLateReceiptTrueUps, removeLateReceiptTrueUps } from "@/lib/data/receipt-trueups";
+import {
+  applyLateReceiptTrueUps,
+  applyRemovedReceiptTrueUps,
+  removeLateReceiptTrueUps,
+} from "@/lib/data/receipt-trueups";
 import { businessTxnDate } from "@/lib/format";
 import { createAdminClient } from "@/lib/supabase/admin";
 import type { ProductClassification } from "@/lib/labels";
@@ -215,7 +219,7 @@ export async function receivePurchaseOrder(
 
   const { data: order, error: orderError } = await supabase
     .from("purchase_orders")
-    .select("id, branch_id")
+    .select("id, branch_id, status")
     .eq("id", input.purchase_order_id)
     .eq("company_id", companyId)
     .eq("branch_id", branch.id)
@@ -223,6 +227,9 @@ export async function receivePurchaseOrder(
     .single();
 
   if (orderError || !order) throw orderError ?? new Error("Purchase order not found.");
+  if (order.status === "cancelled") {
+    throw new Error("This order is voided, so stock can't be received into it. Duplicate it into a new order instead.");
+  }
 
   const { data: receipt, error: receiptError } = await supabase
     .from("goods_receipts")
@@ -395,7 +402,13 @@ export async function voidPurchaseOrder(formData: FormData) {
     .is("voided_at", null);
   if (receiptsError) throw receiptsError;
   const trueUpScopes = (receipts ?? []).map((receipt) => ({ companyId, branchId: branch.id, receiptId: receipt.id }));
-  for (const scope of trueUpScopes) await removeLateReceiptTrueUps(supabase, scope);
+  // Lift each receipt's late-receipt true-ups, then give back what any
+  // count that already included a receipt took off for it (so its counted
+  // balance holds once the receipt is reversed).
+  for (const scope of trueUpScopes) {
+    await removeLateReceiptTrueUps(supabase, scope);
+    await applyRemovedReceiptTrueUps(supabase, { ...scope, createdBy: user.email }, "removed");
+  }
 
   const { error } = await supabase.rpc("fn_void_purchase_order", {
     p_purchase_order_id: id,
@@ -404,7 +417,10 @@ export async function voidPurchaseOrder(formData: FormData) {
   });
 
   if (error) {
-    for (const scope of trueUpScopes) await applyLateReceiptTrueUps(supabase, { ...scope, createdBy: user.email });
+    for (const scope of trueUpScopes) {
+      await removeLateReceiptTrueUps(supabase, scope);
+      await applyLateReceiptTrueUps(supabase, { ...scope, createdBy: user.email });
+    }
     throw new Error(error.message || "Could not void this order.");
   }
   revalidatePurchaseOrderPaths(id);
@@ -594,11 +610,15 @@ export async function removeGoodsReceipt(goodsReceiptId: string) {
   if (receipt.voided_at) throw new Error("This receipt has already been removed.");
 
   // Count true-ups this receipt caused go first, so the reversal checks the
-  // balance the receipt itself added; put them back if the reversal refuses.
+  // balance the receipt itself added. Then, for a count that had already
+  // included this receipt, give back what its shortfall took off for it —
+  // the count's numbers stay as counted. Undo both if the reversal refuses.
   const trueUpScope = { companyId, branchId: branch.id, receiptId: receipt.id };
   await removeLateReceiptTrueUps(supabase, trueUpScope);
+  await applyRemovedReceiptTrueUps(supabase, { ...trueUpScope, createdBy: user.email }, "removed");
   const { error } = await supabase.rpc("fn_reverse_goods_receipt", { p_goods_receipt_id: receipt.id });
   if (error) {
+    await removeLateReceiptTrueUps(supabase, trueUpScope);
     await applyLateReceiptTrueUps(supabase, { ...trueUpScope, createdBy: user.email });
     throw new Error(error.message || "Could not remove this receipt.");
   }
@@ -656,6 +676,12 @@ export async function updateGoodsReceiptInvoice(
       receivedDate,
       createdBy: user.email,
     });
+  } else if (!receipt.voided_at) {
+    // Same date: still re-run the count true-ups, so saving a receipt always
+    // leaves them matching the current rules and counts.
+    const scope = { companyId, branchId: branch.id, receiptId: receipt.id };
+    await removeLateReceiptTrueUps(supabase, scope);
+    await applyLateReceiptTrueUps(supabase, { ...scope, createdBy: user.email });
   }
 
   if (receipt.purchase_order_id && receipt.received_date !== receivedDate) {

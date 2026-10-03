@@ -34,7 +34,7 @@ export default async function StockOutPage() {
         <table className={tableClass}>
           <thead>
             <tr>
-              <th className={thClass}>Entry date</th>
+              <th className={thClass}>Period</th>
               <th className={thClass}>Type</th>
               <th className={thClass}>Lines</th>
               <th className={thClass}>Total quantity</th>
@@ -54,6 +54,7 @@ export default async function StockOutPage() {
                 <tr key={report.id}>
                   <td className={tdClass}>
                     <Link className="underline" href={`/stock-out/${report.id}`}>
+                      {report.period_start ? `${formatDate(report.period_start)} to ` : ""}
                       {formatDate(report.entry_date)}
                     </Link>
                   </td>

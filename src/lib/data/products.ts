@@ -2,7 +2,12 @@ import type { createClient } from "@/lib/supabase/server";
 import { getProducts } from "@/lib/data/lookups";
 import { isOnSalonPosList } from "@/lib/data/pos-rules";
 import { getBundleComponentsForProducts } from "@/lib/data/product-components";
-import { LATE_RECEIPT_SURPLUS_NOTE, SALE_RECLASS_NOTE } from "@/lib/data/usage-ledger";
+import {
+  LATE_RECEIPT_SURPLUS_NOTE,
+  REMOVED_RECEIPT_SHORTFALL_NOTE,
+  SALE_RECLASS_NOTE,
+  USE_RECLASS_NOTE,
+} from "@/lib/data/usage-ledger";
 import { productDisplayName, productLabel, shiftMonth, singaporeToday } from "@/lib/format";
 import { isRetailFacing, type ProductClassification } from "@/lib/labels";
 
@@ -612,7 +617,7 @@ export async function getMonthToDateUsageDetail(
         .in("product_id", ids)
         .in("store_location_id", locationIds)
         .eq("txn_type", "count_adjustment")
-        .in("notes", [SALE_RECLASS_NOTE, LATE_RECEIPT_SURPLUS_NOTE])
+        .in("notes", [SALE_RECLASS_NOTE, USE_RECLASS_NOTE, LATE_RECEIPT_SURPLUS_NOTE, REMOVED_RECEIPT_SHORTFALL_NOTE])
         .gte("txn_date", monthStart)
         .lt("txn_date", monthEnd),
     ]);

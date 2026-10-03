@@ -14,25 +14,32 @@ function clampToNonNegativeInteger(value: number) {
   return Math.max(0, Math.round(value));
 }
 
-function clampDateToMax(date: string, maxDate: string) {
+/** Keeps an open date inside the stock-out's period (an empty pick falls back to its end). */
+function clampDate(date: string, minDate: string, maxDate: string) {
   if (!date) return maxDate;
-  return date > maxDate ? maxDate : date;
+  if (date > maxDate) return maxDate;
+  if (date < minDate) return minDate;
+  return date;
 }
 
 function AddStockOutLine({
   products,
+  periodStart,
   reportDate,
   onAdd,
 }: {
   products: Option[];
+  periodStart: string;
   reportDate: string;
   onAdd: (productId: string, quantity: number, useDate: string) => void;
 }) {
   const [productId, setProductId] = useState("");
   const [quantity, setQuantity] = useState(1);
-  const [useDate, setUseDate] = useState(reportDate);
+  const [pickedDate, setUseDate] = useState(reportDate);
+  // Follows the period if it changes after a date was picked.
+  const useDate = clampDate(pickedDate, periodStart, reportDate);
 
-  const canAdd = Boolean(productId) && quantity > 0 && Boolean(useDate) && useDate <= reportDate;
+  const canAdd = Boolean(productId) && quantity > 0 && Boolean(useDate);
 
   function handleAdd() {
     if (!canAdd) return;
@@ -53,9 +60,10 @@ function AddStockOutLine({
         <input
           className={fieldClass}
           type="date"
+          min={periodStart}
           max={reportDate}
           value={useDate}
-          onChange={(event) => setUseDate(clampDateToMax(event.target.value, reportDate))}
+          onChange={(event) => setUseDate(clampDate(event.target.value, periodStart, reportDate))}
         />
       </label>
       <label className="w-32 space-y-1 text-sm">
@@ -78,11 +86,15 @@ function AddStockOutLine({
 
 export function StockOutLinesEditor({
   products,
+  periodStart,
   reportDate,
   lines,
   onLinesChange,
 }: {
   products: Option[];
+  /** First day of the stock-out period — open dates can't be earlier. */
+  periodStart: string;
+  /** Last day of the period (the stock-out's end date). */
   reportDate: string;
   lines: StockOutLine[];
   onLinesChange: (lines: StockOutLine[]) => void;
@@ -113,7 +125,7 @@ export function StockOutLinesEditor({
 
   function updateDate(key: string, date: string) {
     onLinesChange(
-      lines.map((line) => (line.key === key ? { ...line, entry_date: clampDateToMax(date, reportDate) } : line)),
+      lines.map((line) => (line.key === key ? { ...line, entry_date: clampDate(date, periodStart, reportDate) } : line)),
     );
   }
 
@@ -123,7 +135,7 @@ export function StockOutLinesEditor({
 
   return (
     <div className="space-y-3">
-      <AddStockOutLine products={products} reportDate={reportDate} onAdd={addLine} />
+      <AddStockOutLine products={products} periodStart={periodStart} reportDate={reportDate} onAdd={addLine} />
 
       {lines.length === 0 ? (
         <p className="rounded-xl border border-dashed border-border bg-card p-4 text-sm text-muted">
@@ -153,6 +165,7 @@ export function StockOutLinesEditor({
                       <input
                         className={fieldClass}
                         type="date"
+                        min={periodStart}
                         max={reportDate}
                         value={line.entry_date}
                         onChange={(event) => updateDate(line.key, event.target.value)}

@@ -8,6 +8,9 @@ import { formatDate } from "@/lib/format";
 import { btnClass, btnSecondaryClass, fieldClass, tableClass, tdClass, thClass } from "@/lib/ui";
 import { StockOutLinesEditor, StockOutQuantityDisplay, type StockOutLine } from "../stock-out-lines-editor";
 import { DeleteStockOutButton } from "../delete-stock-out-button";
+import { CountReviewTable } from "./count-review-table";
+import { StockOutPeriod } from "../stock-out-period";
+import type { StockOutCountReviewRow } from "@/lib/data/stock-out";
 import { cn } from "@/lib/utils";
 import type { Option } from "@/components/product-picker";
 
@@ -17,22 +20,31 @@ export function StockOutDetailPanel({
   reportId,
   branchName,
   entryDate: initialEntryDate,
+  periodStart,
+  maxEnd,
   notes: initialNotes,
   keyedInBy,
   createdAt,
   attachmentUrl,
   lines,
   inhouseProducts,
+  countReview,
 }: {
   reportId: string;
   branchName: string;
   entryDate: string;
+  /** First day of this stock-out's period (fixed). */
+  periodStart: string;
+  /** Latest its end date can move to: today, or the day before the next stock-out starts. */
+  maxEnd: string;
   notes: string | null;
   keyedInBy: string | null;
   createdAt: string;
   attachmentUrl: string | null;
   lines: DisplayLine[];
   inhouseProducts: Option[];
+  /** Lines opened on or before the latest confirmed count, to mark covered or extra. */
+  countReview: { latestCountDate: string | null; rows: StockOutCountReviewRow[] };
 }) {
   const router = useRouter();
   const [editing, setEditing] = useState(false);
@@ -95,7 +107,9 @@ export function StockOutDetailPanel({
         <div className="mt-2 flex flex-wrap items-start justify-between gap-4">
           <div>
             <h1 className="text-2xl font-semibold tracking-tight">
-              {editing ? "Edit stock-out" : `Inhouse use · ${formatDate(initialEntryDate)}`}
+              {editing
+                ? "Edit stock-out"
+                : `Inhouse use · ${formatDate(periodStart)} to ${formatDate(initialEntryDate)}`}
             </h1>
             <p className="mt-1 text-sm text-muted">Working in {branchName}.</p>
           </div>
@@ -137,17 +151,19 @@ export function StockOutDetailPanel({
 
       {editing ? (
         <>
-          <div className="grid gap-3 rounded-xl border border-border bg-card p-4 md:grid-cols-3">
-            <label className="space-y-1 text-sm">
-              <span>Entry date</span>
-              <input
-                className={fieldClass}
-                type="date"
-                value={entryDate}
-                onChange={(event) => setEntryDate(event.target.value)}
-                required
-              />
-            </label>
+          <StockOutPeriod
+            start={periodStart}
+            end={entryDate}
+            maxEnd={maxEnd}
+            onEndChange={(next) => {
+              setEntryDate(next);
+              setEditLines((current) =>
+                current.map((line) => (line.entry_date > next ? { ...line, entry_date: next } : line)),
+              );
+            }}
+          />
+
+          <div className="grid gap-3 rounded-xl border border-border bg-card p-4 md:grid-cols-2">
             <label className="space-y-1 text-sm">
               <span>Notes</span>
               <input className={fieldClass} value={notes} onChange={(event) => setNotes(event.target.value)} />
@@ -165,7 +181,13 @@ export function StockOutDetailPanel({
 
           <div className="space-y-3">
             <h2 className="text-lg font-semibold">Lines</h2>
-            <StockOutLinesEditor products={inhouseProducts} reportDate={entryDate} lines={editLines} onLinesChange={setEditLines} />
+            <StockOutLinesEditor
+              products={inhouseProducts}
+              periodStart={periodStart}
+              reportDate={entryDate}
+              lines={editLines}
+              onLinesChange={setEditLines}
+            />
           </div>
         </>
       ) : (
@@ -225,6 +247,10 @@ export function StockOutDetailPanel({
               )}
             </div>
           </div>
+
+          {countReview.latestCountDate && countReview.rows.length > 0 ? (
+            <CountReviewTable latestCountDate={countReview.latestCountDate} rows={countReview.rows} />
+          ) : null}
         </>
       )}
     </div>
