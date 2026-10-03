@@ -13,8 +13,8 @@ import { cn } from "@/lib/utils";
 
 const links = [
   { href: "/home", label: "Home", icon: Home },
-  { href: "/product-sales", label: "Product sales", icon: Receipt },
-  { href: "/counts", label: "Counts", icon: ClipboardList },
+  { href: "/product-sales", label: "Product sales", icon: Receipt, adminOnly: true },
+  { href: "/counts", label: "Counts", icon: ClipboardList, adminOnly: true },
   { href: "/reports", label: "Reports", icon: BarChart3 },
   { href: "/admin", label: "Admin", icon: ShieldCheck, adminOnly: true },
 ];

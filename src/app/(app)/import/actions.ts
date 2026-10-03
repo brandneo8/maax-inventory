@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { requireBranch, requireUser } from "@/lib/auth";
+import { requireAdminBranch, requireUser } from "@/lib/auth";
 import { parseCsv } from "@/lib/csv";
 import { getDefaultStoreLocationId } from "@/lib/data/lookups";
 
@@ -53,7 +53,7 @@ async function recordRetailUse(
 }
 
 export async function createRetailUseEntry(formData: FormData) {
-  const { supabase, companyId, user, branch } = await requireBranch();
+  const { supabase, companyId, user, branch } = await requireAdminBranch();
   const requestedBranchId = String(formData.get("branch_id") ?? "");
   if (requestedBranchId && requestedBranchId !== branch.id) {
     throw new Error("The form is for a different salon. Switch branch and try again.");
@@ -75,7 +75,7 @@ export async function createRetailUseEntry(formData: FormData) {
 }
 
 export async function importRetailUseCsv(formData: FormData) {
-  const { supabase, companyId, user, branch } = await requireBranch();
+  const { supabase, companyId, user, branch } = await requireAdminBranch();
   const requestedBranchId = String(formData.get("branch_id") ?? "");
   if (requestedBranchId && requestedBranchId !== branch.id) {
     throw new Error("The form is for a different salon. Switch branch and try again.");

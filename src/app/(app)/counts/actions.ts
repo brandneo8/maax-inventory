@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { requireBranch } from "@/lib/auth";
+import { requireAdminBranch } from "@/lib/auth";
 import {
   addCountEntry,
   assignProductsToSalon,
@@ -97,7 +97,7 @@ function namesFromForm(formData: FormData) {
 }
 
 export async function createInventoryCount(formData: FormData) {
-  const { supabase, companyId, user, branch } = await requireBranch();
+  const { supabase, companyId, user, branch } = await requireAdminBranch();
   const countType = String(formData.get("count_type") ?? "regular") as CountType;
   if (countType !== "regular" && countType !== "opening_balance") {
     throw new Error("Unknown count type.");
@@ -157,7 +157,7 @@ export async function createInventoryCount(formData: FormData) {
 }
 
 export async function duplicateInventoryCount(formData: FormData) {
-  const { supabase, companyId, user, branch } = await requireBranch();
+  const { supabase, companyId, user, branch } = await requireAdminBranch();
   const sourceId = String(formData.get("count_id") ?? "");
 
   const { data: source, error: sourceError } = await supabase
@@ -237,7 +237,7 @@ export async function duplicateInventoryCount(formData: FormData) {
 }
 
 export async function addCountEntryAction(formData: FormData) {
-  const { supabase, companyId, user, branch } = await requireBranch();
+  const { supabase, companyId, user, branch } = await requireAdminBranch();
   const countId = String(formData.get("count_id") ?? "");
   const productId = String(formData.get("product_id") ?? "");
   const quantityDelta = Number(formData.get("quantity_delta") ?? "");
@@ -279,7 +279,7 @@ export async function addCountEntryAction(formData: FormData) {
 }
 
 export async function searchCountProductsAction(countId: string, query: string) {
-  const { supabase, companyId, branch } = await requireBranch();
+  const { supabase, companyId, branch } = await requireAdminBranch();
   const [countResult, hits] = await Promise.all([
     supabase
       .from("inventory_counts")
@@ -297,7 +297,7 @@ export async function searchCountProductsAction(countId: string, query: string) 
 }
 
 export async function saveCountQuantities(formData: FormData) {
-  const { supabase, companyId, user, branch } = await requireBranch();
+  const { supabase, companyId, user, branch } = await requireAdminBranch();
   const countId = String(formData.get("count_id") ?? "");
 
   const { data: count, error: countError } = await supabase
@@ -345,7 +345,7 @@ export async function saveCountQuantities(formData: FormData) {
 }
 
 export async function fillUncountedCountItems(formData: FormData) {
-  const { supabase, companyId, branch } = await requireBranch();
+  const { supabase, companyId, branch } = await requireAdminBranch();
   const countId = String(formData.get("count_id") ?? "");
   const mode = String(formData.get("mode") ?? "");
   if (mode !== "zero" && mode !== "keep") {
@@ -371,7 +371,7 @@ export async function fillUncountedCountItems(formData: FormData) {
 }
 
 export async function completeInventoryCount(formData: FormData) {
-  const { supabase, companyId, user, branch } = await requireBranch();
+  const { supabase, companyId, user, branch } = await requireAdminBranch();
   const countId = String(formData.get("count_id") ?? "");
 
   const { data: count, error: countError } = await supabase
@@ -557,7 +557,7 @@ export async function completeInventoryCount(formData: FormData) {
 }
 
 export async function deleteInventoryCount(formData: FormData) {
-  const { supabase, companyId, branch } = await requireBranch();
+  const { supabase, companyId, branch } = await requireAdminBranch();
   const countId = String(formData.get("count_id") ?? "");
 
   const { data: count, error: countError } = await supabase
@@ -581,7 +581,7 @@ export async function deleteInventoryCount(formData: FormData) {
 }
 
 export async function voidInventoryCount(formData: FormData): Promise<{ ok: true }> {
-  const { supabase, companyId, user, branch } = await requireBranch();
+  const { supabase, companyId, user, branch } = await requireAdminBranch();
   const countId = String(formData.get("count_id") ?? "");
 
   const { data: count, error: countError } = await supabase

@@ -3,7 +3,7 @@
 import { randomUUID } from "node:crypto";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { requireBranch } from "@/lib/auth";
+import { requireAdminBranch } from "@/lib/auth";
 import { assertNoActiveCount } from "@/lib/data/counts";
 import { getDefaultStoreLocationId } from "@/lib/data/lookups";
 import { singaporeToday } from "@/lib/format";
@@ -12,7 +12,7 @@ import { insertUsageLedgerRows, SALE_RECLASS_NOTE } from "@/lib/data/usage-ledge
 
 const REFERENCE_TABLE = "product_sale_items";
 
-type Client = Awaited<ReturnType<typeof requireBranch>>["supabase"];
+type Client = Awaited<ReturnType<typeof requireAdminBranch>>["supabase"];
 
 function revalidateProductSales(saleId?: string) {
   revalidatePath("/product-sales");
@@ -36,7 +36,7 @@ export type ProductSaleLineInput = {
 
 /** Every count shortfall at the current salon that still has a balance to clear. */
 export async function getLinkableCountShortfalls() {
-  const { supabase, companyId, branch } = await requireBranch();
+  const { supabase, companyId, branch } = await requireAdminBranch();
   const shortfalls = await getCountShortfalls(supabase, companyId, branch.id, { allProducts: true });
   return shortfalls.filter((shortfall) => shortfall.remaining > 0);
 }
@@ -136,7 +136,7 @@ export async function saveProductSale(input: {
   lines: ProductSaleLineInput[];
   confirm: boolean;
 }) {
-  const { supabase, companyId, user, branch } = await requireBranch();
+  const { supabase, companyId, user, branch } = await requireAdminBranch();
   if (input.confirm) await assertNoActiveCount(supabase, companyId, branch.id, "record product sales");
   if (input.branch_id && input.branch_id !== branch.id) {
     throw new Error("The form is for a different salon. Switch branch and try again.");
@@ -299,7 +299,7 @@ export async function saveProductSale(input: {
  * retail_use ledger rows, so those are updated to match.
  */
 export async function updateProductSaleDetails(input: { sale_id: string; sale_date: string; notes: string }) {
-  const { supabase, companyId, branch } = await requireBranch();
+  const { supabase, companyId, branch } = await requireAdminBranch();
   const today = singaporeToday();
   if (!ISO_DATE.test(input.sale_date)) throw new Error("Enter a valid report date.");
   if (input.sale_date > today) throw new Error("The report date can't be after today.");
@@ -355,7 +355,7 @@ export async function updateProductSaleDetails(input: { sale_id: string; sale_da
 }
 
 export async function deleteProductSale(formData: FormData) {
-  const { supabase, companyId, branch } = await requireBranch();
+  const { supabase, companyId, branch } = await requireAdminBranch();
   const saleId = String(formData.get("sale_id") ?? "");
 
   const { data: sale, error: saleError } = await supabase

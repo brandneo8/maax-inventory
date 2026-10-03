@@ -4,7 +4,13 @@ import { requireBranch } from "@/lib/auth";
 import { getOrderBalanceProducts } from "@/lib/data/products";
 import { getMonthToDateSalesByProduct } from "@/lib/data/product-sales";
 import { getMonthlyInventoryReport } from "@/lib/data/stock";
-import { formatMoney, formatMonthLabel, productDisplayName, shiftMonth, singaporeToday } from "@/lib/format";
+import {
+  formatMoney,
+  formatMonthLabel,
+  productDisplayName,
+  shiftMonth,
+  singaporeToday,
+} from "@/lib/format";
 import { workingIn } from "@/lib/ui";
 import { HomeTables, type HomeProduct } from "./home-tables";
 import { MonthRangePicker } from "./month-range-picker";
@@ -15,17 +21,24 @@ const CHART_MONTHS = 6;
 /** Widest range either from/to picker allows (same cap as the Monthly inventory report). */
 const MAX_RANGE_MONTHS = 24;
 
-const isMonth = (value: string | undefined): value is string => !!value && /^\d{4}-\d{2}$/.test(value);
+const isMonth = (value: string | undefined): value is string =>
+  !!value && /^\d{4}-\d{2}$/.test(value);
 
 /**
  * A from/to month range from the URL: defaults to the last `defaultMonths`
  * months, never past this month, and never wider than MAX_RANGE_MONTHS.
  */
-function monthRange(currentMonth: string, from: string | undefined, to: string | undefined, defaultMonths: number) {
+function monthRange(
+  currentMonth: string,
+  from: string | undefined,
+  to: string | undefined,
+  defaultMonths: number,
+) {
   let end = isMonth(to) && to <= currentMonth ? to : currentMonth;
   let start = isMonth(from) && from <= currentMonth ? from : shiftMonth(end, -(defaultMonths - 1));
   if (start > end) [start, end] = [end, start];
-  if (shiftMonth(start, MAX_RANGE_MONTHS - 1) < end) start = shiftMonth(end, -(MAX_RANGE_MONTHS - 1));
+  if (shiftMonth(start, MAX_RANGE_MONTHS - 1) < end)
+    start = shiftMonth(end, -(MAX_RANGE_MONTHS - 1));
   return { start, end };
 }
 
@@ -56,7 +69,7 @@ export default async function HomePage({
 }: {
   searchParams: Promise<{ from?: string; to?: string; pfrom?: string; pto?: string }>;
 }) {
-  const { supabase, companyId, branch } = await requireBranch();
+  const { supabase, companyId, branch, isAdmin } = await requireBranch();
   const currentMonth = singaporeToday().slice(0, 7);
   const params = await searchParams;
   const chart = monthRange(currentMonth, params.from, params.to, CHART_MONTHS);
@@ -89,32 +102,35 @@ export default async function HomePage({
         <p className="mt-1 text-sm text-muted">{workingIn(branch.displayName)}</p>
       </div>
 
-      <section className="space-y-3">
-        <h2 className="text-xl font-semibold tracking-tight">Key actions</h2>
-        <div className="grid gap-4 sm:grid-cols-3">
-          {SHORTCUTS.map(({ href, title, description, icon: Icon }) => (
-            <Link
-              key={href}
-              href={href}
-              className="group flex flex-col gap-3 rounded-xl border border-border bg-card p-5 transition-colors hover:border-sky-300 hover:bg-sky-50/40 focus-visible:outline-2 focus-visible:outline-sky-500"
-            >
-              <div className="flex items-center justify-between">
-                <span className="flex h-10 w-10 items-center justify-center rounded-lg bg-slate-100 text-slate-700 group-hover:bg-sky-100 group-hover:text-sky-700">
-                  <Icon className="h-5 w-5" aria-hidden />
-                </span>
-                <ArrowRight
-                  className="h-4 w-4 text-muted transition-transform group-hover:translate-x-0.5 group-hover:text-sky-700"
-                  aria-hidden
-                />
-              </div>
-              <div>
-                <h3 className="font-semibold">{title}</h3>
-                <p className="mt-1 text-sm text-muted">{description}</p>
-              </div>
-            </Link>
-          ))}
-        </div>
-      </section>
+      {/* Ordering, receiving and stock-outs are admin pages; stylists see Home and Reports only. */}
+      {isAdmin ? (
+        <section className="space-y-3">
+          <h2 className="text-xl font-semibold tracking-tight">Key actions</h2>
+          <div className="grid gap-4 sm:grid-cols-3">
+            {SHORTCUTS.map(({ href, title, description, icon: Icon }) => (
+              <Link
+                key={href}
+                href={href}
+                className="group flex flex-col gap-3 rounded-xl border border-border bg-card p-5 transition-colors hover:border-sky-300 hover:bg-sky-50/40 focus-visible:outline-2 focus-visible:outline-sky-500"
+              >
+                <div className="flex items-center justify-between">
+                  <span className="flex h-10 w-10 items-center justify-center rounded-lg bg-slate-100 text-slate-700 group-hover:bg-sky-100 group-hover:text-sky-700">
+                    <Icon className="h-5 w-5" aria-hidden />
+                  </span>
+                  <ArrowRight
+                    className="h-4 w-4 text-muted transition-transform group-hover:translate-x-0.5 group-hover:text-sky-700"
+                    aria-hidden
+                  />
+                </div>
+                <div>
+                  <h3 className="font-semibold">{title}</h3>
+                  <p className="mt-1 text-sm text-muted">{description}</p>
+                </div>
+              </Link>
+            ))}
+          </div>
+        </section>
+      ) : null}
 
       <section className="space-y-4">
         <div className="flex flex-wrap items-end justify-between gap-2">
@@ -129,15 +145,18 @@ export default async function HomePage({
             <div>
               <h3 className="text-lg font-semibold">Purchases and cost of goods sold</h3>
               <p className="text-sm text-muted">
-                {formatMonthLabel(chart.start)} to {formatMonthLabel(chart.end)} at {branch.displayName} (up to{" "}
-                {MAX_RANGE_MONTHS} months). Hover a month for its amounts.
+                {formatMonthLabel(chart.start)} to {formatMonthLabel(chart.end)} at{" "}
+                {branch.displayName} (up to {MAX_RANGE_MONTHS} months). Hover a month for its
+                amounts.
               </p>
             </div>
             {/* Totals for the picked months (the same range as the chart), labelled in its bar colours. */}
             <dl className="flex flex-wrap gap-x-10 gap-y-3">
               <div>
                 <dt className="text-sm font-medium text-sky-700">Total purchases</dt>
-                <dd className="text-2xl font-semibold tabular-nums">{formatMoney(chartPurchases)}</dd>
+                <dd className="text-2xl font-semibold tabular-nums">
+                  {formatMoney(chartPurchases)}
+                </dd>
               </div>
               <div>
                 <dt className="text-sm font-medium text-amber-700">Total cost of goods sold</dt>

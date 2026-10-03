@@ -3,7 +3,7 @@
 import { randomUUID } from "node:crypto";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { requireBranch } from "@/lib/auth";
+import { requireAdminBranch } from "@/lib/auth";
 import { assertNoActiveCount } from "@/lib/data/counts";
 import { getDefaultStoreLocationId } from "@/lib/data/lookups";
 import { getCountShortfalls } from "@/lib/data/product-sales";
@@ -22,7 +22,7 @@ function revalidateStockOut(reportId?: string) {
   if (reportId) revalidatePath(`/stock-out/${reportId}`);
 }
 
-type Client = Awaited<ReturnType<typeof requireBranch>>["supabase"];
+type Client = Awaited<ReturnType<typeof requireAdminBranch>>["supabase"];
 
 const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
 const ATTACHMENT_MIME_EXTENSIONS: Record<string, string> = {
@@ -189,7 +189,7 @@ export async function recordStockOutReport(
   },
   attachmentFile?: File | null,
 ) {
-  const { supabase, companyId, user, branch } = await requireBranch();
+  const { supabase, companyId, user, branch } = await requireAdminBranch();
   await assertNoActiveCount(supabase, companyId, branch.id, "record stock-out");
   if (input.branch_id && input.branch_id !== branch.id) {
     throw new Error("The form is for a different salon. Switch branch and try again.");
@@ -264,7 +264,7 @@ export async function updateStockOutReport(
   },
   attachmentFile?: File | null,
 ) {
-  const { supabase, companyId, user, branch } = await requireBranch();
+  const { supabase, companyId, user, branch } = await requireAdminBranch();
   await assertNoActiveCount(supabase, companyId, branch.id, "record stock-out");
   const lines = input.lines.filter((line) => line.product_id && line.quantity_used > 0);
   if (lines.length === 0) {
@@ -330,7 +330,7 @@ export async function updateStockOutReport(
 }
 
 export async function deleteStockOutReport(formData: FormData) {
-  const { supabase, companyId, branch } = await requireBranch();
+  const { supabase, companyId, branch } = await requireAdminBranch();
   const reportId = String(formData.get("report_id") ?? "");
 
   const { data: report, error: reportError } = await supabase
@@ -360,7 +360,7 @@ export async function deleteStockOutReport(formData: FormData) {
  * shortfall has left, up to the line's quantity.
  */
 export async function setStockOutLineCovered(entryId: string, covered: boolean) {
-  const { supabase, companyId, user, branch } = await requireBranch();
+  const { supabase, companyId, user, branch } = await requireAdminBranch();
   await assertNoActiveCount(supabase, companyId, branch.id, "record stock-out");
 
   const { data: entry, error: entryError } = await supabase

@@ -1,6 +1,6 @@
 import { BrandLogo } from "@/components/brand-logo";
 import { btnClass, fieldClass } from "@/lib/ui";
-import { signIn, signUp } from "./actions";
+import { signIn } from "./actions";
 
 export default async function LoginPage({
   searchParams,
@@ -30,8 +30,17 @@ export default async function LoginPage({
 
       <form className="mt-8 space-y-4">
         <label className="block space-y-1 text-sm">
-          <span>Email</span>
-          <input className={fieldClass} type="email" name="email" required autoComplete="email" />
+          <span>Username or email</span>
+          <input
+            id="login-identifier"
+            className={fieldClass}
+            type="text"
+            name="login"
+            required
+            autoComplete="username"
+            autoCapitalize="none"
+            spellCheck={false}
+          />
         </label>
         <label className="block space-y-1 text-sm">
           <span>Password</span>
@@ -44,17 +53,11 @@ export default async function LoginPage({
             autoComplete="current-password"
           />
         </label>
-        <div className="flex gap-2">
+        <div className="space-y-2">
           <button className={btnClass} formAction={signIn} type="submit">
             Sign in
           </button>
-          <button
-            className="inline-flex items-center justify-center rounded-lg border border-border bg-white px-3 py-2 text-sm font-medium hover:bg-slate-50"
-            formAction={signUp}
-            type="submit"
-          >
-            Create account
-          </button>
+          <p className="text-xs text-muted">No account yet? Ask an admin to add you on the Users page.</p>
         </div>
       </form>
     </main>

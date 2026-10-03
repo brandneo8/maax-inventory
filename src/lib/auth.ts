@@ -4,8 +4,22 @@ import { cache } from "react";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { salonName } from "@/lib/labels";
+import { realEmail } from "@/lib/usernames";
 
 export const DEFAULT_ADMIN_EMAIL = "brand1998@gmail.com";
+
+/**
+ * Admins can use every page. Stylists only see Home and Reports. Any role
+ * other than "admin" (including the older "member") is treated as a stylist.
+ */
+export type UserRole = "admin" | "stylist";
+export const USER_ROLES: { value: UserRole; label: string }[] = [
+  { value: "admin", label: "Admin" },
+  { value: "stylist", label: "Stylist" },
+];
+export function roleOf(role: string | null | undefined): UserRole {
+  return role === "admin" ? "admin" : "stylist";
+}
 export const BRANCH_COOKIE = "maax-branch-id";
 
 export type BranchOption = {
@@ -74,7 +88,10 @@ async function loadUser() {
       throw new Error("MAAX PTE LTD company row is missing. Re-run the salon schema seed.");
     }
 
-    const role = user.email?.toLowerCase() === DEFAULT_ADMIN_EMAIL ? "admin" : "member";
+    // Someone signing in without an account set up by an admin starts as a
+    // stylist with no salon access — they see the blocked screen until an
+    // admin grants a salon on the Users page.
+    const role = user.email?.toLowerCase() === DEFAULT_ADMIN_EMAIL ? "admin" : "stylist";
     await admin.from("company_users").upsert(
       { company_id: company.id, user_id: user.id, role },
       { onConflict: "company_id,user_id" },
@@ -90,6 +107,14 @@ async function loadUser() {
     isAdmin,
   );
 
+  const { data: profile } = await supabase
+    .from("user_profiles")
+    .select("username")
+    .eq("user_id", user.id)
+    .maybeSingle();
+  /** What to show for the signed-in person: their email, or username if they have none yet. */
+  const displayName = realEmail(user.email) || profile?.username || user.email || "";
+
   const cookieStore = await cookies();
   const requestedId = cookieStore.get(BRANCH_COOKIE)?.value;
   const branch = allowedBranches.find((item) => item.id === requestedId) ?? allowedBranches[0] ?? null;
@@ -99,6 +124,7 @@ async function loadUser() {
     user,
     companyId: membership.company_id,
     role: membership.role,
+    displayName,
     isAdmin,
     allowedBranches,
     branch,
@@ -153,6 +179,15 @@ export async function requireBranch() {
     redirect(ctx.isAdmin ? "/admin" : "/home");
   }
   return { ...ctx, branch: ctx.branch };
+}
+
+/** requireBranch for admin-only pages and actions: stylists are sent Home. */
+export async function requireAdminBranch() {
+  const ctx = await requireBranch();
+  if (!ctx.isAdmin) {
+    redirect("/home");
+  }
+  return ctx;
 }
 
 export async function requireAdmin() {

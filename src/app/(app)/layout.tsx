@@ -5,15 +5,15 @@ import { requireUser } from "@/lib/auth";
 export const dynamic = "force-dynamic";
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
-  const { user, isAdmin, allowedBranches, branch } = await requireUser();
+  const { displayName, isAdmin, allowedBranches, branch } = await requireUser();
 
   if (allowedBranches.length === 0 && !isAdmin) {
-    return <BlockedScreen email={user.email ?? ""} isAdmin={false} />;
+    return <BlockedScreen email={displayName} isAdmin={false} />;
   }
 
   return (
     <AppShell
-      email={user.email ?? ""}
+      email={displayName}
       isAdmin={isAdmin}
       allowedBranches={allowedBranches}
       branch={branch}
