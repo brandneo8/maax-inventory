@@ -6,6 +6,8 @@ import { requireBranch } from "@/lib/auth";
 import { assertNoActiveCount } from "@/lib/data/counts";
 import { nextPoNumber } from "@/lib/data/orders";
 import { getDefaultStoreLocationId } from "@/lib/data/lookups";
+import { applyLateReceiptTrueUps, removeLateReceiptTrueUps } from "@/lib/data/receipt-trueups";
+import { businessTxnDate } from "@/lib/format";
 import { createAdminClient } from "@/lib/supabase/admin";
 import type { ProductClassification } from "@/lib/labels";
 
@@ -105,6 +107,8 @@ export async function updatePurchaseOrder(input: {
   purchase_order_id: string;
   supplier_id: string;
   order_date: string;
+  /** FX clearing amount planned on the draft; pre-fills the receipt's amount when it's received. */
+  fx_adjustment?: number;
   lines: OrderLineInput[];
 }) {
   const { supabase, companyId, branch } = await requireBranch();
@@ -135,6 +139,7 @@ export async function updatePurchaseOrder(input: {
     .update({
       supplier_id: input.supplier_id,
       order_date: input.order_date || null,
+      fx_adjustment: Number.isFinite(input.fx_adjustment) ? Number(input.fx_adjustment) : 0,
     })
     .eq("id", order.id);
   if (updateError) throw updateError;
@@ -167,6 +172,8 @@ export async function receivePurchaseOrder(
     notes: string;
     invoice_reference: string;
     rounding_adjustment: number;
+    /** Currency exchange clearing amount to match the PDF invoice — stored on the receipt, not the ledger. */
+    fx_adjustment: number;
     lines: {
       purchase_order_item_id: string | null;
       product_id: string;
@@ -211,6 +218,7 @@ export async function receivePurchaseOrder(
       received_by: user.email,
       notes: input.notes || null,
       rounding_adjustment: Number.isFinite(input.rounding_adjustment) ? input.rounding_adjustment : 0,
+      fx_adjustment: Number.isFinite(input.fx_adjustment) ? input.fx_adjustment : 0,
     })
     .select("id")
     .single();
@@ -230,6 +238,13 @@ export async function receivePurchaseOrder(
   );
 
   if (itemsError) throw itemsError;
+
+  await applyLateReceiptTrueUps(supabase, {
+    companyId,
+    branchId: order.branch_id,
+    receiptId: receipt.id,
+    createdBy: user.email,
+  });
 
   const receiptPatch: { invoice_reference: string | null; invoice_attachment_url?: string } = {
     invoice_reference: input.invoice_reference.trim() || null,
@@ -321,6 +336,13 @@ export async function addFreeGoodsReceipt(input: {
   );
   if (itemsError) throw itemsError;
 
+  await applyLateReceiptTrueUps(supabase, {
+    companyId,
+    branchId: order.branch_id,
+    receiptId: receipt.id,
+    createdBy: user.email,
+  });
+
   const productIds = [...new Set(lines.map((line) => line.product_id))];
   const { data: assigned, error: assignedError } = await supabase
     .from("product_branches")
@@ -342,8 +364,21 @@ export async function addFreeGoodsReceipt(input: {
 }
 
 export async function voidPurchaseOrder(formData: FormData) {
-  const { supabase, companyId, branch } = await requireBranch();
+  const { supabase, companyId, branch, user } = await requireBranch();
   const id = String(formData.get("id") ?? "");
+
+  // Voiding reverses every live receipt on the order, so their count
+  // true-ups go first (as in removeGoodsReceipt) and come back on failure.
+  const { data: receipts, error: receiptsError } = await supabase
+    .from("goods_receipts")
+    .select("id")
+    .eq("purchase_order_id", id)
+    .eq("company_id", companyId)
+    .eq("branch_id", branch.id)
+    .is("voided_at", null);
+  if (receiptsError) throw receiptsError;
+  const trueUpScopes = (receipts ?? []).map((receipt) => ({ companyId, branchId: branch.id, receiptId: receipt.id }));
+  for (const scope of trueUpScopes) await removeLateReceiptTrueUps(supabase, scope);
 
   const { error } = await supabase.rpc("fn_void_purchase_order", {
     p_purchase_order_id: id,
@@ -351,10 +386,85 @@ export async function voidPurchaseOrder(formData: FormData) {
     p_branch_id: branch.id,
   });
 
-  if (error) throw new Error(error.message || "Could not void this order.");
+  if (error) {
+    for (const scope of trueUpScopes) await applyLateReceiptTrueUps(supabase, { ...scope, createdBy: user.email });
+    throw new Error(error.message || "Could not void this order.");
+  }
   revalidatePurchaseOrderPaths(id);
   revalidatePath("/");
   redirect(`/stock-in/${id}`);
+}
+
+/**
+ * Changes only the order date of a sent/received order — it's for reference
+ * only (stock and cost go by each receipt's received date), so it stays
+ * editable after receiving. Drafts change it through updatePurchaseOrder.
+ */
+export async function updatePurchaseOrderDate(purchaseOrderId: string, orderDate: string) {
+  const { supabase, companyId, branch, user } = await requireBranch();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(orderDate)) throw new Error("Enter a valid order date.");
+
+  const { data: order, error: orderError } = await supabase
+    .from("purchase_orders")
+    .select("id, order_date")
+    .eq("id", purchaseOrderId)
+    .eq("company_id", companyId)
+    .eq("branch_id", branch.id)
+    .single();
+  if (orderError || !order) throw orderError ?? new Error("Purchase order not found.");
+  if (order.order_date === orderDate) return;
+
+  const { error: updateError } = await supabase
+    .from("purchase_orders")
+    .update({ order_date: orderDate })
+    .eq("id", order.id);
+  if (updateError) throw updateError;
+
+  const { error: auditError } = await supabase.from("purchase_order_audit_events").insert({
+    company_id: companyId,
+    purchase_order_id: order.id,
+    event_type: "order_date_changed",
+    actor_name: user.email ?? "Unknown",
+    remarks: `Order date changed from ${order.order_date ?? "none"} to ${orderDate}.`,
+  });
+  if (auditError) throw auditError;
+
+  revalidatePurchaseOrderPaths(order.id);
+}
+
+/** Deletes a draft order outright — nothing has been received or sent on it yet. */
+export async function deleteDraftPurchaseOrder(formData: FormData) {
+  const { supabase, companyId, branch } = await requireBranch();
+  const id = String(formData.get("id") ?? "");
+
+  const { data: order, error: orderError } = await supabase
+    .from("purchase_orders")
+    .select("id, status")
+    .eq("id", id)
+    .eq("company_id", companyId)
+    .eq("branch_id", branch.id)
+    .single();
+  if (orderError || !order) throw orderError ?? new Error("Purchase order not found.");
+  if (order.status !== "draft") throw new Error("Only draft orders can be deleted. Void this order instead.");
+
+  const { count: receiptCount, error: receiptError } = await supabase
+    .from("goods_receipts")
+    .select("id", { count: "exact", head: true })
+    .eq("purchase_order_id", order.id);
+  if (receiptError) throw receiptError;
+  if ((receiptCount ?? 0) > 0) throw new Error("This order has stock received on it, so it can't be deleted.");
+
+  // Lines and audit events go with it (on delete cascade).
+  const { error: deleteError } = await supabase
+    .from("purchase_orders")
+    .delete()
+    .eq("id", order.id)
+    .eq("status", "draft");
+  if (deleteError) throw new Error(deleteError.message || "Could not delete this draft.");
+
+  revalidatePurchaseOrderPaths();
+  revalidatePath("/");
+  redirect("/stock-in");
 }
 
 export async function duplicatePurchaseOrder(formData: FormData) {
@@ -412,8 +522,49 @@ export async function duplicatePurchaseOrder(formData: FormData) {
   redirect(`/stock-in/${newOrder.id}`);
 }
 
+/**
+ * Moves a receipt's stock to its new received date in the ledger, then
+ * replays cost from there and re-runs the count true-ups — the new date may
+ * fall before (or no longer before) a confirmed count.
+ */
+async function redateReceiptLedger(
+  supabase: Awaited<ReturnType<typeof requireBranch>>["supabase"],
+  input: { companyId: string; branchId: string; receiptId: string; receivedDate: string; createdBy: string | undefined },
+) {
+  const scope = { companyId: input.companyId, branchId: input.branchId, receiptId: input.receiptId };
+  await removeLateReceiptTrueUps(supabase, scope);
+
+  const { data: items, error: itemsError } = await supabase
+    .from("goods_receipt_items")
+    .select("id")
+    .eq("goods_receipt_id", input.receiptId);
+  if (itemsError) throw itemsError;
+  const itemIds = (items ?? []).map((item) => item.id);
+  if (itemIds.length > 0) {
+    const { data: moved, error: moveError } = await supabase
+      .from("inventory_transactions")
+      .update({ txn_date: businessTxnDate(input.receivedDate) })
+      .eq("reference_table", "goods_receipt_items")
+      .eq("txn_type", "goods_receipt")
+      .gt("quantity_change", 0)
+      .in("reference_id", itemIds)
+      .select("product_id");
+    if (moveError) throw moveError;
+    for (const productId of new Set((moved ?? []).map((row) => row.product_id))) {
+      const { error: recomputeError } = await supabase.rpc("fn_recompute_branch_cost", {
+        p_company_id: input.companyId,
+        p_product_id: productId,
+        p_branch_id: input.branchId,
+      });
+      if (recomputeError) throw new Error(recomputeError.message || "Could not update product costs.");
+    }
+  }
+
+  await applyLateReceiptTrueUps(supabase, { ...scope, createdBy: input.createdBy });
+}
+
 export async function removeGoodsReceipt(goodsReceiptId: string) {
-  const { supabase, companyId, branch } = await requireBranch();
+  const { supabase, companyId, branch, user } = await requireBranch();
 
   const { data: receipt, error: receiptError } = await supabase
     .from("goods_receipts")
@@ -425,8 +576,15 @@ export async function removeGoodsReceipt(goodsReceiptId: string) {
   if (receiptError || !receipt) throw receiptError ?? new Error("Receipt not found.");
   if (receipt.voided_at) throw new Error("This receipt has already been removed.");
 
+  // Count true-ups this receipt caused go first, so the reversal checks the
+  // balance the receipt itself added; put them back if the reversal refuses.
+  const trueUpScope = { companyId, branchId: branch.id, receiptId: receipt.id };
+  await removeLateReceiptTrueUps(supabase, trueUpScope);
   const { error } = await supabase.rpc("fn_reverse_goods_receipt", { p_goods_receipt_id: receipt.id });
-  if (error) throw new Error(error.message || "Could not remove this receipt.");
+  if (error) {
+    await applyLateReceiptTrueUps(supabase, { ...trueUpScope, createdBy: user.email });
+    throw new Error(error.message || "Could not remove this receipt.");
+  }
 
   revalidatePurchaseOrderPaths(receipt.purchase_order_id ?? undefined);
 }
@@ -436,6 +594,7 @@ export async function updateGoodsReceiptInvoice(
   invoiceReference: string,
   receivedDate: string,
   roundingAdjustment: number,
+  fxAdjustment: number,
   invoiceFile?: File | null,
 ) {
   const { supabase, companyId, branch, user } = await requireBranch();
@@ -446,7 +605,7 @@ export async function updateGoodsReceiptInvoice(
 
   const { data: receipt, error: receiptError } = await supabase
     .from("goods_receipts")
-    .select("id, purchase_order_id, received_date")
+    .select("id, purchase_order_id, received_date, voided_at")
     .eq("id", goodsReceiptId)
     .eq("company_id", companyId)
     .eq("branch_id", branch.id)
@@ -457,11 +616,13 @@ export async function updateGoodsReceiptInvoice(
     invoice_reference: string | null;
     received_date: string;
     rounding_adjustment: number;
+    fx_adjustment: number;
     invoice_attachment_url?: string;
   } = {
     invoice_reference: invoiceReference.trim() || null,
     received_date: receivedDate,
     rounding_adjustment: Number.isFinite(roundingAdjustment) ? roundingAdjustment : 0,
+    fx_adjustment: Number.isFinite(fxAdjustment) ? fxAdjustment : 0,
   };
   if (invoiceFile && invoiceFile.size > 0) {
     patch.invoice_attachment_url = await uploadInvoiceAttachment(companyId, receipt.id, invoiceFile);
@@ -469,6 +630,16 @@ export async function updateGoodsReceiptInvoice(
 
   const { error: updateError } = await supabase.from("goods_receipts").update(patch).eq("id", receipt.id);
   if (updateError) throw updateError;
+
+  if (!receipt.voided_at && receipt.received_date !== receivedDate) {
+    await redateReceiptLedger(supabase, {
+      companyId,
+      branchId: branch.id,
+      receiptId: receipt.id,
+      receivedDate,
+      createdBy: user.email,
+    });
+  }
 
   if (receipt.purchase_order_id && receipt.received_date !== receivedDate) {
     const { error: auditError } = await supabase.from("purchase_order_audit_events").insert({

@@ -54,6 +54,7 @@ export default async function OrderDetailPage({
     invoiceReference: receipt.invoice_reference,
     invoiceAttachmentUrl: receipt.invoice_attachment_url,
     roundingAdjustment: Number(receipt.rounding_adjustment ?? 0),
+    fxAdjustment: Number(receipt.fx_adjustment ?? 0),
   }));
 
   const freeGoodsByProduct = new Map<string, { productId: string; label: string; classification: ProductClassification | null; quantity: number }>();
@@ -104,6 +105,7 @@ export default async function OrderDetailPage({
       items={items}
       products={products}
       receipts={receipts}
+      plannedFxAdjustment={Number(order.fx_adjustment ?? 0)}
       freeGoodsSummary={freeGoodsSummary}
       auditEvents={auditEvents}
     />

@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { Trash2 } from "lucide-react";
 import { receivePurchaseOrder } from "../../actions";
 import { blurOnWheel, btnClass, btnSecondaryClass, fieldClass, numberFieldClass, tableClass, tdClass, thClass } from "@/lib/ui";
-import { formatMoney, formatQty } from "@/lib/format";
+import { formatDate, formatMoney, formatQty } from "@/lib/format";
 import { classificationLabel, type ProductClassification } from "@/lib/labels";
 import { ProductPicker, type Option } from "@/components/product-picker";
 import { QuickCreateProductModal } from "./quick-create-product-modal";
@@ -126,6 +126,8 @@ export function ReceiveForm({
   gstRate,
   products: initialProducts,
   lines: initialLines,
+  initialFxAdjustment = 0,
+  latestCountDate = null,
 }: {
   purchaseOrderId: string;
   defaultLocationId: string;
@@ -133,8 +135,16 @@ export function ReceiveForm({
   gstRate: number;
   products: FreeGoodsProduct[];
   lines: Omit<Line, "store_location_id" | "quantity_received">[];
+  /** FX clearing amount entered on the draft order — pre-filled here, still editable. */
+  initialFxAdjustment?: number;
+  /** Date of this salon's latest confirmed count — a receipt dated before it gets trued up against it. */
+  latestCountDate?: string | null;
 }) {
   const today = useMemo(() => new Date().toISOString().slice(0, 10), []);
+  // Mirrors the (deliberately uncontrolled) date input, only to show the
+  // before-a-count notice.
+  const [receivedDate, setReceivedDate] = useState(today);
+  const beforeLatestCount = Boolean(latestCountDate && receivedDate && receivedDate < latestCountDate);
   const [products, setProducts] = useState<FreeGoodsProduct[]>(initialProducts);
   const [lines, setLines] = useState<Line[]>(
     initialLines.map((line) => ({
@@ -147,6 +157,8 @@ export function ReceiveForm({
   const [invoiceFile, setInvoiceFile] = useState<File | null>(null);
   const [roundingAdjustmentText, setRoundingAdjustmentText] = useState("");
   const roundingAdjustment = Number(roundingAdjustmentText) || 0;
+  const [fxAdjustmentText, setFxAdjustmentText] = useState(initialFxAdjustment ? String(initialFxAdjustment) : "");
+  const fxAdjustment = Number(fxAdjustmentText) || 0;
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
   const [pendingFormData, setPendingFormData] = useState<FormData | null>(null);
@@ -218,6 +230,7 @@ export function ReceiveForm({
           notes: String(formData.get("notes") ?? ""),
           invoice_reference: String(formData.get("invoice_reference") ?? ""),
           rounding_adjustment: roundingAdjustment,
+          fx_adjustment: fxAdjustment,
           lines: [
             ...lines.map((line) => ({
               purchase_order_item_id: line.purchase_order_item_id,
@@ -266,7 +279,13 @@ export function ReceiveForm({
         <div className="grid gap-3 sm:grid-cols-4">
           <label className="space-y-1 text-sm">
             <span className="text-muted">Received date</span>
-            <input className={fieldClass} type="date" name="received_date" defaultValue={today} />
+            <input
+              className={fieldClass}
+              type="date"
+              name="received_date"
+              defaultValue={today}
+              onChange={(event) => setReceivedDate(event.target.value)}
+            />
           </label>
           <label className="space-y-1 text-sm">
             <span className="text-muted">Notes</span>
@@ -285,19 +304,16 @@ export function ReceiveForm({
               onChange={(event) => setInvoiceFile(event.target.files?.[0] ?? null)}
             />
           </label>
-          <label className="space-y-1 text-sm">
-            <span className="text-muted">Rounding / adjustment</span>
-            <input
-              className={cn(fieldClass, numberFieldClass)}
-              type="number"
-              step="0.01"
-              value={roundingAdjustmentText}
-              onWheel={blurOnWheel}
-              onChange={(event) => setRoundingAdjustmentText(event.target.value)}
-              placeholder="0.00"
-            />
-          </label>
         </div>
+
+        {beforeLatestCount && latestCountDate ? (
+          <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+            This receipt is dated before the stock count confirmed on {formatDate(latestCountDate)}. The counted
+            balances stay exactly as counted: where the count found extra stock, this receipt is treated as that
+            stock (so it gets its real cost instead of $0); anything beyond that is added to the count&apos;s
+            shortfall. Costs are corrected automatically.
+          </p>
+        ) : null}
 
         <div className="border-t border-border pt-3">
           <p className="text-sm text-muted">Compare the uploaded invoice against what you enter below.</p>
@@ -478,10 +494,16 @@ export function ReceiveForm({
           lines={lines.map((line) => ({ quantity_ordered: line.quantity_received, unit_price: line.unit_cost }))}
           gstRegistered={gstRegistered}
           gstRate={gstRate}
-          adjustment={roundingAdjustment}
+          adjustmentInput={{ value: roundingAdjustmentText, onChange: setRoundingAdjustmentText }}
+          fxInput={{ value: fxAdjustmentText, onChange: setFxAdjustmentText }}
           totalQuantity={combinedTotalQty}
           uniqueSkuCount={uniqueSkuCount}
         />
+        <p className="mt-1 ml-auto max-w-xs text-right text-xs text-muted">
+          Use rounding and FX clearing to make the total match the PDF invoice (+ adds cost, − reduces it).
+          Rounding counts as cost of goods sold; FX clearing is reported as realised FX. Neither changes product
+          costs.
+        </p>
       </div>
 
       <button className={btnClass} disabled={pending} type="submit">
@@ -546,6 +568,7 @@ export function ReceiveForm({
                 gstRegistered={gstRegistered}
                 gstRate={gstRate}
                 adjustment={roundingAdjustment}
+                fxAdjustment={fxAdjustment}
                 totalQuantity={combinedTotalQty}
                 uniqueSkuCount={uniqueSkuCount}
               />

@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { requireBranch } from "@/lib/auth";
+import { getLatestPostedCountDate } from "@/lib/data/counts";
 import { getStoreLocations, getTaxRates } from "@/lib/data/lookups";
 import { canReceive, getPurchaseOrder } from "@/lib/data/orders";
 import { getBundleContents, getBranchAvgCosts, getOrderProductOptions } from "@/lib/data/products";
@@ -14,12 +15,13 @@ export default async function ReceiveOrderPage({
 }) {
   const { id } = await params;
   const { supabase, companyId, branch } = await requireBranch();
-  const [order, locations, catalog, taxRates, avgCosts] = await Promise.all([
+  const [order, locations, catalog, taxRates, avgCosts, latestCountDate] = await Promise.all([
     getPurchaseOrder(supabase, companyId, id, branch.id).catch(() => null),
     getStoreLocations(supabase, companyId),
     getOrderProductOptions(supabase, companyId, branch.id),
     getTaxRates(supabase, companyId),
     getBranchAvgCosts(supabase, companyId, branch.id),
+    getLatestPostedCountDate(supabase, companyId, branch.id),
   ]);
 
   if (!order) notFound();
@@ -57,6 +59,8 @@ export default async function ReceiveOrderPage({
       ) : (
         <ReceiveForm
           purchaseOrderId={order.id}
+          initialFxAdjustment={Number(order.fx_adjustment ?? 0)}
+          latestCountDate={latestCountDate}
           defaultLocationId={branchLocations[0].id}
           gstRegistered={gstRegistered}
           gstRate={gstRate}

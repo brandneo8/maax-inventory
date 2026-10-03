@@ -6,6 +6,7 @@ import { signOut } from "@/app/login/actions";
 import { AppSidebar } from "@/components/app-sidebar";
 import { BrandLogo } from "@/components/brand-logo";
 import { BranchSwitcher } from "@/components/branch-switcher";
+import { ProductsPanel } from "@/components/products-panel";
 import type { BranchOption } from "@/lib/auth";
 import { btnSecondaryClass } from "@/lib/ui";
 import { cn } from "@/lib/utils";
@@ -72,6 +73,8 @@ export function AppShell({
         </form>
       </aside>
       <main className="app-main">{children}</main>
+      {/* Keyed by salon so switching branch starts the panel fresh. */}
+      {branch ? <ProductsPanel key={branch.id} branchName={branch.displayName} /> : null}
     </div>
   );
 }

@@ -1,4 +1,5 @@
 import { movementTypeLabel, type ProductClassification } from "@/lib/labels";
+import { applyLateReceiptTrueUps, removeLateReceiptTrueUps } from "@/lib/data/receipt-trueups";
 import { normalizeSearchText } from "@/lib/search";
 import { createAdminClient } from "@/lib/supabase/admin";
 import type { createClient } from "@/lib/supabase/server";
@@ -747,8 +748,58 @@ export async function voidCompletedCount(
   // product+branch's full history in date order — no manual unwind algebra
   // or "has something newer touched this" guard needed.
   await assertNoLinkedProductSales(supabase, args.countId);
+
+  // Late receipts trued up against this count: lift their true-ups, void,
+  // then re-run them so they settle on the next confirmed count instead (or
+  // simply stand as received if there isn't one).
+  const lateReceipts = await lateReceiptsTruedUpAgainst(supabase, args.countId);
+  for (const receipt of lateReceipts) await removeLateReceiptTrueUps(supabase, receipt);
+
   const { error } = await supabase.rpc("fn_void_inventory_count", { p_count_id: args.countId });
   if (error) throw queryError(error, "Could not void the count.");
+
+  for (const receipt of lateReceipts) {
+    await applyLateReceiptTrueUps(supabase, { ...receipt, createdBy: args.createdBy ?? undefined });
+  }
+}
+
+async function lateReceiptsTruedUpAgainst(supabase: Client, countId: string) {
+  const itemIds: string[] = [];
+  for (let from = 0; ; from += PAGE_SIZE) {
+    const { data, error } = await supabase
+      .from("inventory_count_items")
+      .select("id")
+      .eq("inventory_count_id", countId)
+      .order("id")
+      .range(from, from + PAGE_SIZE - 1);
+    if (error) throw queryError(error, "Could not check this count for late receipts.");
+    itemIds.push(...(data ?? []).map((row) => row.id));
+    if (!data || data.length < PAGE_SIZE) break;
+  }
+
+  const receiptIds = new Set<string>();
+  for (const ids of chunkList(itemIds)) {
+    const { data, error } = await supabase
+      .from("inventory_transactions")
+      .select("trueup_goods_receipt_id")
+      .eq("reference_table", "inventory_count_items")
+      .not("trueup_goods_receipt_id", "is", null)
+      .in("reference_id", ids);
+    if (error) throw queryError(error, "Could not check this count for late receipts.");
+    for (const row of data ?? []) if (row.trueup_goods_receipt_id) receiptIds.add(row.trueup_goods_receipt_id);
+  }
+  if (receiptIds.size === 0) return [];
+
+  const { data: receipts, error } = await supabase
+    .from("goods_receipts")
+    .select("id, company_id, branch_id")
+    .in("id", [...receiptIds]);
+  if (error) throw queryError(error, "Could not check this count for late receipts.");
+  return (receipts ?? []).map((receipt) => ({
+    companyId: receipt.company_id,
+    branchId: receipt.branch_id,
+    receiptId: receipt.id,
+  }));
 }
 
 export function hasActiveCount(supabase: Client, companyId: string, branchId: string) {

@@ -63,7 +63,7 @@ export async function getPurchaseOrder(
   let query = supabase
     .from("purchase_orders")
     .select(
-      "id, po_number, status, order_date, expected_delivery_date, notes, created_by, branch_id, supplier_id, branches(name), suppliers(supplier_name, gst_registered)",
+      "id, po_number, status, order_date, expected_delivery_date, notes, created_by, branch_id, supplier_id, fx_adjustment, branches(name), suppliers(supplier_name, gst_registered)",
     )
     .eq("company_id", companyId)
     .eq("id", id);
@@ -90,7 +90,7 @@ export async function getPurchaseOrder(
     supabase
       .from("goods_receipts")
       .select(
-        "id, received_date, received_by, notes, invoice_reference, invoice_attachment_url, rounding_adjustment, goods_receipt_items(product_id, quantity_received, classification, purchase_order_item_id, products(sku, name, order_name))",
+        "id, received_date, received_by, notes, invoice_reference, invoice_attachment_url, rounding_adjustment, fx_adjustment, goods_receipt_items(product_id, quantity_received, classification, purchase_order_item_id, products(sku, name, order_name))",
       )
       .eq("purchase_order_id", id)
       .is("voided_at", null)
@@ -114,15 +114,29 @@ export async function getPurchaseOrder(
   };
 }
 
+/**
+ * One running sequence across years (PO-<year>-<n>), continuing from the
+ * highest number issued — not the order count, which drops when a draft is
+ * deleted and would hand out a number that's already taken.
+ */
 export async function nextPoNumber(supabase: Client, companyId: string) {
-  const { count, error } = await supabase
-    .from("purchase_orders")
-    .select("id", { count: "exact", head: true })
-    .eq("company_id", companyId);
-
-  if (error) throw error;
+  let highest = 0;
+  for (let from = 0; ; from += 1000) {
+    const { data, error } = await supabase
+      .from("purchase_orders")
+      .select("po_number")
+      .eq("company_id", companyId)
+      .order("id")
+      .range(from, from + 999);
+    if (error) throw error;
+    for (const row of data ?? []) {
+      const sequence = Number(/(\d+)$/.exec(row.po_number ?? "")?.[1] ?? 0);
+      if (sequence > highest) highest = sequence;
+    }
+    if (!data || data.length < 1000) break;
+  }
   const year = new Date().getFullYear();
-  return `PO-${year}-${String((count ?? 0) + 1).padStart(4, "0")}`;
+  return `PO-${year}-${String(highest + 1).padStart(4, "0")}`;
 }
 
 export function canReceive(status: PoStatus) {

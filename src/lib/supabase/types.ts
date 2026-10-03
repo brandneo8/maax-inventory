@@ -277,6 +277,7 @@ export type Database = {
           branch_id: string
           company_id: string
           created_at: string
+          fx_adjustment: number
           id: string
           invoice_attachment_url: string | null
           invoice_reference: string | null
@@ -291,6 +292,7 @@ export type Database = {
           branch_id: string
           company_id: string
           created_at?: string
+          fx_adjustment?: number
           id?: string
           invoice_attachment_url?: string | null
           invoice_reference?: string | null
@@ -305,6 +307,7 @@ export type Database = {
           branch_id?: string
           company_id?: string
           created_at?: string
+          fx_adjustment?: number
           id?: string
           invoice_attachment_url?: string | null
           invoice_reference?: string | null
@@ -564,6 +567,7 @@ export type Database = {
           reference_id: string | null
           reference_table: string | null
           store_location_id: string
+          trueup_goods_receipt_id: string | null
           txn_date: string
           txn_type: Database["public"]["Enums"]["inventory_txn_type"]
           unit_cost: number | null
@@ -581,6 +585,7 @@ export type Database = {
           reference_id?: string | null
           reference_table?: string | null
           store_location_id: string
+          trueup_goods_receipt_id?: string | null
           txn_date?: string
           txn_type: Database["public"]["Enums"]["inventory_txn_type"]
           unit_cost?: number | null
@@ -598,6 +603,7 @@ export type Database = {
           reference_id?: string | null
           reference_table?: string | null
           store_location_id?: string
+          trueup_goods_receipt_id?: string | null
           txn_date?: string
           txn_type?: Database["public"]["Enums"]["inventory_txn_type"]
           unit_cost?: number | null
@@ -629,6 +635,13 @@ export type Database = {
             columns: ["store_location_id"]
             isOneToOne: false
             referencedRelation: "store_locations"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "inventory_transactions_trueup_goods_receipt_id_fkey"
+            columns: ["trueup_goods_receipt_id"]
+            isOneToOne: false
+            referencedRelation: "goods_receipts"
             referencedColumns: ["id"]
           },
         ]
@@ -1367,6 +1380,7 @@ export type Database = {
           created_at: string
           created_by: string | null
           expected_delivery_date: string | null
+          fx_adjustment: number
           id: string
           notes: string | null
           order_date: string | null
@@ -1380,6 +1394,7 @@ export type Database = {
           created_at?: string
           created_by?: string | null
           expected_delivery_date?: string | null
+          fx_adjustment?: number
           id?: string
           notes?: string | null
           order_date?: string | null
@@ -1393,6 +1408,7 @@ export type Database = {
           created_at?: string
           created_by?: string | null
           expected_delivery_date?: string | null
+          fx_adjustment?: number
           id?: string
           notes?: string | null
           order_date?: string | null
@@ -1853,6 +1869,7 @@ export type Database = {
           reference_id: string | null
           reference_table: string | null
           store_location_id: string | null
+          trueup_goods_receipt_id: string | null
           txn_date: string | null
           txn_type: Database["public"]["Enums"]["inventory_txn_type"] | null
           unit_cost: number | null
@@ -1870,6 +1887,7 @@ export type Database = {
           reference_id?: string | null
           reference_table?: string | null
           store_location_id?: string | null
+          trueup_goods_receipt_id?: string | null
           txn_date?: string | null
           txn_type?: Database["public"]["Enums"]["inventory_txn_type"] | null
           unit_cost?: number | null
@@ -1887,6 +1905,7 @@ export type Database = {
           reference_id?: string | null
           reference_table?: string | null
           store_location_id?: string | null
+          trueup_goods_receipt_id?: string | null
           txn_date?: string | null
           txn_type?: Database["public"]["Enums"]["inventory_txn_type"] | null
           unit_cost?: number | null
@@ -1918,6 +1937,13 @@ export type Database = {
             columns: ["store_location_id"]
             isOneToOne: false
             referencedRelation: "store_locations"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "inventory_transactions_trueup_goods_receipt_id_fkey"
+            columns: ["trueup_goods_receipt_id"]
+            isOneToOne: false
+            referencedRelation: "goods_receipts"
             referencedColumns: ["id"]
           },
         ]

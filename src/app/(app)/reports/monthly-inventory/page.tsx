@@ -226,8 +226,8 @@ export default async function MonthlyInventoryReportPage({
       <section className="space-y-3">
         <h2 className="text-lg font-semibold">Cost of goods sold</h2>
         <p className="text-sm text-muted">
-          Matches the inventory used $ amount above — everything consumed that month, costed at the
-          weighted average in place when it left inventory.
+          Inventory used above — everything consumed that month, costed at the weighted average in place when it
+          left inventory — plus invoice rounding from that month&apos;s receipts.
         </p>
         <div className="overflow-x-auto rounded-xl border border-border bg-card">
           <table className={`${tableClass} table-fixed`} style={{ width: "100%", minWidth: reportTableMinWidth(report.months.length) }}>
@@ -245,7 +245,7 @@ export default async function MonthlyInventoryReportPage({
             <tbody>
               <tr className="font-semibold">
                 <td className={tdClass}>Cost of goods sold</td>
-                {report.used.map((value, index) => (
+                {report.cogsTotal.map((value, index) => (
                   <td key={report.months[index]} className={`${tdClass} text-right`}>
                     {formatMoney(value)}
                   </td>
@@ -308,15 +308,63 @@ export default async function MonthlyInventoryReportPage({
                   ))}
                 </tr>
               ) : null}
+              <tr>
+                <td className={`${tdClass} pt-4 text-muted`} colSpan={report.months.length + 1}>
+                  Others (not from stock movements)
+                </td>
+              </tr>
+              <tr>
+                <td className={tdClass}>Invoice rounding</td>
+                {report.cogsRounding.map((value, index) => (
+                  <td key={report.months[index]} className={`${tdClass} text-right`}>
+                    {formatMoney(value)}
+                  </td>
+                ))}
+              </tr>
             </tbody>
           </table>
         </div>
         <p className="text-xs text-muted">
-          Retail, in-house use, GWP, and count-driven shortfalls together make up the total above, split
-          by each transaction&apos;s type. A product with more than one tag has its in-house cost counted
-          under every tag it carries, so the tag rows can add up to more than &quot;Cost of in-house
-          use&quot;.
+          Retail, in-house use, GWP, count-driven shortfalls and invoice rounding together make up the total
+          above. Invoice rounding is the rounding / adjustment entered on each receipt, dated by its received
+          date; it doesn&apos;t move stock or change any product&apos;s cost. A product with more than one tag
+          has its in-house cost counted under every tag it carries, so the tag rows can add up to more than
+          &quot;Cost of in-house use&quot;.
         </p>
+      </section>
+
+      <section className="space-y-3">
+        <h2 className="text-lg font-semibold">Realised FX</h2>
+        <p className="text-sm text-muted">
+          FX clearing amounts entered on receipts to match the supplier&apos;s invoice, by received date. Not part
+          of cost of goods sold, and they don&apos;t move stock or change any product&apos;s cost. Positive is a
+          loss, negative a gain.
+        </p>
+        <div className="overflow-x-auto rounded-xl border border-border bg-card">
+          <table className={`${tableClass} table-fixed`} style={{ width: "100%", minWidth: reportTableMinWidth(report.months.length) }}>
+            <ReportColgroup monthCount={report.months.length} />
+            <thead>
+              <tr>
+                <th className={thClass}>&nbsp;</th>
+                {report.months.map((month) => (
+                  <th key={month} className={`${thClass} text-right`}>
+                    {formatMonthLabel(month)}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              <tr className="font-semibold">
+                <td className={tdClass}>Realised FX</td>
+                {report.realisedFx.map((value, index) => (
+                  <td key={report.months[index]} className={`${tdClass} text-right`}>
+                    {formatMoney(value)}
+                  </td>
+                ))}
+              </tr>
+            </tbody>
+          </table>
+        </div>
       </section>
     </div>
   );

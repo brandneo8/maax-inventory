@@ -1,6 +1,6 @@
 import type { createClient } from "@/lib/supabase/server";
 import { productDisplayName } from "@/lib/format";
-import { SALE_RECLASS_NOTE } from "@/lib/data/usage-ledger";
+import { LATE_RECEIPT_SURPLUS_NOTE, SALE_RECLASS_NOTE } from "@/lib/data/usage-ledger";
 
 type Client = Awaited<ReturnType<typeof createClient>>;
 
@@ -103,6 +103,13 @@ export type MonthlyInventoryReport = {
   cogsGwp: number[];
   cogsWastage: number[];
   cogsOther: number[];
+  // Costs that don't come from the stock ledger (they move no stock), read
+  // from receipts by received date. Invoice rounding is part of cost of goods
+  // sold; realised FX is reported separately and is not.
+  cogsRounding: number[];
+  /** Cost of goods sold: inventory used plus invoice rounding. */
+  cogsTotal: number[];
+  realisedFx: number[];
   // Same figures as cogsInhouse, split by each in-house product's tags.
   // A multi-tagged product's cost is attributed to every tag it carries,
   // so these rows can sum to more than cogsInhouse when that happens.
@@ -165,6 +172,9 @@ export async function getMonthlyInventoryReport(
     cogsGwp: months.map(() => 0),
     cogsWastage: months.map(() => 0),
     cogsOther: months.map(() => 0),
+    cogsRounding: months.map(() => 0),
+    cogsTotal: months.map(() => 0),
+    realisedFx: months.map(() => 0),
     cogsInhouseByTag: [],
     inventoryByBrand: [],
     inventoryByTag: [],
@@ -234,7 +244,11 @@ export async function getMonthlyInventoryReport(
   for (const row of rows ?? []) {
     const value = Number(row.quantity_change) * Number(row.unit_cost ?? 0);
     const isCountVariance = row.txn_type === "count_adjustment" && row.notes === "Count variance";
-    const isInflow = row.txn_type === "goods_receipt" || (isCountVariance && Number(row.quantity_change) > 0);
+    // A late receipt taking back a count surplus undoes part of that inflow.
+    const isInflow =
+      row.txn_type === "goods_receipt" ||
+      (isCountVariance && Number(row.quantity_change) > 0) ||
+      (row.txn_type === "count_adjustment" && row.notes === LATE_RECEIPT_SURPLUS_NOTE);
 
     if (row.txn_date < fromBoundary) {
       openingCarry += value;
@@ -364,6 +378,26 @@ export async function getMonthlyInventoryReport(
     return names.length > 0 ? names : [UNTAGGED];
   }, UNTAGGED);
 
+  // Receipt-level amounts that aren't stock movements: invoice rounding
+  // (part of cost of goods sold) and the FX clearing amount (realised FX,
+  // reported outside it). Removed receipts are left out.
+  const roundingByMonth = new Map<string, number>();
+  const fxByMonth = new Map<string, number>();
+  const { data: receipts, error: receiptsError } = await supabase
+    .from("goods_receipts")
+    .select("received_date, rounding_adjustment, fx_adjustment")
+    .eq("company_id", companyId)
+    .eq("branch_id", branchId)
+    .is("voided_at", null)
+    .gte("received_date", `${fromMonth}-01`)
+    .lt("received_date", `${nextMonth(toMonth)}-01`);
+  if (receiptsError) throw receiptsError;
+  for (const receipt of receipts ?? []) {
+    const monthKey = receipt.received_date.slice(0, 7);
+    roundingByMonth.set(monthKey, (roundingByMonth.get(monthKey) ?? 0) + Number(receipt.rounding_adjustment ?? 0));
+    fxByMonth.set(monthKey, (fxByMonth.get(monthKey) ?? 0) + Number(receipt.fx_adjustment ?? 0));
+  }
+
   const openingBalance: number[] = [];
   const ordered: number[] = [];
   const used: number[] = [];
@@ -373,10 +407,14 @@ export async function getMonthlyInventoryReport(
   const cogsGwp: number[] = [];
   const cogsWastage: number[] = [];
   const cogsOther: number[] = [];
+  const cogsRounding: number[] = [];
+  const cogsTotal: number[] = [];
+  const realisedFx: number[] = [];
   let runningOpen = openingCarry;
   for (const month of months) {
     const monthOrdered = orderedByMonth.get(month) ?? 0;
     const monthUsed = usedByMonth.get(month) ?? 0;
+    const monthRounding = roundingByMonth.get(month) ?? 0;
     const close = runningOpen + monthOrdered - monthUsed;
     openingBalance.push(runningOpen);
     ordered.push(monthOrdered);
@@ -387,6 +425,9 @@ export async function getMonthlyInventoryReport(
     cogsGwp.push(gwpByMonth.get(month) ?? 0);
     cogsWastage.push(wastageByMonth.get(month) ?? 0);
     cogsOther.push(otherByMonth.get(month) ?? 0);
+    cogsRounding.push(monthRounding);
+    cogsTotal.push(monthUsed + monthRounding);
+    realisedFx.push(fxByMonth.get(month) ?? 0);
     runningOpen = close;
   }
 
@@ -403,6 +444,9 @@ export async function getMonthlyInventoryReport(
     cogsGwp,
     cogsWastage,
     cogsOther,
+    cogsRounding,
+    cogsTotal,
+    realisedFx,
     cogsInhouseByTag,
   };
 }

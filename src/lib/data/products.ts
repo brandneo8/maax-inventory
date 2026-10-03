@@ -2,7 +2,7 @@ import type { createClient } from "@/lib/supabase/server";
 import { getProducts } from "@/lib/data/lookups";
 import { isOnSalonPosList } from "@/lib/data/pos-rules";
 import { getBundleComponentsForProducts } from "@/lib/data/product-components";
-import { SALE_RECLASS_NOTE } from "@/lib/data/usage-ledger";
+import { LATE_RECEIPT_SURPLUS_NOTE, SALE_RECLASS_NOTE } from "@/lib/data/usage-ledger";
 import { productDisplayName, productLabel, singaporeToday } from "@/lib/format";
 import { isRetailFacing, type ProductClassification } from "@/lib/labels";
 
@@ -407,6 +407,42 @@ export async function getBranchStockOutProducts(supabase: Client, companyId: str
   return { retail, inhouse };
 }
 
+export type ProductBalance = {
+  id: string;
+  label: string;
+  orderName: string;
+  sku: string | null;
+  barcode: string | null;
+  brand: string;
+  sizeLabel: string | null;
+  onHand: number;
+};
+
+/** Every product assigned to this salon with its current on-hand quantity — the right-hand Products panel. */
+export async function getBranchProductBalances(
+  supabase: Client,
+  companyId: string,
+  branchId: string,
+): Promise<ProductBalance[]> {
+  const assignedIds = await getAssignedProductIds(supabase, branchId);
+  const [rows, onHand] = await Promise.all([
+    loadPickerRows(supabase, companyId, assignedIds),
+    getBranchOnHand(supabase, companyId, branchId, assignedIds),
+  ]);
+  return rows
+    .map((product) => ({
+      id: product.id,
+      label: productDisplayName(product) || product.sku?.trim() || "—",
+      orderName: product.order_name,
+      sku: product.sku,
+      barcode: product.barcode,
+      brand: nestedName(product.brands),
+      sizeLabel: product.size_label,
+      onHand: onHand.get(product.id) ?? 0,
+    }))
+    .sort((left, right) => left.label.localeCompare(right.label, undefined, { sensitivity: "base" }));
+}
+
 export type PosSaleProductOption = StockOutProductOption & {
   costPrice: number;
   isBundle: boolean;
@@ -535,14 +571,15 @@ export async function getMonthToDateUsage(supabase: Client, branchId: string, pr
         .eq("notes", "Count variance")
         .gte("txn_date", monthStart),
       // A shortfall reclassified as a product sale is one unit of usage (the
-      // sale), not two — this offsets the shortfall it cancels.
+      // sale), not two — this offsets the shortfall it cancels. A surplus a
+      // late receipt explains wasn't usage either, so it cancels likewise.
       supabase
         .from("inventory_transactions_effective")
         .select("product_id, quantity_change")
         .in("product_id", ids)
         .in("store_location_id", locationIds)
         .eq("txn_type", "count_adjustment")
-        .eq("notes", SALE_RECLASS_NOTE)
+        .in("notes", [SALE_RECLASS_NOTE, LATE_RECEIPT_SURPLUS_NOTE])
         .gte("txn_date", monthStart),
     ]);
     if (useError) throw new Error(useError.message || "Could not load month-to-date usage.");

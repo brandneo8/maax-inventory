@@ -13,6 +13,14 @@ type Client = Awaited<ReturnType<typeof createClient>>;
  */
 export const SALE_RECLASS_NOTE = "Reclassified as product sale";
 
+/**
+ * Note on the negative count_adjustment that takes back part of a count's
+ * surplus when a receipt dated before that count turns out to explain it (see
+ * 20261003130000_late_receipt_count_trueups.sql) — the cost engine, usage
+ * metrics and monthly report key off this exact text.
+ */
+export const LATE_RECEIPT_SURPLUS_NOTE = "Count true-up: late receipt (offsets count surplus)";
+
 export type UsageLedgerLine = {
   referenceId: string;
   productId: string;

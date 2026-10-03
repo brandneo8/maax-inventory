@@ -17,7 +17,6 @@ type Client = Awaited<ReturnType<typeof requireBranch>>["supabase"];
 function revalidateProductSales(saleId?: string) {
   revalidatePath("/product-sales");
   revalidatePath("/home");
-  revalidatePath("/home/products");
   revalidatePath("/orders");
   revalidatePath("/reports/monthly-inventory");
   if (saleId) revalidatePath(`/product-sales/${saleId}`);

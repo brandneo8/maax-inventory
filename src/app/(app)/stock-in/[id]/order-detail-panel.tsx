@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter, unstable_rethrow } from "next/navigation";
 import { useState } from "react";
-import { removeGoodsReceipt, updateGoodsReceiptInvoice, updatePurchaseOrder } from "../actions";
+import { removeGoodsReceipt, updateGoodsReceiptInvoice, updatePurchaseOrder, updatePurchaseOrderDate } from "../actions";
 import { formatDate, formatDateTime, formatMoney, formatQty } from "@/lib/format";
 import { classificationLabel, type PoStatus } from "@/lib/labels";
 import { blurOnWheel, btnClass, btnDangerClass, btnSecondaryClass, fieldClass, numberFieldClass, tableClass, tdClass, thClass } from "@/lib/ui";
@@ -14,6 +14,7 @@ import { OrderTotals } from "../order-totals";
 import { catalogTax } from "@/lib/catalog-pricing";
 import { cn } from "@/lib/utils";
 import { VoidOrderButton } from "./void-order-button";
+import { DeleteDraftOrderButton } from "./delete-draft-order-button";
 import { DuplicateOrderButton } from "./duplicate-order-button";
 import { AddFreeGoodsModal } from "./add-free-goods-modal";
 import type { Option, ProductOption } from "@/components/product-picker";
@@ -55,6 +56,7 @@ type ReceiptSummary = {
   invoiceReference: string | null;
   invoiceAttachmentUrl: string | null;
   roundingAdjustment: number;
+  fxAdjustment: number;
 };
 
 function itemsToLines(items: DisplayItem[]): EditableLine[] {
@@ -69,7 +71,72 @@ function itemsToLines(items: DisplayItem[]): EditableLine[] {
 
 function auditEventLabel(eventType: string) {
   if (eventType === "receipt_date_changed") return "Receipt date changed";
+  if (eventType === "order_date_changed") return "Order date changed";
   return eventType.replaceAll("_", " ");
+}
+
+/** Order date on a sent/received order: reference only, so it stays editable. */
+function OrderDateEditor({ purchaseOrderId, orderDate }: { purchaseOrderId: string; orderDate: string }) {
+  const router = useRouter();
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState(orderDate);
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function save() {
+    setPending(true);
+    setError(null);
+    try {
+      await updatePurchaseOrderDate(purchaseOrderId, value);
+      setEditing(false);
+      router.refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not change the order date.");
+    } finally {
+      setPending(false);
+    }
+  }
+
+  if (!editing) {
+    return (
+      <dd className="flex items-center gap-2">
+        {formatDate(orderDate)}
+        <button
+          type="button"
+          className="text-muted underline"
+          onClick={() => {
+            setValue(orderDate);
+            setError(null);
+            setEditing(true);
+          }}
+        >
+          Edit
+        </button>
+      </dd>
+    );
+  }
+
+  return (
+    <dd className="space-y-1">
+      <input
+        className={fieldClass}
+        type="date"
+        value={value}
+        onChange={(event) => setValue(event.target.value)}
+        disabled={pending}
+      />
+      <div className="flex gap-3">
+        <button type="button" className="text-muted underline" onClick={() => setEditing(false)} disabled={pending}>
+          Cancel
+        </button>
+        <button type="button" className="text-blue-600 underline" onClick={() => void save()} disabled={pending || !value}>
+          {pending ? "Saving…" : "Save"}
+        </button>
+      </div>
+      <p className="text-xs text-muted">For reference only — stock and costs use each receipt&apos;s received date.</p>
+      {error ? <p className="text-red-700">{error}</p> : null}
+    </dd>
+  );
 }
 
 function ReceiptInvoiceRow({ receipt }: { receipt: ReceiptSummary }) {
@@ -79,6 +146,8 @@ function ReceiptInvoiceRow({ receipt }: { receipt: ReceiptSummary }) {
   const [receivedDate, setReceivedDate] = useState(receipt.receivedDate);
   const [roundingAdjustmentText, setRoundingAdjustmentText] = useState(String(receipt.roundingAdjustment));
   const roundingAdjustment = Number(roundingAdjustmentText) || 0;
+  const [fxAdjustmentText, setFxAdjustmentText] = useState(String(receipt.fxAdjustment));
+  const fxAdjustment = Number(fxAdjustmentText) || 0;
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -92,6 +161,7 @@ function ReceiptInvoiceRow({ receipt }: { receipt: ReceiptSummary }) {
         reference,
         receivedDate,
         roundingAdjustment,
+        fxAdjustment,
         file instanceof File && file.size > 0 ? file : null,
       );
       setEditing(false);
@@ -188,6 +258,18 @@ function ReceiptInvoiceRow({ receipt }: { receipt: ReceiptSummary }) {
               placeholder="0.00"
             />
           </label>
+          <label className="space-y-1">
+            <span>FX clearing</span>
+            <input
+              className={cn(fieldClass, numberFieldClass)}
+              type="number"
+              step="0.01"
+              value={fxAdjustmentText}
+              onWheel={blurOnWheel}
+              onChange={(event) => setFxAdjustmentText(event.target.value)}
+              placeholder="0.00"
+            />
+          </label>
           <div className="flex gap-2 sm:col-span-2">
             <button
               className={btnSecondaryClass}
@@ -197,6 +279,7 @@ function ReceiptInvoiceRow({ receipt }: { receipt: ReceiptSummary }) {
                 setReference(receipt.invoiceReference ?? "");
                 setReceivedDate(receipt.receivedDate);
                 setRoundingAdjustmentText(String(receipt.roundingAdjustment));
+                setFxAdjustmentText(String(receipt.fxAdjustment));
                 setError(null);
               }}
               disabled={pending}
@@ -224,6 +307,7 @@ function ReceiptInvoiceRow({ receipt }: { receipt: ReceiptSummary }) {
           {receipt.roundingAdjustment !== 0 ? (
             <p>Rounding / adjustment: {formatMoney(receipt.roundingAdjustment)}</p>
           ) : null}
+          {receipt.fxAdjustment !== 0 ? <p>FX clearing: {formatMoney(receipt.fxAdjustment)}</p> : null}
         </div>
       )}
     </div>
@@ -249,6 +333,7 @@ export function OrderDetailPanel({
   items,
   products,
   receipts,
+  plannedFxAdjustment,
   freeGoodsSummary,
   auditEvents,
 }: {
@@ -270,6 +355,8 @@ export function OrderDetailPanel({
   items: DisplayItem[];
   products: ProductOption[];
   receipts: ReceiptSummary[];
+  /** FX clearing amount entered on the draft — carried onto the receipt when it's received. */
+  plannedFxAdjustment: number;
   freeGoodsSummary: ReceiptFreeItem[];
   auditEvents: AuditEvent[];
 }) {
@@ -280,6 +367,8 @@ export function OrderDetailPanel({
   const [editSupplierId, setEditSupplierId] = useState(supplierId);
   const [editOrderDate, setEditOrderDate] = useState(orderDate);
   const [lines, setLines] = useState<EditableLine[]>(() => itemsToLines(items));
+  const [editFxText, setEditFxText] = useState(plannedFxAdjustment ? String(plannedFxAdjustment) : "");
+  const editFx = Number(editFxText) || 0;
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
   const editGstRegistered = suppliers.find((supplier) => supplier.id === editSupplierId)?.gstRegistered ?? gstRegistered;
@@ -296,11 +385,21 @@ export function OrderDetailPanel({
     freeGoodsSummary.reduce((sum, row) => sum + row.quantity, 0);
   const receivedUniqueSkuCount = receivedItems.length + freeGoodsSummary.length;
   const totalRoundingAdjustment = receipts.reduce((sum, receipt) => sum + receipt.roundingAdjustment, 0);
+  // Until it's received, an order's FX is the planned amount on the draft;
+  // after that, it's whatever was recorded on its receipts.
+  const totalFxAdjustment =
+    receipts.length > 0 ? receipts.reduce((sum, receipt) => sum + receipt.fxAdjustment, 0) : plannedFxAdjustment;
   const onlyReceipt = receipts.length === 1 ? receipts[0] : null;
 
   async function saveRoundingAdjustment(value: number) {
     if (!onlyReceipt) return;
-    await updateGoodsReceiptInvoice(onlyReceipt.id, onlyReceipt.invoiceReference ?? "", onlyReceipt.receivedDate, value);
+    await updateGoodsReceiptInvoice(
+      onlyReceipt.id,
+      onlyReceipt.invoiceReference ?? "",
+      onlyReceipt.receivedDate,
+      value,
+      onlyReceipt.fxAdjustment,
+    );
     router.refresh();
   }
 
@@ -308,6 +407,7 @@ export function OrderDetailPanel({
     setEditSupplierId(supplierId);
     setEditOrderDate(orderDate);
     setLines(itemsToLines(items));
+    setEditFxText(plannedFxAdjustment ? String(plannedFxAdjustment) : "");
     setError(null);
     setEditing(true);
   }
@@ -363,6 +463,7 @@ export function OrderDetailPanel({
         purchase_order_id: purchaseOrderId,
         supplier_id: editSupplierId,
         order_date: editOrderDate,
+        fx_adjustment: editFx,
         lines: lines.map((line) => ({
           product_id: line.product_id,
           classification: line.classification,
@@ -421,6 +522,7 @@ export function OrderDetailPanel({
                 ) : null}
                 <DuplicateOrderButton purchaseOrderId={purchaseOrderId} />
                 {canVoidNow ? <VoidOrderButton purchaseOrderId={purchaseOrderId} /> : null}
+                {editableOrder ? <DeleteDraftOrderButton purchaseOrderId={purchaseOrderId} poNumber={poNumber} /> : null}
               </>
             )}
           </div>
@@ -459,8 +561,10 @@ export function OrderDetailPanel({
               value={editOrderDate}
               onChange={(event) => setEditOrderDate(event.target.value)}
             />
-          ) : (
+          ) : editableOrder || status === "cancelled" ? (
             <dd>{formatDate(orderDate)}</dd>
+          ) : (
+            <OrderDateEditor purchaseOrderId={purchaseOrderId} orderDate={orderDate} />
           )}
         </div>
         <div>
@@ -493,7 +597,16 @@ export function OrderDetailPanel({
             onRemove={removeLine}
             onMove={moveLine}
           />
-          <OrderTotals lines={lines} gstRegistered={editGstRegistered} gstRate={gstRate} />
+          <OrderTotals
+            lines={lines}
+            gstRegistered={editGstRegistered}
+            gstRate={gstRate}
+            fxInput={{ value: editFxText, onChange: setEditFxText }}
+          />
+          <p className="ml-auto max-w-xs text-right text-xs text-muted">
+            FX clearing: the amount that makes the total match the PDF invoice (+ loss, − gain). Carried onto the
+            receipt when you receive — you can still change it there.
+          </p>
         </div>
       ) : (
         <div className="space-y-3">
@@ -546,6 +659,7 @@ export function OrderDetailPanel({
             gstRegistered={gstRegistered}
             gstRate={gstRate}
             adjustment={totalRoundingAdjustment}
+            fxAdjustment={totalFxAdjustment}
             totalQuantity={status === "received" ? receivedTotalQty : undefined}
             uniqueSkuCount={status === "received" ? receivedUniqueSkuCount : undefined}
             onAdjustmentSave={onlyReceipt ? saveRoundingAdjustment : undefined}

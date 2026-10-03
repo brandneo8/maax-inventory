@@ -13,6 +13,9 @@ export function OrderTotals({
   gstRate,
   adjustment,
   adjustmentLabel = "Rounding / adjustment",
+  adjustmentInput,
+  fxAdjustment,
+  fxInput,
   totalQuantity,
   uniqueSkuCount,
   onAdjustmentSave,
@@ -22,13 +25,23 @@ export function OrderTotals({
   gstRate: number;
   adjustment?: number;
   adjustmentLabel?: string;
+  /** Makes the rounding row an inline input (raw typed text), like `fxInput`. */
+  adjustmentInput?: { value: string; onChange: (value: string) => void };
+  /** Currency exchange clearing amount — part of the invoice total, shown on its own line. */
+  fxAdjustment?: number;
+  /**
+   * Makes the FX clearing row an inline input, so the amount can be tuned
+   * right here against the running total. `value` is the raw text being typed.
+   */
+  fxInput?: { value: string; onChange: (value: string) => void };
   totalQuantity?: number;
   uniqueSkuCount?: number;
   onAdjustmentSave?: (value: number) => Promise<void> | void;
 }) {
   const { subtotal, taxTotal, grandTotal } = computeOrderTotals(lines, gstRegistered, gstRate);
-  const roundedAdjustment = roundMoney(adjustment ?? 0);
-  const finalTotal = roundMoney(grandTotal + roundedAdjustment);
+  const roundedAdjustment = roundMoney(adjustmentInput ? Number(adjustmentInput.value) || 0 : (adjustment ?? 0));
+  const roundedFx = roundMoney(fxInput ? Number(fxInput.value) || 0 : (fxAdjustment ?? 0));
+  const finalTotal = roundMoney(grandTotal + roundedAdjustment + roundedFx);
 
   const [editingAdjustment, setEditingAdjustment] = useState(false);
   const [draftAdjustmentText, setDraftAdjustmentText] = useState(String(roundedAdjustment));
@@ -77,7 +90,21 @@ export function OrderTotals({
         <span className="text-muted">GST{gstRegistered ? ` (${gstRate}%)` : ""}</span>
         <span>{formatMoney(taxTotal)}</span>
       </div>
-      {onAdjustmentSave ? (
+      {adjustmentInput ? (
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-muted">{adjustmentLabel}</span>
+          <input
+            className={cn(fieldClass, numberFieldClass, "w-28 px-2 py-1 text-right")}
+            type="number"
+            step="0.01"
+            placeholder="0.00"
+            aria-label={adjustmentLabel}
+            value={adjustmentInput.value}
+            onWheel={blurOnWheel}
+            onChange={(event) => adjustmentInput.onChange(event.target.value)}
+          />
+        </div>
+      ) : onAdjustmentSave ? (
         editingAdjustment ? (
           <div className="space-y-1">
             <div className="flex items-center justify-between gap-2">
@@ -127,6 +154,28 @@ export function OrderTotals({
         <div className="flex items-center justify-between">
           <span className="text-muted">{adjustmentLabel}</span>
           <span>{formatMoney(roundedAdjustment)}</span>
+        </div>
+      ) : null}
+      {fxInput ? (
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-muted" title="Amount that makes the total match the PDF invoice (+ loss, − gain). Doesn't change product costs.">
+            FX clearing
+          </span>
+          <input
+            className={cn(fieldClass, numberFieldClass, "w-28 px-2 py-1 text-right")}
+            type="number"
+            step="0.01"
+            placeholder="0.00"
+            aria-label="FX clearing"
+            value={fxInput.value}
+            onWheel={blurOnWheel}
+            onChange={(event) => fxInput.onChange(event.target.value)}
+          />
+        </div>
+      ) : roundedFx !== 0 ? (
+        <div className="flex items-center justify-between">
+          <span className="text-muted">FX clearing</span>
+          <span>{formatMoney(roundedFx)}</span>
         </div>
       ) : null}
       <div className="flex items-center justify-between border-t border-border pt-1 font-semibold">
