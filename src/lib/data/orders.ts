@@ -16,7 +16,7 @@ export async function getPurchaseOrders(
   let query = supabase
     .from("purchase_orders")
     .select(
-      "id, po_number, status, order_date, expected_delivery_date, notes, branches(name), suppliers(supplier_name, gst_registered), purchase_order_items(quantity_ordered, unit_price), goods_receipts(invoice_reference, invoice_attachment_url, voided_at)",
+      "id, po_number, status, order_date, sent_date, sent_by, requested_by, expected_delivery_date, notes, branches(name), suppliers(supplier_name, gst_registered), purchase_order_items(id, product_id, quantity_ordered, unit_price, sort_order, products(sku, name, order_name, size_label, brands(name))), goods_receipts(invoice_reference, invoice_attachment_url, voided_at)",
     )
     .eq("company_id", companyId)
     .eq("planning_only", planningOnly)
@@ -132,12 +132,25 @@ export async function getPurchaseOrder(
  * deleted and would hand out a number that's already taken.
  */
 export async function nextPoNumber(supabase: Client, companyId: string) {
+  const highest = await highestOrderSequence(supabase, companyId, false);
+  const year = new Date().getFullYear();
+  return `PO-${year}-${String(highest + 1).padStart(4, "0")}`;
+}
+
+/** Planning drafts saved on /orders run their own sequence: DRAFT-0001, DRAFT-0002, … */
+export async function nextDraftNumber(supabase: Client, companyId: string) {
+  const highest = await highestOrderSequence(supabase, companyId, true);
+  return `DRAFT-${String(highest + 1).padStart(4, "0")}`;
+}
+
+async function highestOrderSequence(supabase: Client, companyId: string, planningOnly: boolean) {
   let highest = 0;
   for (let from = 0; ; from += 1000) {
     const { data, error } = await supabase
       .from("purchase_orders")
       .select("po_number")
       .eq("company_id", companyId)
+      .eq("planning_only", planningOnly)
       .order("id")
       .range(from, from + 999);
     if (error) throw error;
@@ -147,8 +160,7 @@ export async function nextPoNumber(supabase: Client, companyId: string) {
     }
     if (!data || data.length < 1000) break;
   }
-  const year = new Date().getFullYear();
-  return `PO-${year}-${String(highest + 1).padStart(4, "0")}`;
+  return highest;
 }
 
 export function canReceive(status: PoStatus) {

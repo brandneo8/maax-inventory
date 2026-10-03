@@ -3,6 +3,15 @@ import type { createClient } from "@/lib/supabase/server";
 
 type Client = Awaited<ReturnType<typeof createClient>>;
 
+const ID_CHUNK = 200;
+const COMPONENT_PAGE_SIZE = 1000;
+
+function chunkIds<T>(items: T[], size = ID_CHUNK) {
+  const chunks: T[][] = [];
+  for (let index = 0; index < items.length; index += size) chunks.push(items.slice(index, index + size));
+  return chunks;
+}
+
 export type BundlePersistLine = {
   productId: string;
   quantity: number;
@@ -63,8 +72,8 @@ export type BundleComponent = { productId: string; quantity: number };
  * components defined, and should be treated as an empty array. Used to fan
  * usage/receiving of bundle SKUs out to their components — a bundle itself
  * never carries its own stock or cost, see fn_after_goods_receipt_item_insert.
- * Batched across all given product ids in two queries total, regardless of
- * how many of them are bundles.
+ * Batched across all given product ids (200 per query), regardless of how
+ * many of them are bundles.
  */
 export async function getBundleComponentsForProducts(
   supabase: Client,
@@ -74,25 +83,36 @@ export async function getBundleComponentsForProducts(
   const ids = [...new Set(productIds)];
   if (ids.length === 0) return result;
 
-  const { data: products, error: productError } = await supabase
-    .from("products")
-    .select("id, is_set")
-    .in("id", ids);
-  if (productError) throw new Error(productError.message);
-
-  const bundleIds = (products ?? []).filter((product) => product.is_set).map((product) => product.id);
+  // Batched: a long `in (...)` list overflows the request URL, and one
+  // response is capped at 1000 rows.
+  const bundleIds: string[] = [];
+  for (const batch of chunkIds(ids)) {
+    const { data: products, error: productError } = await supabase
+      .from("products")
+      .select("id, is_set")
+      .in("id", batch);
+    if (productError) throw new Error(productError.message);
+    bundleIds.push(...(products ?? []).filter((product) => product.is_set).map((product) => product.id));
+  }
   if (bundleIds.length === 0) return result;
 
-  const { data, error } = await supabase
-    .from("product_components")
-    .select("set_product_id, component_product_id, quantity")
-    .in("set_product_id", bundleIds);
-  if (error) throw new Error(error.message);
-
-  for (const row of data ?? []) {
-    const components = result.get(row.set_product_id) ?? [];
-    components.push({ productId: row.component_product_id, quantity: Number(row.quantity) });
-    result.set(row.set_product_id, components);
+  for (const batch of chunkIds(bundleIds)) {
+    for (let from = 0; ; from += COMPONENT_PAGE_SIZE) {
+      const { data, error } = await supabase
+        .from("product_components")
+        .select("set_product_id, component_product_id, quantity")
+        .in("set_product_id", batch)
+        .order("set_product_id")
+        .order("component_product_id")
+        .range(from, from + COMPONENT_PAGE_SIZE - 1);
+      if (error) throw new Error(error.message);
+      for (const row of data ?? []) {
+        const components = result.get(row.set_product_id) ?? [];
+        components.push({ productId: row.component_product_id, quantity: Number(row.quantity) });
+        result.set(row.set_product_id, components);
+      }
+      if (!data || data.length < COMPONENT_PAGE_SIZE) break;
+    }
   }
   return result;
 }

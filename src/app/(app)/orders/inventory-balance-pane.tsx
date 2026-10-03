@@ -3,7 +3,7 @@
 import { Fragment, useMemo, useState } from "react";
 import { unstable_rethrow } from "next/navigation";
 import type { OrderBalanceProduct } from "@/lib/data/products";
-import { createPurchaseOrder } from "../stock-in/actions";
+import { savePlanningOrders } from "./actions";
 import { catalogTax } from "@/lib/catalog-pricing";
 import { computeOrderTotals } from "../stock-in/order-totals-calc";
 import { productDisplayName } from "@/lib/format";
@@ -46,8 +46,8 @@ export function InventoryBalancePane({
   products: OrderBalanceProduct[];
   suppliers: SupplierOption[];
   gstRate: number;
-  /** Called with the new draft's PO number once it's saved. */
-  onSaved: (poNumber: string) => void;
+  /** Called with the new draft's number once it's saved. */
+  onSaved: (poNumbers: string[]) => void;
 }) {
   const today = useMemo(() => new Date().toISOString().slice(0, 10), []);
   const [search, setSearch] = useState("");
@@ -55,6 +55,7 @@ export function InventoryBalancePane({
   const [tagFilter, setTagFilter] = useState<string[]>([]);
   const [typeFilter, setTypeFilter] = useState<ProductClassification | "">("");
   const [supplierId, setSupplierId] = useState("");
+  const [requestedBy, setRequestedBy] = useState("");
   const [lines, setLines] = useState<DraftLine[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
@@ -62,9 +63,20 @@ export function InventoryBalancePane({
   const productById = useMemo(() => new Map(products.map((product) => [product.id, product])), [products]);
   const gstRegistered = suppliers.find((supplier) => supplier.id === supplierId)?.gstRegistered ?? false;
 
+  // The brands this supplier provides, from the products linked to it — a
+  // guide on the right, and the choices in the Brand filter (every brand if
+  // no supplier is chosen or it has no products linked yet).
+  const supplierBrands = useMemo(() => {
+    if (!supplierId) return [];
+    const linked = products.filter((product) => product.supplierIds.includes(supplierId));
+    return [...new Set(linked.map((product) => product.brand.trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+  }, [products, supplierId]);
   const brandOptions = useMemo(
-    () => [...new Set(products.map((product) => product.brand.trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b)),
-    [products],
+    () =>
+      supplierBrands.length > 0
+        ? supplierBrands
+        : [...new Set(products.map((product) => product.brand.trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b)),
+    [products, supplierBrands],
   );
   const tagOptions = useMemo(
     () => [...new Set(products.flatMap((product) => product.tagNames))].sort((a, b) => a.localeCompare(b)),
@@ -75,6 +87,12 @@ export function InventoryBalancePane({
     [products],
   );
 
+  function changeSupplier(next: string) {
+    setSupplierId(next);
+    // A brand the new supplier doesn't carry would silently hide every row.
+    setBrandFilter("");
+  }
+
   const pickableForSupplier = useMemo(() => {
     if (!supplierId) return products;
     return products.filter((product) => product.supplierIds.length === 0 || product.supplierIds.includes(supplierId));
@@ -82,7 +100,7 @@ export function InventoryBalancePane({
 
   const visibleProducts = useMemo(() => {
     return pickableForSupplier.filter((product) => {
-      if (brandFilter && product.brand !== brandFilter) return false;
+      if (brandFilter && product.brand.trim() !== brandFilter) return false;
       if (tagFilter.length > 0 && !tagFilter.some((tag) => product.tagNames.includes(tag))) return false;
       if (typeFilter && !product.classifications.includes(typeFilter)) return false;
       if (search.trim() && !searchFieldsMatch([product.name, product.orderName, product.sku, product.barcode], search)) {
@@ -140,12 +158,13 @@ export function InventoryBalancePane({
       onHand: product?.onHand ?? 0,
       monthToDateUse: product?.monthToDateUse ?? 0,
       monthlyUse: product?.monthlyUse ?? 0,
+      isBundle: product?.isBundle ?? false,
       classifications: product?.classifications ?? [],
     };
   });
 
   const orderableLines = displayLines.filter((line) => line.quantity > 0);
-  const canSave = Boolean(supplierId) && orderableLines.length > 0 && !pending;
+  const canSave = Boolean(supplierId) && Boolean(requestedBy.trim()) && orderableLines.length > 0 && !pending;
 
   const { subtotal, grandTotal } = computeOrderTotals(
     orderableLines.map((line) => ({ quantity_ordered: line.quantity, unit_price: line.unitCost })),
@@ -157,22 +176,25 @@ export function InventoryBalancePane({
     setPending(true);
     setError(null);
     try {
-      const saved = await createPurchaseOrder({
-        planningOnly: true,
-        branch_id: branchId,
-        supplier_id: supplierId,
-        order_date: today,
-        notes: "",
-        lines: orderableLines.map((line) => ({
-          product_id: line.productId,
-          classification: defaultClassification(line.classifications),
-          quantity_ordered: line.quantity,
-          unit_price: line.unitCost,
-        })),
+      const saved = await savePlanningOrders({
+        branchId,
+        requestedBy,
+        orderDate: today,
+        groups: [
+          {
+            supplierId,
+            lines: orderableLines.map((line) => ({
+              product_id: line.productId,
+              classification: defaultClassification(line.classifications),
+              quantity_ordered: line.quantity,
+              unit_price: line.unitCost,
+            })),
+          },
+        ],
       });
       setLines([]);
       setPending(false);
-      if (saved) onSaved(saved.poNumber);
+      onSaved(saved.map((row) => row.poNumber));
     } catch (err) {
       unstable_rethrow(err);
       setError(err instanceof Error ? err.message : "Could not save the order.");
@@ -278,9 +300,12 @@ export function InventoryBalancePane({
               ) : (
                 groupedProducts.map((group) => (
                   <Fragment key={group.brandSub}>
-                    <tr className="bg-slate-50">
-                      <td className={cn(tdClass, "font-medium text-slate-700")} colSpan={9}>
+                    <tr className="border-t-2 border-sky-300 bg-sky-100 text-sky-950">
+                      <td className={cn(tdClass, "text-sm font-bold uppercase tracking-wide")} colSpan={9}>
                         {group.brandSub}
+                        <span className="ml-2 text-xs font-medium normal-case tracking-normal text-sky-800">
+                          {group.products.length} {group.products.length === 1 ? "product" : "products"}
+                        </span>
                       </td>
                     </tr>
                     {group.products.map((product) => {
@@ -299,8 +324,8 @@ export function InventoryBalancePane({
                           </td>
                           <td className={tdClass}>{product.tagNames.join(", ") || "—"}</td>
                           <td className={tdClass}>{formatQty(product.onHand)}</td>
-                          <td className={tdClass}>{formatQty(product.monthToDateUse)}</td>
-                          <td className={tdClass}>{formatQty(product.monthlyUse)}</td>
+                          <td className={tdClass}>{product.isBundle ? "—" : formatQty(product.monthToDateUse)}</td>
+                          <td className={tdClass}>{product.isBundle ? "—" : formatQty(product.monthlyUse)}</td>
                           <td className={tdClass}>
                             <button
                               type="button"
@@ -327,9 +352,14 @@ export function InventoryBalancePane({
 
       <section className="space-y-3 lg:col-span-2">
         <div className="space-y-3 rounded-xl border border-border bg-card p-4">
-          <label className="space-y-1 text-sm">
+          <label className="block space-y-1 text-sm">
             <span>Supplier</span>
-            <select className={fieldClass} value={supplierId} onChange={(event) => setSupplierId(event.target.value)}>
+            <select
+              id="order-supplier"
+              className={fieldClass}
+              value={supplierId}
+              onChange={(event) => changeSupplier(event.target.value)}
+            >
               <option value="" disabled>
                 Select supplier
               </option>
@@ -340,12 +370,37 @@ export function InventoryBalancePane({
               ))}
             </select>
           </label>
+
           {supplierId ? (
-            <p className="text-xs text-muted">
-              Products tagged to a different supplier are hidden from the list on the left — untagged products
-              still show for everyone.
-            </p>
+            <div className="space-y-2 rounded-lg bg-slate-50 p-3 text-sm">
+              <p className="font-medium">Brands from this supplier</p>
+              {supplierBrands.length > 0 ? (
+                <div className="flex flex-wrap gap-1.5">
+                  {supplierBrands.map((brand) => (
+                    <span
+                      key={brand}
+                      className="rounded-full border border-sky-200 bg-sky-50 px-2.5 py-0.5 text-xs font-medium text-sky-900"
+                    >
+                      {brand}
+                    </span>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-muted">No products are linked to this supplier yet.</p>
+              )}
+            </div>
           ) : null}
+
+          <label className="block space-y-1 text-sm">
+            <span>Requested by</span>
+            <input
+              id="order-requested-by"
+              className={fieldClass}
+              value={requestedBy}
+              onChange={(event) => setRequestedBy(event.target.value)}
+              placeholder="Who is asking for these products"
+            />
+          </label>
         </div>
 
         {error ? (
@@ -395,8 +450,8 @@ export function InventoryBalancePane({
                         <span className="ml-1 text-xs text-muted">({formatMoney(unitCostWithTax)})</span>
                       </td>
                       <td className={tdClass}>{formatQty(line.onHand)}</td>
-                      <td className={tdClass}>{formatQty(line.monthToDateUse)}</td>
-                      <td className={tdClass}>{formatQty(line.monthlyUse)}</td>
+                      <td className={tdClass}>{line.isBundle ? "—" : formatQty(line.monthToDateUse)}</td>
+                      <td className={tdClass}>{line.isBundle ? "—" : formatQty(line.monthlyUse)}</td>
                       <td className={tdClass}>
                         <input
                           className={cn(fieldClass, numberFieldClass, "w-20")}
@@ -445,7 +500,11 @@ export function InventoryBalancePane({
         <button className={btnClass} type="button" disabled={!canSave} onClick={() => void saveOrder()}>
           {pending ? "Saving…" : "Save order"}
         </button>
-        {!supplierId ? <p className="text-xs text-muted">Select a supplier before saving.</p> : null}
+        {!supplierId || !requestedBy.trim() ? (
+          <p className="text-xs text-muted">
+            {!supplierId ? "Select a supplier" : "Enter who is requesting the products"} before saving.
+          </p>
+        ) : null}
       </section>
     </div>
   );

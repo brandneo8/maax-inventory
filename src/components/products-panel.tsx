@@ -2,13 +2,12 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { ChevronLeft, Package, RefreshCw, X } from "lucide-react";
-import { getProductBalancesAction, getProductLedgerAction } from "@/app/(app)/product-panel-actions";
+import { getProductBalancesAction } from "@/app/(app)/product-panel-actions";
+import { ProductLedgerDialog } from "@/components/product-ledger-dialog";
 import type { ProductBalance } from "@/lib/data/products";
-import type { ProductLedgerRow } from "@/lib/data/stock";
-import { formatDateTime, formatQty } from "@/lib/format";
-import { movementTypeLabel } from "@/lib/labels";
+import { formatQty } from "@/lib/format";
 import { searchFieldsMatch } from "@/lib/search";
-import { btnSecondaryClass, fieldClass, tableClass, tdClass, thClass } from "@/lib/ui";
+import { btnSecondaryClass, fieldClass } from "@/lib/ui";
 import { cn } from "@/lib/utils";
 
 /**
@@ -25,9 +24,6 @@ export function ProductsPanel({ branchName }: { branchName: string }) {
   const [query, setQuery] = useState("");
 
   const [ledgerProduct, setLedgerProduct] = useState<ProductBalance | null>(null);
-  const [ledger, setLedger] = useState<ProductLedgerRow[] | null>(null);
-  const [ledgerLoading, setLedgerLoading] = useState(false);
-  const [ledgerError, setLedgerError] = useState<string | null>(null);
 
   async function loadProducts() {
     setLoading(true);
@@ -46,33 +42,20 @@ export function ProductsPanel({ branchName }: { branchName: string }) {
     void loadProducts();
   }
 
-  async function openLedger(product: ProductBalance) {
+  function openLedger(product: ProductBalance) {
     setLedgerProduct(product);
-    setLedger(null);
-    setLedgerError(null);
-    setLedgerLoading(true);
-    try {
-      setLedger(await getProductLedgerAction(product.id));
-    } catch (err) {
-      setLedgerError(err instanceof Error ? err.message : "Could not load this product's ledger.");
-    } finally {
-      setLedgerLoading(false);
-    }
   }
 
   function closeLedger() {
     setLedgerProduct(null);
-    setLedger(null);
-    setLedgerError(null);
   }
 
-  // Escape closes the ledger popup first, then the panel.
+  // Escape closes the panel — unless the ledger popup is open, which
+  // handles Escape itself (closing just the popup).
   useEffect(() => {
-    if (!open) return;
+    if (!open || ledgerProduct) return;
     function onKeyDown(event: KeyboardEvent) {
-      if (event.key !== "Escape") return;
-      if (ledgerProduct) closeLedger();
-      else setOpen(false);
+      if (event.key === "Escape") setOpen(false);
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
@@ -174,7 +157,7 @@ export function ProductsPanel({ branchName }: { branchName: string }) {
                     <button
                       type="button"
                       className="flex w-full items-start justify-between gap-3 px-4 py-2.5 text-left hover:bg-slate-50"
-                      onClick={() => void openLedger(product)}
+                      onClick={() => openLedger(product)}
                     >
                       <span className="min-w-0">
                         <span className="block text-sm">
@@ -205,81 +188,12 @@ export function ProductsPanel({ branchName }: { branchName: string }) {
       ) : null}
 
       {ledgerProduct ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={closeLedger}>
-          <div
-            className="w-full max-w-3xl rounded-xl border border-border bg-white p-4 shadow-lg"
-            onClick={(event) => event.stopPropagation()}
-          >
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <h2 className="text-lg font-semibold">{ledgerProduct.label}</h2>
-                <p className="text-sm text-muted">{ledgerProduct.sku || "—"}</p>
-              </div>
-              <button className={btnSecondaryClass} type="button" onClick={closeLedger}>
-                Close
-              </button>
-            </div>
-
-            <div className="mt-3 max-h-[28rem] overflow-y-auto rounded-lg border border-border">
-              {ledgerLoading ? (
-                <p className="p-4 text-sm text-muted">Loading…</p>
-              ) : ledgerError ? (
-                <p className="p-4 text-sm text-red-800">{ledgerError}</p>
-              ) : ledger && ledger.length === 0 ? (
-                <p className="p-4 text-sm text-muted">No movements recorded for this product yet.</p>
-              ) : (
-                <table className={tableClass}>
-                  <thead>
-                    <tr>
-                      <th className={thClass}>Date</th>
-                      <th className={thClass}>Type</th>
-                      <th className={thClass}>Qty change</th>
-                      <th className={cn(thClass, "whitespace-nowrap")}>Reference</th>
-                      <th className={thClass}>Notes</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {/* The balance the movements below add up to, newest first. */}
-                    <tr className="bg-slate-50">
-                      <td className={cn(tdClass, "font-semibold")} colSpan={2}>
-                        On hand now at {branchName}
-                      </td>
-                      <td className={cn(tdClass, "text-2xl font-semibold tabular-nums")}>
-                        {formatQty(ledgerProduct.onHand)}
-                      </td>
-                      <td className={cn(tdClass, "text-muted")} colSpan={2}>
-                        Total of all the changes below
-                      </td>
-                    </tr>
-                    {(ledger ?? []).map((row) => (
-                      <tr key={row.id}>
-                        <td className={cn(tdClass, "whitespace-nowrap")}>{formatDateTime(row.txnDate)}</td>
-                        <td className={tdClass}>{movementTypeLabel(row.txnType)}</td>
-                        <td className={cn(tdClass, row.quantityChange < 0 ? "text-red-600" : "text-emerald-600")}>
-                          {row.quantityChange > 0 ? `+${formatQty(row.quantityChange)}` : formatQty(row.quantityChange)}
-                        </td>
-                        <td className={cn(tdClass, "whitespace-nowrap")}>
-                          {row.reference ? (
-                            row.reference.href ? (
-                              <a className="text-blue-600 underline" href={row.reference.href}>
-                                {row.reference.label}
-                              </a>
-                            ) : (
-                              row.reference.label
-                            )
-                          ) : (
-                            "—"
-                          )}
-                        </td>
-                        <td className={tdClass}>{row.notes || "—"}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              )}
-            </div>
-          </div>
-        </div>
+        <ProductLedgerDialog
+          key={ledgerProduct.id}
+          product={ledgerProduct}
+          branchName={branchName}
+          onClose={closeLedger}
+        />
       ) : null}
     </>
   );

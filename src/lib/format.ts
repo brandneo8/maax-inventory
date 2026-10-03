@@ -14,6 +14,13 @@ export function singaporeToday() {
   return SINGAPORE_DATE.format(new Date());
 }
 
+/** "YYYY-MM" shifted by whole months, e.g. shiftMonth("2026-01", -1) is "2025-12". */
+export function shiftMonth(month: string, delta: number) {
+  const [year, monthNum] = month.split("-").map(Number);
+  const total = year * 12 + (monthNum - 1) + delta;
+  return `${Math.floor(total / 12)}-${String((total % 12) + 1).padStart(2, "0")}`;
+}
+
 /**
  * Combines a "YYYY-MM-DD" business date with the current time-of-day, so a
  * ledger row's txn_date reflects the date the user chose (e.g. a receipt's

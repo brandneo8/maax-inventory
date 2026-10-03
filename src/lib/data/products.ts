@@ -3,7 +3,7 @@ import { getProducts } from "@/lib/data/lookups";
 import { isOnSalonPosList } from "@/lib/data/pos-rules";
 import { getBundleComponentsForProducts } from "@/lib/data/product-components";
 import { LATE_RECEIPT_SURPLUS_NOTE, SALE_RECLASS_NOTE } from "@/lib/data/usage-ledger";
-import { productDisplayName, productLabel, singaporeToday } from "@/lib/format";
+import { productDisplayName, productLabel, shiftMonth, singaporeToday } from "@/lib/format";
 import { isRetailFacing, type ProductClassification } from "@/lib/labels";
 
 type Client = Awaited<ReturnType<typeof createClient>>;
@@ -77,7 +77,11 @@ export type OrderBalanceProduct = {
   unitCost: number;
   onHand: number;
   monthToDateUse: number;
+  /** Value this month's use took out of stock (see getMonthToDateUsageDetail). */
+  monthToDateCost: number;
   monthlyUse: number;
+  /** Bundles aren't used themselves (their components are), so their usage isn't shown. */
+  isBundle: boolean;
   classifications: ProductClassification[];
   tagNames: string[];
   supplierIds: string[];
@@ -86,7 +90,7 @@ export type OrderBalanceProduct = {
 const PAGE_SIZE = 1000;
 const IN_CHUNK = 200;
 const PICKER_SELECT =
-  "id, sku, barcode, name, order_name, brand_sub, unit_cost_price, rrp, size_label, size_ml, pos_allowed, brands(name), product_tags(tags(name)), product_branch_classifications(branch_id, classification), supplier_products(supplier_id)";
+  "id, sku, barcode, name, order_name, brand_sub, unit_cost_price, rrp, size_label, size_ml, pos_allowed, is_set, brands(name), product_tags(tags(name)), product_branch_classifications(branch_id, classification), supplier_products(supplier_id)";
 
 type PickerRow = {
   id: string;
@@ -100,6 +104,7 @@ type PickerRow = {
   size_label: string | null;
   size_ml: number | string | null;
   pos_allowed: boolean | null;
+  is_set: boolean | null;
   brands: { name: string | null } | { name: string | null }[] | null;
   product_tags: { tags: { name: string | null } | { name: string | null }[] | null }[] | null;
   product_branch_classifications: { branch_id: string; classification: ProductClassification }[] | null;
@@ -529,7 +534,23 @@ export async function getBranchPosProducts(
  * the ledger itself, not usage.
  */
 export async function getMonthToDateUsage(supabase: Client, branchId: string, productIds: string[]) {
-  const usage = new Map<string, number>();
+  const detail = await getMonthToDateUsageDetail(supabase, branchId, productIds);
+  return new Map([...detail].map(([productId, row]) => [productId, row.quantity]));
+}
+
+/**
+ * getMonthToDateUsage's quantity, plus the cost behind it: the value those
+ * same ledger rows took out of stock (each row's quantity × its unit cost,
+ * net — a count surplus or a reclassification puts value back).
+ */
+export async function getMonthToDateUsageDetail(
+  supabase: Client,
+  branchId: string,
+  productIds: string[],
+  /** "YYYY-MM" months to cover, inclusive, instead of this month so far. */
+  range?: { from: string; to: string },
+) {
+  const usage = new Map<string, { quantity: number; cost: number }>();
   if (productIds.length === 0) return usage;
 
   const { data: locations, error: locationError } = await supabase
@@ -540,12 +561,22 @@ export async function getMonthToDateUsage(supabase: Client, branchId: string, pr
   const locationIds = (locations ?? []).map((location) => location.id);
   if (locationIds.length === 0) return usage;
 
-  const monthStart = `${singaporeToday().slice(0, 7)}-01`;
+  const currentMonth = singaporeToday().slice(0, 7);
+  const monthStart = `${range?.from ?? currentMonth}-01`;
+  const monthEnd = `${shiftMonth(range?.to ?? currentMonth, 1)}-01`;
 
-  function accumulate(rows: { product_id: string | null; quantity_change: number | null }[], sign: 1 | -1 = 1) {
+  function accumulate(
+    rows: { product_id: string | null; quantity_change: number | null; unit_cost: number | null }[],
+    sign: 1 | -1 = 1,
+  ) {
     for (const row of rows) {
       if (!row.product_id) continue;
-      usage.set(row.product_id, (usage.get(row.product_id) ?? 0) + sign * Math.abs(Number(row.quantity_change ?? 0)));
+      const quantity = Number(row.quantity_change ?? 0);
+      const current = usage.get(row.product_id) ?? { quantity: 0, cost: 0 };
+      usage.set(row.product_id, {
+        quantity: current.quantity + sign * Math.abs(quantity),
+        cost: current.cost - quantity * Number(row.unit_cost ?? 0),
+      });
     }
   }
 
@@ -557,30 +588,33 @@ export async function getMonthToDateUsage(supabase: Client, branchId: string, pr
     ] = await Promise.all([
       supabase
         .from("inventory_transactions_effective")
-        .select("product_id, quantity_change")
+        .select("product_id, quantity_change, unit_cost")
         .in("product_id", ids)
         .in("store_location_id", locationIds)
         .in("txn_type", ["retail_use", "gwp_use", "inhouse_use"])
-        .gte("txn_date", monthStart),
+        .gte("txn_date", monthStart)
+        .lt("txn_date", monthEnd),
       supabase
         .from("inventory_transactions_effective")
-        .select("product_id, quantity_change")
+        .select("product_id, quantity_change, unit_cost")
         .in("product_id", ids)
         .in("store_location_id", locationIds)
         .eq("txn_type", "count_adjustment")
         .eq("notes", "Count variance")
-        .gte("txn_date", monthStart),
+        .gte("txn_date", monthStart)
+        .lt("txn_date", monthEnd),
       // A shortfall reclassified as a product sale is one unit of usage (the
       // sale), not two — this offsets the shortfall it cancels. A surplus a
       // late receipt explains wasn't usage either, so it cancels likewise.
       supabase
         .from("inventory_transactions_effective")
-        .select("product_id, quantity_change")
+        .select("product_id, quantity_change, unit_cost")
         .in("product_id", ids)
         .in("store_location_id", locationIds)
         .eq("txn_type", "count_adjustment")
         .in("notes", [SALE_RECLASS_NOTE, LATE_RECEIPT_SURPLUS_NOTE])
-        .gte("txn_date", monthStart),
+        .gte("txn_date", monthStart)
+        .lt("txn_date", monthEnd),
     ]);
     if (useError) throw new Error(useError.message || "Could not load month-to-date usage.");
     if (countError) throw new Error(countError.message || "Could not load month-to-date usage.");
@@ -623,14 +657,21 @@ export async function getAverageMonthlyUsage(supabase: Client, branchId: string,
   return usage;
 }
 
-export async function getOrderBalanceProducts(supabase: Client, companyId: string, branchId: string) {
+export async function getOrderBalanceProducts(
+  supabase: Client,
+  companyId: string,
+  branchId: string,
+  /** Months for monthToDateUse/Cost to cover instead of this one (Home's month range filter). */
+  usageRange?: { from: string; to: string },
+) {
   const assignedIds = await getAssignedProductIds(supabase, branchId);
-  const [rows, onHand, monthToDateUse, monthlyUse] = await Promise.all([
+  const [rows, onHand, monthToDateDetail, monthlyUse] = await Promise.all([
     loadPickerRows(supabase, companyId, assignedIds),
     getBranchOnHand(supabase, companyId, branchId, assignedIds),
-    getMonthToDateUsage(supabase, branchId, assignedIds),
+    getMonthToDateUsageDetail(supabase, branchId, assignedIds, usageRange),
     getAverageMonthlyUsage(supabase, branchId, assignedIds),
   ]);
+  const monthToDateUse = new Map([...monthToDateDetail].map(([id, row]) => [id, row.quantity]));
   return rows
     .map((product) => ({
       id: product.id,
@@ -644,12 +685,14 @@ export async function getOrderBalanceProducts(supabase: Client, companyId: strin
       unitCost: Number(product.unit_cost_price),
       onHand: onHand.get(product.id) ?? 0,
       monthToDateUse: monthToDateUse.get(product.id) ?? 0,
+      monthToDateCost: monthToDateDetail.get(product.id)?.cost ?? 0,
       // fn_average_monthly_use only looks at complete prior months, so a
       // product with no usage history before this month reports 0 there
       // even while it's actively being used right now — misleading, since
       // "0 average, but 9 used so far this month" reads as a contradiction.
       // Floor it at MTD use: at least this month counts as one month.
       monthlyUse: Math.max(monthlyUse.get(product.id) ?? 0, monthToDateUse.get(product.id) ?? 0),
+      isBundle: Boolean(product.is_set),
       classifications: classificationsForBranch(product, branchId),
       tagNames: tagNamesFrom(product),
       supplierIds: (product.supplier_products ?? []).map((row) => row.supplier_id),

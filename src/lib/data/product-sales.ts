@@ -1,4 +1,4 @@
-import { productDisplayName } from "@/lib/format";
+import { productDisplayName, shiftMonth, singaporeToday } from "@/lib/format";
 import type { createClient } from "@/lib/supabase/server";
 
 type Client = Awaited<ReturnType<typeof createClient>>;
@@ -259,4 +259,41 @@ export async function getProductSale(supabase: Client, companyId: string, branch
       };
     }),
   };
+}
+
+/**
+ * Sales value per product sold this calendar month (Singapore time) at this
+ * salon, from confirmed product sales, by each line's own sale date. A
+ * bundle's sales stay on the bundle (it's what was sold), even though its
+ * stock use lands on its components.
+ */
+export async function getMonthToDateSalesByProduct(
+  supabase: Client,
+  companyId: string,
+  branchId: string,
+  /** "YYYY-MM" months to cover, inclusive, instead of this month so far. */
+  range?: { from: string; to: string },
+) {
+  const currentMonth = singaporeToday().slice(0, 7);
+  const monthStart = `${range?.from ?? currentMonth}-01`;
+  const monthEnd = `${shiftMonth(range?.to ?? currentMonth, 1)}-01`;
+  const sales = new Map<string, number>();
+  for (let from = 0; ; from += PAGE_SIZE) {
+    const { data, error } = await supabase
+      .from("product_sale_items")
+      .select("id, product_id, line_total, product_sales!inner(company_id, branch_id, status)")
+      .eq("product_sales.company_id", companyId)
+      .eq("product_sales.branch_id", branchId)
+      .eq("product_sales.status", "confirmed")
+      .gte("sale_date", monthStart)
+      .lt("sale_date", monthEnd)
+      .order("id")
+      .range(from, from + PAGE_SIZE - 1);
+    if (error) throw error;
+    for (const row of data ?? []) {
+      sales.set(row.product_id, (sales.get(row.product_id) ?? 0) + Number(row.line_total ?? 0));
+    }
+    if (!data || data.length < PAGE_SIZE) break;
+  }
+  return sales;
 }

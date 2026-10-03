@@ -59,6 +59,17 @@ export default async function OrdersPage() {
             subtotalAmount: subtotal,
             invoiceReferences,
             invoiceAttachmentUrls,
+            brands: [
+              ...new Set(
+                (order.purchase_order_items ?? [])
+                  .map((item) => {
+                    const product = Array.isArray(item.products) ? item.products[0] : item.products;
+                    const brand = Array.isArray(product?.brands) ? product?.brands[0] : product?.brands;
+                    return brand?.name?.trim() ?? "";
+                  })
+                  .filter(Boolean),
+              ),
+            ].sort((left, right) => left.localeCompare(right)),
           };
         })}
       />

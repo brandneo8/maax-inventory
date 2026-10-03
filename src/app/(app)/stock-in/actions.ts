@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { requireBranch } from "@/lib/auth";
 import { assertNoActiveCount } from "@/lib/data/counts";
-import { nextPoNumber } from "@/lib/data/orders";
+import { nextDraftNumber, nextPoNumber } from "@/lib/data/orders";
 import { getDefaultStoreLocationId } from "@/lib/data/lookups";
 import { applyLateReceiptTrueUps, removeLateReceiptTrueUps } from "@/lib/data/receipt-trueups";
 import { businessTxnDate } from "@/lib/format";
@@ -61,6 +61,8 @@ export async function createPurchaseOrder(input: {
    * Stock-in, so it can't be sent or received) and we don't navigate away.
    */
   planningOnly?: boolean;
+  /** Planning drafts: who's asking for these products. */
+  requestedBy?: string;
 }) {
   const { supabase, companyId, user, branch } = await requireBranch();
   if (input.branch_id && input.branch_id !== branch.id) {
@@ -72,7 +74,12 @@ export async function createPurchaseOrder(input: {
     throw new Error("Add at least one order line.");
   }
 
-  const poNumber = await nextPoNumber(supabase, companyId);
+  if (input.planningOnly && !input.requestedBy?.trim()) {
+    throw new Error("Enter who is requesting these products.");
+  }
+  const poNumber = input.planningOnly
+    ? await nextDraftNumber(supabase, companyId)
+    : await nextPoNumber(supabase, companyId);
   const { data: order, error } = await supabase
     .from("purchase_orders")
     .insert({
@@ -85,6 +92,7 @@ export async function createPurchaseOrder(input: {
       notes: input.notes || null,
       created_by: user.email,
       planning_only: Boolean(input.planningOnly),
+      requested_by: input.requestedBy?.trim() || null,
     })
     .select("id")
     .single();
