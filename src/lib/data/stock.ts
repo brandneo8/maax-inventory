@@ -482,8 +482,10 @@ export async function getProductLedger(supabase: Client, companyId: string, bran
   const locationIds = (locations ?? []).map((location) => location.id);
   if (locationIds.length === 0) return [] as ProductLedgerRow[];
 
+  // The effective ledger: a voided count or a removed receipt (and the rows
+  // that cancelled it) cancel out, so the history doesn't show them at all.
   const { data: rows, error } = await supabase
-    .from("inventory_transactions")
+    .from("inventory_transactions_effective")
     .select("id, txn_type, quantity_change, txn_date, notes, reference_table, reference_id")
     .eq("company_id", companyId)
     .eq("product_id", productId)
@@ -565,10 +567,10 @@ export async function getProductLedger(supabase: Client, companyId: string, bran
     }
 
     return {
-      id: row.id,
-      txnType: row.txn_type,
+      id: row.id ?? "",
+      txnType: row.txn_type ?? "",
       quantityChange: Number(row.quantity_change),
-      txnDate: row.txn_date,
+      txnDate: row.txn_date ?? "",
       notes: row.notes,
       reference,
     };

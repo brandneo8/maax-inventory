@@ -11,7 +11,6 @@ import {
   blurOnWheel,
   btnClass,
   btnSecondaryClass,
-  checkboxClass,
   fieldClass,
   numberFieldClass,
   tableClass,
@@ -169,7 +168,6 @@ export function NewProductSaleForm({
     })),
   );
   const [countRows, setCountRows] = useState<CountShortfall[] | null>(null);
-  const [onlyThisSale, setOnlyThisSale] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState<"draft" | "confirm" | null>(null);
 
@@ -294,11 +292,10 @@ export function NewProductSaleForm({
   }
 
   const productsOnSale = new Set(lines.map((line) => line.productId));
+  // Only reductions for products this sale actually sells — nothing else can be applied.
   const visibleCountRows = (countRows ?? [])
-    .filter((row) => !onlyThisSale || productsOnSale.has(row.productId))
+    .filter((row) => productsOnSale.has(row.productId))
     .sort((left, right) => {
-      const onSale = Number(productsOnSale.has(right.productId)) - Number(productsOnSale.has(left.productId));
-      if (onSale !== 0) return onSale;
       const byName = left.productLabel.localeCompare(right.productLabel, undefined, { sensitivity: "base" });
       if (byName !== 0) return byName;
       return (right.countDate ?? "").localeCompare(left.countDate ?? "");
@@ -537,20 +534,11 @@ export function NewProductSaleForm({
           <div>
             <h2 className="text-lg font-semibold">Inventory count reductions</h2>
             <p className="mt-1 text-sm text-muted">
-              Products an inventory count found short at this salon. Apply this sale to a reduction when the missing
+              Products on this sale that an inventory count found short at this salon. Apply this sale to a reduction when the missing
               units were really sold — they move from inventory use to product sales, and aren&apos;t deducted from
               stock a second time.
             </p>
           </div>
-          <label className="flex items-center gap-2 text-sm">
-            <input
-              type="checkbox"
-              className={checkboxClass}
-              checked={onlyThisSale}
-              onChange={(event) => setOnlyThisSale(event.target.checked)}
-            />
-            Only products on this sale
-          </label>
         </div>
 
         <div className="max-h-[32rem] overflow-auto rounded-xl border border-border bg-card">
@@ -559,6 +547,7 @@ export function NewProductSaleForm({
               <tr>
                 <th className={cn(thClass, stickyHead)}>Product</th>
                 <th className={cn(thClass, stickyHead)}>Count</th>
+                <th className={cn(thClass, stickyHead)}>Sale date</th>
                 <th className={cn(thClass, stickyHead, "text-right")}>Total reduction</th>
                 <th className={cn(thClass, stickyHead, "text-right")}>Balance to clear</th>
                 <th className={cn(thClass, stickyHead, "text-right")}>In this sale</th>
@@ -569,16 +558,16 @@ export function NewProductSaleForm({
             <tbody>
               {countRows === null ? (
                 <tr>
-                  <td className={tdClass} colSpan={7}>
+                  <td className={tdClass} colSpan={8}>
                     Loading inventory count reductions…
                   </td>
                 </tr>
               ) : visibleCountRows.length === 0 ? (
                 <tr>
-                  <td className={cn(tdClass, "text-muted")} colSpan={7}>
-                    {onlyThisSale
-                      ? "None of the products on this sale have a count reduction left to clear."
-                      : "No inventory count reductions left to clear at this salon."}
+                  <td className={cn(tdClass, "text-muted")} colSpan={8}>
+                    {lines.length === 0
+                      ? "Add products to this sale to see their count reductions."
+                      : "None of the products on this sale have a count reduction left to clear."}
                   </td>
                 </tr>
               ) : (
@@ -589,8 +578,13 @@ export function NewProductSaleForm({
                   const isBundle = productById.get(row.productId)?.isBundle;
                   const canApply =
                     applied === 0 && !isBundle && row.remaining > 0 && unappliedLines(row.productId).length > 0;
+                  // When this sale sold the product — set against the count's
+                  // date, it shows whether the count could have seen the sale.
+                  const saleDates = [
+                    ...new Set(lines.filter((line) => line.productId === row.productId).map((line) => line.saleDate)),
+                  ].sort();
                   return (
-                    <tr key={row.txnId} className={cn(applied > 0 && "bg-sky-50/60", inSale === 0 && "text-muted")}>
+                    <tr key={row.txnId} className={cn(applied > 0 && "bg-sky-50/60")}>
                       <td className={tdClass}>
                         {row.productLabel}
                         {row.sku ? <span className="block text-xs text-muted">{row.sku}</span> : null}
@@ -608,6 +602,23 @@ export function NewProductSaleForm({
                         ) : (
                           "Count"
                         )}
+                      </td>
+                      <td className={cn(tdClass, "whitespace-nowrap")}>
+                        {saleDates.length === 0
+                          ? "—"
+                          : saleDates.map((date) => {
+                              const afterCount = Boolean(row.countDate && date > row.countDate);
+                              return (
+                                <span
+                                  key={date}
+                                  className={cn("block", afterCount && "text-amber-700")}
+                                  title={afterCount ? "Sold after this count — the count couldn't have seen it." : undefined}
+                                >
+                                  {formatDate(date)}
+                                  {afterCount ? <span className="block text-xs">after the count</span> : null}
+                                </span>
+                              );
+                            })}
                       </td>
                       <td className={cn(tdClass, "text-right text-red-600")}>−{formatQty(row.shortfall)}</td>
                       <td className={cn(tdClass, "text-right")}>

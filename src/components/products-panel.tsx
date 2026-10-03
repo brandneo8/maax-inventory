@@ -213,9 +213,7 @@ export function ProductsPanel({ branchName }: { branchName: string }) {
             <div className="flex items-start justify-between gap-3">
               <div>
                 <h2 className="text-lg font-semibold">{ledgerProduct.label}</h2>
-                <p className="text-sm text-muted">
-                  {ledgerProduct.sku || "—"} · On hand {formatQty(ledgerProduct.onHand)}
-                </p>
+                <p className="text-sm text-muted">{ledgerProduct.sku || "—"}</p>
               </div>
               <button className={btnSecondaryClass} type="button" onClick={closeLedger}>
                 Close
@@ -241,6 +239,18 @@ export function ProductsPanel({ branchName }: { branchName: string }) {
                     </tr>
                   </thead>
                   <tbody>
+                    {/* The balance the movements below add up to, newest first. */}
+                    <tr className="bg-slate-50">
+                      <td className={cn(tdClass, "font-semibold")} colSpan={2}>
+                        On hand now at {branchName}
+                      </td>
+                      <td className={cn(tdClass, "text-2xl font-semibold tabular-nums")}>
+                        {formatQty(ledgerProduct.onHand)}
+                      </td>
+                      <td className={cn(tdClass, "text-muted")} colSpan={2}>
+                        Total of all the changes below
+                      </td>
+                    </tr>
                     {(ledger ?? []).map((row) => (
                       <tr key={row.id}>
                         <td className={cn(tdClass, "whitespace-nowrap")}>{formatDateTime(row.txnDate)}</td>
