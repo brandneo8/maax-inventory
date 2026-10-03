@@ -9,7 +9,9 @@ import { getDefaultStoreLocationId } from "@/lib/data/lookups";
 import { insertUsageLedgerRows } from "@/lib/data/usage-ledger";
 import { createAdminClient } from "@/lib/supabase/admin";
 
-export type StockOutType = "retail" | "inhouse";
+// Stock-out is in-house use only — retail sales are recorded in /product-sales.
+type StockOutType = "retail" | "inhouse";
+const STOCK_OUT_TYPE: StockOutType = "inhouse";
 
 function revalidateStockOut(reportId?: string) {
   revalidatePath("/stock-out");
@@ -45,8 +47,8 @@ async function uploadStockOutAttachment(companyId: string, reportId: string, fil
 }
 
 function assertLineDateWithinReport(lineDate: string, reportDate: string) {
-  if (!lineDate) throw new Error("Each line needs a use date.");
-  if (lineDate > reportDate) throw new Error("A line's use date cannot be after the stock-out date.");
+  if (!lineDate) throw new Error("Each line needs an open date.");
+  if (lineDate > reportDate) throw new Error("A line's open date cannot be after the stock-out date.");
 }
 
 // Writes every line of a stock-out report in one pass: a single
@@ -132,7 +134,6 @@ async function clearReportLines(supabase: Client, reportId: string) {
 export async function recordStockOutReport(
   input: {
     branch_id: string;
-    type: StockOutType;
     entry_date: string;
     notes: string;
     lines: { product_id: string; quantity_used: number; entry_date: string }[];
@@ -143,9 +144,6 @@ export async function recordStockOutReport(
   await assertNoActiveCount(supabase, companyId, branch.id, "record stock-out");
   if (input.branch_id && input.branch_id !== branch.id) {
     throw new Error("The form is for a different salon. Switch branch and try again.");
-  }
-  if (input.type !== "retail" && input.type !== "inhouse") {
-    throw new Error("Select a type before adding lines.");
   }
   const lines = input.lines.filter((line) => line.product_id && line.quantity_used > 0);
   if (lines.length === 0) {
@@ -162,7 +160,7 @@ export async function recordStockOutReport(
     .insert({
       company_id: companyId,
       branch_id: branch.id,
-      channel: input.type,
+      channel: STOCK_OUT_TYPE,
       entry_date: entryDate,
       notes,
       keyed_in_by: user.email,
@@ -187,7 +185,7 @@ export async function recordStockOutReport(
     userEmail: user.email,
     reportId: report.id,
     notes,
-    type: input.type,
+    type: STOCK_OUT_TYPE,
     lines: lines.map((line) => ({
       productId: line.product_id,
       quantityUsed: line.quantity_used,
@@ -202,7 +200,6 @@ export async function recordStockOutReport(
 export async function updateStockOutReport(
   input: {
     report_id: string;
-    type: StockOutType;
     entry_date: string;
     notes: string;
     lines: { product_id: string; quantity_used: number; entry_date: string }[];
@@ -211,9 +208,6 @@ export async function updateStockOutReport(
 ) {
   const { supabase, companyId, user, branch } = await requireBranch();
   await assertNoActiveCount(supabase, companyId, branch.id, "record stock-out");
-  if (input.type !== "retail" && input.type !== "inhouse") {
-    throw new Error("Select a type before adding lines.");
-  }
   const lines = input.lines.filter((line) => line.product_id && line.quantity_used > 0);
   if (lines.length === 0) {
     throw new Error("Add at least one line with a product and quantity.");
@@ -236,7 +230,7 @@ export async function updateStockOutReport(
   await clearReportLines(supabase, report.id);
 
   const patch: { channel: StockOutType; entry_date: string; notes: string | null; attachment_url?: string } = {
-    channel: input.type,
+    channel: STOCK_OUT_TYPE,
     entry_date: entryDate,
     notes,
   };
@@ -254,7 +248,7 @@ export async function updateStockOutReport(
     userEmail: user.email,
     reportId: report.id,
     notes,
-    type: input.type,
+    type: STOCK_OUT_TYPE,
     lines: lines.map((line) => ({
       productId: line.product_id,
       quantityUsed: line.quantity_used,

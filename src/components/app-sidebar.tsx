@@ -6,19 +6,13 @@ import {
   BarChart3,
   ClipboardList,
   Home,
-  PackageMinus,
-  PackagePlus,
   Receipt,
   ShieldCheck,
-  ShoppingBag,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const links = [
   { href: "/home", label: "Home", icon: Home },
-  { href: "/orders", label: "Orders", icon: ShoppingBag },
-  { href: "/stock-in", label: "Stock-in", icon: PackagePlus },
-  { href: "/stock-out", label: "Stock-out", icon: PackageMinus },
   { href: "/product-sales", label: "Product sales", icon: Receipt },
   { href: "/counts", label: "Counts", icon: ClipboardList },
   { href: "/reports", label: "Reports", icon: BarChart3 },
@@ -27,7 +21,11 @@ const links = [
 
 function isActive(href: string, pathname: string) {
   if (href === "/home") {
-    return pathname === "/home" || pathname === "/import" || pathname === "/export";
+    // Orders, stock-in and stock-out are reached from Home's cards, so Home
+    // stays highlighted while working in them.
+    return ["/home", "/import", "/export", "/orders", "/stock-in", "/stock-out"].some(
+      (path) => pathname === path || (path !== "/home" && pathname.startsWith(`${path}/`)),
+    );
   }
   return pathname === href || pathname.startsWith(`${href}/`);
 }

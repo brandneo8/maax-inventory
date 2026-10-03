@@ -21,7 +21,8 @@ export default async function StockOutPage() {
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Stock-out</h1>
           <p className="mt-1 text-sm text-muted">
-            Working in {branch.displayName}. Deduct product used in the salon from stock.
+            Working in {branch.displayName}. Deduct product used in the salon (in-house use) from stock. Retail
+            sales go in Product sales.
           </p>
         </div>
         <Link className={btnClass} href="/stock-out/new">

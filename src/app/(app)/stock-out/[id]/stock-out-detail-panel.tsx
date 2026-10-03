@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useRef, useState } from "react";
-import { updateStockOutReport, type StockOutType } from "../actions";
+import { updateStockOutReport } from "../actions";
 import { formatDate } from "@/lib/format";
 import { btnClass, btnSecondaryClass, fieldClass, tableClass, tdClass, thClass } from "@/lib/ui";
 import { StockOutLinesEditor, StockOutQuantityDisplay, type StockOutLine } from "../stock-out-lines-editor";
@@ -11,45 +11,31 @@ import { DeleteStockOutButton } from "../delete-stock-out-button";
 import { cn } from "@/lib/utils";
 import type { Option } from "@/components/product-picker";
 
-const TYPE_OPTIONS: { value: StockOutType; label: string; description: string }[] = [
-  { value: "retail", label: "Retail use", description: "Products tagged Retail or GWP for this salon." },
-  { value: "inhouse", label: "Inhouse use", description: "Products tagged In-house for this salon." },
-];
-
-function typeLabel(value: StockOutType) {
-  return TYPE_OPTIONS.find((option) => option.value === value)?.label ?? value;
-}
-
 type DisplayLine = { id: string; productId: string; label: string; quantityUsed: number; entryDate: string };
 
 export function StockOutDetailPanel({
   reportId,
   branchName,
-  type: initialType,
   entryDate: initialEntryDate,
   notes: initialNotes,
   keyedInBy,
   createdAt,
   attachmentUrl,
   lines,
-  retailProducts,
   inhouseProducts,
 }: {
   reportId: string;
   branchName: string;
-  type: StockOutType;
   entryDate: string;
   notes: string | null;
   keyedInBy: string | null;
   createdAt: string;
   attachmentUrl: string | null;
   lines: DisplayLine[];
-  retailProducts: Option[];
   inhouseProducts: Option[];
 }) {
   const router = useRouter();
   const [editing, setEditing] = useState(false);
-  const [type, setType] = useState<StockOutType>(initialType);
   const [entryDate, setEntryDate] = useState(initialEntryDate);
   const [notes, setNotes] = useState(initialNotes ?? "");
   const [editLines, setEditLines] = useState<StockOutLine[]>([]);
@@ -57,10 +43,7 @@ export function StockOutDetailPanel({
   const [pending, setPending] = useState(false);
   const attachmentInputRef = useRef<HTMLInputElement>(null);
 
-  const products = type === "retail" ? retailProducts : inhouseProducts;
-
   function startEditing() {
-    setType(initialType);
     setEntryDate(initialEntryDate);
     setNotes(initialNotes ?? "");
     setEditLines(
@@ -76,12 +59,6 @@ export function StockOutDetailPanel({
     setEditing(true);
   }
 
-  function selectType(next: StockOutType) {
-    if (next === type) return;
-    setType(next);
-    setEditLines([]);
-  }
-
   async function save() {
     setPending(true);
     setError(null);
@@ -90,7 +67,6 @@ export function StockOutDetailPanel({
       await updateStockOutReport(
         {
           report_id: reportId,
-          type,
           entry_date: entryDate,
           notes,
           lines: editLines.map((line) => ({
@@ -119,7 +95,7 @@ export function StockOutDetailPanel({
         <div className="mt-2 flex flex-wrap items-start justify-between gap-4">
           <div>
             <h1 className="text-2xl font-semibold tracking-tight">
-              {editing ? "Edit stock-out" : `${typeLabel(initialType)} · ${formatDate(initialEntryDate)}`}
+              {editing ? "Edit stock-out" : `Inhouse use · ${formatDate(initialEntryDate)}`}
             </h1>
             <p className="mt-1 text-sm text-muted">Working in {branchName}.</p>
           </div>
@@ -161,28 +137,6 @@ export function StockOutDetailPanel({
 
       {editing ? (
         <>
-          <div className="space-y-2">
-            <span className="text-sm font-medium">Type</span>
-            <div className="grid gap-3 sm:grid-cols-2">
-              {TYPE_OPTIONS.map((option) => (
-                <button
-                  key={option.value}
-                  type="button"
-                  onClick={() => selectType(option.value)}
-                  className={cn(
-                    "rounded-xl border p-4 text-left",
-                    type === option.value
-                      ? "border-sky-400 bg-sky-50"
-                      : "border-border bg-card hover:bg-slate-50",
-                  )}
-                >
-                  <p className="font-medium">{option.label}</p>
-                  <p className="mt-1 text-sm text-muted">{option.description}</p>
-                </button>
-              ))}
-            </div>
-          </div>
-
           <div className="grid gap-3 rounded-xl border border-border bg-card p-4 md:grid-cols-3">
             <label className="space-y-1 text-sm">
               <span>Entry date</span>
@@ -211,7 +165,7 @@ export function StockOutDetailPanel({
 
           <div className="space-y-3">
             <h2 className="text-lg font-semibold">Lines</h2>
-            <StockOutLinesEditor products={products} reportDate={entryDate} lines={editLines} onLinesChange={setEditLines} />
+            <StockOutLinesEditor products={inhouseProducts} reportDate={entryDate} lines={editLines} onLinesChange={setEditLines} />
           </div>
         </>
       ) : (
@@ -237,7 +191,7 @@ export function StockOutDetailPanel({
                 <thead>
                   <tr>
                     <th className={thClass}>Product</th>
-                    <th className={thClass}>Use date</th>
+                    <th className={thClass}>Open date</th>
                     <th className={cn(thClass, "w-1/5 text-right")}>Quantity used</th>
                   </tr>
                 </thead>

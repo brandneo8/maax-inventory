@@ -49,7 +49,7 @@ function AddStockOutLine({
         <ProductPicker products={products} value={productId} onSelect={(product) => setProductId(product.id)} />
       </label>
       <label className="w-40 space-y-1 text-sm">
-        <span>Use date</span>
+        <span>Open date</span>
         <input
           className={fieldClass}
           type="date"
@@ -136,7 +136,7 @@ export function StockOutLinesEditor({
               <tr>
                 <th className={thClass}>Product</th>
                 <th className={thClass}>Tags</th>
-                <th className={thClass}>Use date</th>
+                <th className={thClass}>Open date</th>
                 <th className={cn(thClass, "w-1/5 text-right")}>Quantity used</th>
                 <th className={thClass} />
               </tr>

@@ -1384,6 +1384,7 @@ export type Database = {
           id: string
           notes: string | null
           order_date: string | null
+          planning_only: boolean
           po_number: string
           status: Database["public"]["Enums"]["po_status"]
           supplier_id: string
@@ -1398,6 +1399,7 @@ export type Database = {
           id?: string
           notes?: string | null
           order_date?: string | null
+          planning_only?: boolean
           po_number: string
           status?: Database["public"]["Enums"]["po_status"]
           supplier_id: string
@@ -1412,6 +1414,7 @@ export type Database = {
           id?: string
           notes?: string | null
           order_date?: string | null
+          planning_only?: boolean
           po_number?: string
           status?: Database["public"]["Enums"]["po_status"]
           supplier_id?: string

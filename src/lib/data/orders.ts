@@ -3,13 +3,23 @@ import type { PoStatus } from "@/lib/labels";
 
 type Client = Awaited<ReturnType<typeof createClient>>;
 
-export async function getPurchaseOrders(supabase: Client, companyId: string, branchId?: string) {
+/**
+ * planningOnly picks the side: true for drafts saved on the /orders planning
+ * page, false for everything Stock-in works with.
+ */
+export async function getPurchaseOrders(
+  supabase: Client,
+  companyId: string,
+  branchId: string | undefined,
+  planningOnly: boolean,
+) {
   let query = supabase
     .from("purchase_orders")
     .select(
       "id, po_number, status, order_date, expected_delivery_date, notes, branches(name), suppliers(supplier_name, gst_registered), purchase_order_items(quantity_ordered, unit_price), goods_receipts(invoice_reference, invoice_attachment_url, voided_at)",
     )
     .eq("company_id", companyId)
+    .eq("planning_only", planningOnly)
     .order("created_at", { ascending: false });
 
   if (branchId) {
@@ -66,7 +76,9 @@ export async function getPurchaseOrder(
       "id, po_number, status, order_date, expected_delivery_date, notes, created_by, branch_id, supplier_id, fx_adjustment, branches(name), suppliers(supplier_name, gst_registered)",
     )
     .eq("company_id", companyId)
-    .eq("id", id);
+    .eq("id", id)
+    // Planning drafts live on /orders only — Stock-in can't open them.
+    .eq("planning_only", false);
 
   if (branchId) {
     query = query.eq("branch_id", branchId);

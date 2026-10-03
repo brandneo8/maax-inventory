@@ -40,11 +40,14 @@ export function InventoryBalancePane({
   products,
   suppliers,
   gstRate,
+  onSaved,
 }: {
   branchId: string;
   products: OrderBalanceProduct[];
   suppliers: SupplierOption[];
   gstRate: number;
+  /** Called with the new draft's PO number once it's saved. */
+  onSaved: (poNumber: string) => void;
 }) {
   const today = useMemo(() => new Date().toISOString().slice(0, 10), []);
   const [search, setSearch] = useState("");
@@ -154,7 +157,8 @@ export function InventoryBalancePane({
     setPending(true);
     setError(null);
     try {
-      await createPurchaseOrder({
+      const saved = await createPurchaseOrder({
+        planningOnly: true,
         branch_id: branchId,
         supplier_id: supplierId,
         order_date: today,
@@ -166,6 +170,9 @@ export function InventoryBalancePane({
           unit_price: line.unitCost,
         })),
       });
+      setLines([]);
+      setPending(false);
+      if (saved) onSaved(saved.poNumber);
     } catch (err) {
       unstable_rethrow(err);
       setError(err instanceof Error ? err.message : "Could not save the order.");

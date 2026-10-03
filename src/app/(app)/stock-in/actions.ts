@@ -56,6 +56,11 @@ export async function createPurchaseOrder(input: {
   order_date: string;
   notes: string;
   lines: OrderLineInput[];
+  /**
+   * Saved from the /orders planning page: the draft stays there (kept out of
+   * Stock-in, so it can't be sent or received) and we don't navigate away.
+   */
+  planningOnly?: boolean;
 }) {
   const { supabase, companyId, user, branch } = await requireBranch();
   if (input.branch_id && input.branch_id !== branch.id) {
@@ -79,6 +84,7 @@ export async function createPurchaseOrder(input: {
       order_date: input.order_date || null,
       notes: input.notes || null,
       created_by: user.email,
+      planning_only: Boolean(input.planningOnly),
     })
     .select("id")
     .single();
@@ -100,6 +106,7 @@ export async function createPurchaseOrder(input: {
 
   revalidatePurchaseOrderPaths(order.id);
   revalidatePath("/");
+  if (input.planningOnly) return { poNumber };
   redirect(`/stock-in/${order.id}`);
 }
 
@@ -204,6 +211,7 @@ export async function receivePurchaseOrder(
     .eq("id", input.purchase_order_id)
     .eq("company_id", companyId)
     .eq("branch_id", branch.id)
+    .eq("planning_only", false)
     .single();
 
   if (orderError || !order) throw orderError ?? new Error("Purchase order not found.");
@@ -301,6 +309,7 @@ export async function addFreeGoodsReceipt(input: {
     .eq("id", input.purchase_order_id)
     .eq("company_id", companyId)
     .eq("branch_id", branch.id)
+    .eq("planning_only", false)
     .single();
   if (orderError || !order) throw orderError ?? new Error("Purchase order not found.");
   if (order.status === "draft" || order.status === "cancelled") {

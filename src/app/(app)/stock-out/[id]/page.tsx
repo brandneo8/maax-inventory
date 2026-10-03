@@ -16,7 +16,7 @@ export default async function StockOutDetailPage({
 
   if (!report) notFound();
 
-  const { retail, inhouse } = await getBranchStockOutProducts(supabase, companyId, branch.id);
+  const { inhouse } = await getBranchStockOutProducts(supabase, companyId, branch.id);
 
   const lines = report.lines.map((line) => {
     const product = Array.isArray(line.products) ? line.products[0] : line.products;
@@ -33,14 +33,12 @@ export default async function StockOutDetailPage({
     <StockOutDetailPanel
       reportId={report.id}
       branchName={branch.displayName}
-      type={report.channel === "inhouse" ? "inhouse" : "retail"}
       entryDate={report.entry_date}
       notes={report.notes}
       keyedInBy={report.keyed_in_by}
       createdAt={report.created_at}
       attachmentUrl={report.attachment_url}
       lines={lines}
-      retailProducts={retail}
       inhouseProducts={inhouse}
     />
   );

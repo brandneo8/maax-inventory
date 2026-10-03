@@ -9,7 +9,7 @@ import { OrdersTable } from "./orders-table";
 export default async function OrdersPage() {
   const { supabase, companyId, branch } = await requireBranch();
   const [orders, taxRates] = await Promise.all([
-    getPurchaseOrders(supabase, companyId, branch.id),
+    getPurchaseOrders(supabase, companyId, branch.id, false),
     getTaxRates(supabase, companyId),
   ]);
   const gstRate = Number(taxRates.find((rate) => rate.is_default)?.rate_percentage ?? 9);
