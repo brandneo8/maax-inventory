@@ -179,13 +179,40 @@ export async function getMonthlyInventoryReport(
   const locationIds = (locations ?? []).map((location) => location.id);
   if (locationIds.length === 0) return empty;
 
-  const { data: rows, error } = await supabase
-    .from("inventory_transactions")
-    .select("product_id, txn_type, quantity_change, unit_cost, notes, txn_date")
-    .eq("company_id", companyId)
-    .in("store_location_id", locationIds)
-    .lt("txn_date", monthStartIso(nextMonth(toMonth)));
-  if (error) throw error;
+  // Voided counts are left out (see inventory_transactions_effective), and
+  // the read is paged — a single request stops at the API's row cap, which
+  // a salon's full history passes quickly.
+  const rows: {
+    product_id: string;
+    txn_type: string;
+    quantity_change: number;
+    unit_cost: number | null;
+    notes: string | null;
+    txn_date: string;
+  }[] = [];
+  for (let from = 0; ; from += 1000) {
+    const { data, error } = await supabase
+      .from("inventory_transactions_effective")
+      .select("id, product_id, txn_type, quantity_change, unit_cost, notes, txn_date")
+      .eq("company_id", companyId)
+      .in("store_location_id", locationIds)
+      .lt("txn_date", monthStartIso(nextMonth(toMonth)))
+      .order("id")
+      .range(from, from + 999);
+    if (error) throw error;
+    for (const row of data ?? []) {
+      if (!row.product_id || !row.txn_type || !row.txn_date) continue;
+      rows.push({
+        product_id: row.product_id,
+        txn_type: row.txn_type,
+        quantity_change: Number(row.quantity_change),
+        unit_cost: row.unit_cost,
+        notes: row.notes,
+        txn_date: row.txn_date,
+      });
+    }
+    if (!data || data.length < 1000) break;
+  }
 
   const fromBoundary = monthStartIso(fromMonth);
   const orderedByMonth = new Map<string, number>();

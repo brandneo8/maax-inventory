@@ -1020,6 +1020,13 @@ export type Database = {
             referencedColumns: ["id"]
           },
           {
+            foreignKeyName: "product_sale_items_linked_count_txn_id_fkey"
+            columns: ["linked_count_txn_id"]
+            isOneToOne: false
+            referencedRelation: "inventory_transactions_effective"
+            referencedColumns: ["id"]
+          },
+          {
             foreignKeyName: "product_sale_items_product_id_fkey"
             columns: ["product_id"]
             isOneToOne: false
@@ -1809,6 +1816,89 @@ export type Database = {
           store_location_id: string | null
         }
         Relationships: [
+          {
+            foreignKeyName: "inventory_transactions_product_id_fkey"
+            columns: ["product_id"]
+            isOneToOne: false
+            referencedRelation: "low_stock_alerts"
+            referencedColumns: ["product_id"]
+          },
+          {
+            foreignKeyName: "inventory_transactions_product_id_fkey"
+            columns: ["product_id"]
+            isOneToOne: false
+            referencedRelation: "products"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "inventory_transactions_store_location_id_fkey"
+            columns: ["store_location_id"]
+            isOneToOne: false
+            referencedRelation: "store_locations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      inventory_transactions_effective: {
+        Row: {
+          classification:
+            | Database["public"]["Enums"]["product_classification"]
+            | null
+          company_id: string | null
+          created_by: string | null
+          id: string | null
+          notes: string | null
+          product_id: string | null
+          quantity_change: number | null
+          reference_id: string | null
+          reference_table: string | null
+          store_location_id: string | null
+          txn_date: string | null
+          txn_type: Database["public"]["Enums"]["inventory_txn_type"] | null
+          unit_cost: number | null
+        }
+        Insert: {
+          classification?:
+            | Database["public"]["Enums"]["product_classification"]
+            | null
+          company_id?: string | null
+          created_by?: string | null
+          id?: string | null
+          notes?: string | null
+          product_id?: string | null
+          quantity_change?: number | null
+          reference_id?: string | null
+          reference_table?: string | null
+          store_location_id?: string | null
+          txn_date?: string | null
+          txn_type?: Database["public"]["Enums"]["inventory_txn_type"] | null
+          unit_cost?: number | null
+        }
+        Update: {
+          classification?:
+            | Database["public"]["Enums"]["product_classification"]
+            | null
+          company_id?: string | null
+          created_by?: string | null
+          id?: string | null
+          notes?: string | null
+          product_id?: string | null
+          quantity_change?: number | null
+          reference_id?: string | null
+          reference_table?: string | null
+          store_location_id?: string | null
+          txn_date?: string | null
+          txn_type?: Database["public"]["Enums"]["inventory_txn_type"] | null
+          unit_cost?: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "inventory_transactions_company_id_fkey"
+            columns: ["company_id"]
+            isOneToOne: false
+            referencedRelation: "companies"
+            referencedColumns: ["id"]
+          },
           {
             foreignKeyName: "inventory_transactions_product_id_fkey"
             columns: ["product_id"]

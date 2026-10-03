@@ -506,9 +506,10 @@ export async function getMonthToDateUsage(supabase: Client, branchId: string, pr
 
   const monthStart = `${singaporeToday().slice(0, 7)}-01`;
 
-  function accumulate(rows: { product_id: string; quantity_change: number }[], sign: 1 | -1 = 1) {
+  function accumulate(rows: { product_id: string | null; quantity_change: number | null }[], sign: 1 | -1 = 1) {
     for (const row of rows) {
-      usage.set(row.product_id, (usage.get(row.product_id) ?? 0) + sign * Math.abs(Number(row.quantity_change)));
+      if (!row.product_id) continue;
+      usage.set(row.product_id, (usage.get(row.product_id) ?? 0) + sign * Math.abs(Number(row.quantity_change ?? 0)));
     }
   }
 
@@ -519,14 +520,14 @@ export async function getMonthToDateUsage(supabase: Client, branchId: string, pr
       { data: reclassRows, error: reclassError },
     ] = await Promise.all([
       supabase
-        .from("inventory_transactions")
+        .from("inventory_transactions_effective")
         .select("product_id, quantity_change")
         .in("product_id", ids)
         .in("store_location_id", locationIds)
         .in("txn_type", ["retail_use", "gwp_use", "inhouse_use"])
         .gte("txn_date", monthStart),
       supabase
-        .from("inventory_transactions")
+        .from("inventory_transactions_effective")
         .select("product_id, quantity_change")
         .in("product_id", ids)
         .in("store_location_id", locationIds)
@@ -536,7 +537,7 @@ export async function getMonthToDateUsage(supabase: Client, branchId: string, pr
       // A shortfall reclassified as a product sale is one unit of usage (the
       // sale), not two — this offsets the shortfall it cancels.
       supabase
-        .from("inventory_transactions")
+        .from("inventory_transactions_effective")
         .select("product_id, quantity_change")
         .in("product_id", ids)
         .in("store_location_id", locationIds)
