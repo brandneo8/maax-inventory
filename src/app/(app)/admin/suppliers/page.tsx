@@ -1,12 +1,14 @@
 import { requireAdmin } from "@/lib/auth";
 import { getSuppliers, getTaxRates } from "@/lib/data/lookups";
+import { getOrderFormMatchCounts } from "@/lib/data/order-forms";
 import { SuppliersTable } from "../suppliers-table";
 
 export default async function AdminSuppliersPage() {
   const { supabase, companyId } = await requireAdmin();
-  const [suppliers, taxRates] = await Promise.all([
+  const [suppliers, taxRates, matchedCounts] = await Promise.all([
     getSuppliers(supabase, companyId),
     getTaxRates(supabase, companyId),
+    getOrderFormMatchCounts(supabase, companyId),
   ]);
 
   // How many products each supplier's price list holds.
@@ -41,9 +43,11 @@ export default async function AdminSuppliersPage() {
           poc_number: supplier.poc_number ?? "",
           order_channel: supplier.order_channel ?? "",
           gst_registered: supplier.gst_registered,
+          is_active: supplier.is_active,
         }))}
         taxRate={Number(taxRates.find((rate) => rate.is_default)?.rate_percentage ?? 9)}
         productCounts={productCounts}
+        matchedCounts={matchedCounts}
       />
     </div>
   );

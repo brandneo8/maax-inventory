@@ -1710,6 +1710,73 @@ export type Database = {
           },
         ]
       }
+      supplier_order_form_lines: {
+        Row: {
+          brand_id: string
+          company_id: string
+          cost: number | null
+          description: string
+          id: string
+          position: number
+          rrp: number | null
+          size: string
+          sku: string
+          supplier_id: string
+          updated_at: string
+          updated_by: string | null
+        }
+        Insert: {
+          brand_id: string
+          company_id: string
+          cost?: number | null
+          description: string
+          id?: string
+          position: number
+          rrp?: number | null
+          size?: string
+          sku?: string
+          supplier_id: string
+          updated_at?: string
+          updated_by?: string | null
+        }
+        Update: {
+          brand_id?: string
+          company_id?: string
+          cost?: number | null
+          description?: string
+          id?: string
+          position?: number
+          rrp?: number | null
+          size?: string
+          sku?: string
+          supplier_id?: string
+          updated_at?: string
+          updated_by?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "supplier_order_form_lines_brand_id_fkey"
+            columns: ["brand_id"]
+            isOneToOne: false
+            referencedRelation: "brands"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "supplier_order_form_lines_company_id_fkey"
+            columns: ["company_id"]
+            isOneToOne: false
+            referencedRelation: "companies"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "supplier_order_form_lines_supplier_id_fkey"
+            columns: ["supplier_id"]
+            isOneToOne: false
+            referencedRelation: "suppliers"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       supplier_order_form_matches: {
         Row: {
           brand_id: string
@@ -1895,6 +1962,7 @@ export type Database = {
           created_at: string
           gst_registered: boolean
           id: string
+          is_active: boolean
           order_channel: Database["public"]["Enums"]["order_channel"] | null
           poc_name: string | null
           poc_number: string | null
@@ -1905,6 +1973,7 @@ export type Database = {
           created_at?: string
           gst_registered?: boolean
           id?: string
+          is_active?: boolean
           order_channel?: Database["public"]["Enums"]["order_channel"] | null
           poc_name?: string | null
           poc_number?: string | null
@@ -1915,6 +1984,7 @@ export type Database = {
           created_at?: string
           gst_registered?: boolean
           id?: string
+          is_active?: boolean
           order_channel?: Database["public"]["Enums"]["order_channel"] | null
           poc_name?: string | null
           poc_number?: string | null

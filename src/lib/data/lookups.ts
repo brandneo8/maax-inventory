@@ -85,7 +85,7 @@ export async function getTaxRates(supabase: Client, companyId: string) {
 export async function getSuppliers(supabase: Client, companyId: string) {
   const { data, error } = await supabase
     .from("suppliers")
-    .select("id, supplier_name, poc_name, poc_number, order_channel, gst_registered")
+    .select("id, supplier_name, poc_name, poc_number, order_channel, gst_registered, is_active")
     .eq("company_id", companyId)
     .order("supplier_name");
 

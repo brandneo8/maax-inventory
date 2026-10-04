@@ -23,6 +23,7 @@ import { btnClass, btnDangerClass, btnSecondaryClass, checkboxClass, fieldClass,
 import { cn } from "@/lib/utils";
 import { ProductFormModal, type ProductFormReference, type ProductFormValues } from "./product-form-modal";
 import { OrderFormPanel } from "./order-form-panel";
+import { OrderFormImageEntry } from "./order-form-image-entry";
 import { OrderFormComparison, type ComparisonProduct, type NewPriceListRow } from "./order-form-comparison";
 import type { BrandOrderForm } from "@/lib/data/order-forms";
 import { BulkEditModal, type BulkEditFields } from "./bulk-edit-modal";
@@ -1446,6 +1447,18 @@ export function ProductsTable({
             <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
               The order form couldn&apos;t be read: {orderFormFor(activeBrandFilter)!.form!.readError}
             </p>
+          ) : null}
+          {lockedSupplierId && orderFormFor(activeBrandFilter)?.form?.kind === "image" ? (
+            <OrderFormImageEntry
+              key={`photo-entry:${activeBrandFilter}:${orderFormFor(activeBrandFilter)!.form!.uploadedAt}`}
+              supplierId={lockedSupplierId}
+              brandId={orderFormFor(activeBrandFilter)!.brandId}
+              brand={activeBrandFilter}
+              imageUrl={orderFormFor(activeBrandFilter)!.form!.imageUrl}
+              fileName={orderFormFor(activeBrandFilter)!.form!.fileName}
+              lines={orderFormFor(activeBrandFilter)!.form!.lines ?? []}
+              pulseProducts={comparisonProducts}
+            />
           ) : null}
 
         </div>

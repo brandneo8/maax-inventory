@@ -2,7 +2,7 @@
 
 import { useRef, useState, type ChangeEvent } from "react";
 import { useRouter } from "next/navigation";
-import { FileSpreadsheet } from "lucide-react";
+import { FileImage, FileSpreadsheet } from "lucide-react";
 import { removeSupplierOrderForm, uploadSupplierOrderForm } from "@/app/(app)/admin/suppliers/order-form-actions";
 import type { BrandOrderForm } from "@/lib/data/order-forms";
 import { formatDateTime } from "@/lib/format";
@@ -16,8 +16,8 @@ function fileSize(bytes: number | null) {
 
 /**
  * The selected brand's order form on a supplier's price list: the one
- * current CSV / Excel file, with download, replace and remove — or an
- * upload button when there isn't one yet.
+ * current CSV / Excel file or photo, with download, replace and remove — or
+ * an upload button when there isn't one yet.
  */
 export function OrderFormPanel({ supplierId, entry }: { supplierId: string; entry: BrandOrderForm }) {
   const router = useRouter();
@@ -25,6 +25,7 @@ export function OrderFormPanel({ supplierId, entry }: { supplierId: string; entr
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const form = entry.form;
+  const Icon = form?.kind === "image" ? FileImage : FileSpreadsheet;
 
   async function upload(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
@@ -63,7 +64,7 @@ export function OrderFormPanel({ supplierId, entry }: { supplierId: string; entr
     <div className={cn("space-y-2 rounded-xl border bg-card p-4", form ? "border-emerald-200" : "border-dashed border-border")}>
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex min-w-0 items-center gap-3">
-          <FileSpreadsheet className={cn("size-6 shrink-0", form ? "text-emerald-600" : "text-slate-400")} aria-hidden />
+          <Icon className={cn("size-6 shrink-0", form ? "text-emerald-600" : "text-slate-400")} aria-hidden />
           <div className="min-w-0">
             <p className="text-sm font-semibold">{entry.brandName} order form</p>
             {form ? (
@@ -73,7 +74,10 @@ export function OrderFormPanel({ supplierId, entry }: { supplierId: string; entr
                 {form.uploadedBy ? ` by ${form.uploadedBy}` : ""}
               </p>
             ) : (
-              <p className="text-sm text-muted">No order form uploaded yet. Upload the supplier&apos;s CSV or Excel file.</p>
+              <p className="text-sm text-muted">
+                No order form uploaded yet. Upload the supplier&apos;s CSV or Excel file, or a JPG / PNG photo of a short
+                list (you then type its lines in).
+              </p>
             )}
           </div>
         </div>
@@ -99,7 +103,7 @@ export function OrderFormPanel({ supplierId, entry }: { supplierId: string; entr
           <input
             ref={inputRef}
             type="file"
-            accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            accept=".csv,.xlsx,.jpg,.jpeg,.png,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,image/jpeg,image/png"
             className="hidden"
             onChange={(event) => void upload(event)}
           />

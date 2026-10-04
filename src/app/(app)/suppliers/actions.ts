@@ -11,6 +11,8 @@ export type SupplierDraft = {
   poc_number: string;
   order_channel: OrderChannel | "";
   gst_registered: boolean;
+  /** Still ordered from; inactive suppliers are kept but marked. */
+  is_active: boolean;
 };
 
 function supplierPayload(draft: SupplierDraft) {
@@ -20,6 +22,7 @@ function supplierPayload(draft: SupplierDraft) {
     poc_number: draft.poc_number.trim() || null,
     order_channel: draft.order_channel || null,
     gst_registered: draft.gst_registered,
+    is_active: draft.is_active,
   };
 }
 
@@ -30,6 +33,7 @@ function sameSupplier(
     poc_number: string | null;
     order_channel: string | null;
     gst_registered: boolean;
+    is_active: boolean;
   },
   next: ReturnType<typeof supplierPayload>,
 ) {
@@ -38,7 +42,8 @@ function sameSupplier(
     (current.poc_name ?? null) === next.poc_name &&
     (current.poc_number ?? null) === next.poc_number &&
     (current.order_channel ?? null) === next.order_channel &&
-    current.gst_registered === next.gst_registered
+    current.gst_registered === next.gst_registered &&
+    current.is_active === next.is_active
   );
 }
 
@@ -54,7 +59,7 @@ export async function saveSuppliers(drafts: SupplierDraft[]) {
   const rows = drafts.filter((draft) => draft.supplier_name.trim());
   const { data: existing, error: existingError } = await supabase
     .from("suppliers")
-    .select("id, supplier_name, poc_name, poc_number, order_channel, gst_registered")
+    .select("id, supplier_name, poc_name, poc_number, order_channel, gst_registered, is_active")
     .eq("company_id", companyId);
   if (existingError) throw existingError;
   const byId = new Map((existing ?? []).map((row) => [row.id, row]));

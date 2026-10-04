@@ -1,7 +1,10 @@
 "use client";
 
-import { useMemo, useState, useTransition } from "react";
+import { Fragment, useMemo, useState, useTransition } from "react";
 import type { OrderFormLine } from "@/lib/order-form-reader";
+import { KEPT_OFF, lineUp, type ComparisonProduct, type Row } from "@/lib/order-form-match";
+
+export type { ComparisonProduct };
 import type { OrderFormMatch } from "@/lib/data/order-forms";
 import {
   clearOrderFormMatches,
@@ -10,206 +13,27 @@ import {
 } from "@/app/(app)/admin/suppliers/order-form-actions";
 import { formatMoney } from "@/lib/format";
 import { findSize, sizesClose } from "@/lib/product-size";
-import { btnClass, btnSecondaryClass, checkboxClass, fieldClass, tableClass, tdClass, thClass } from "@/lib/ui";
+import {
+  btnClass,
+  btnSecondaryClass,
+  checkboxClass,
+  fieldClass,
+  tableClass,
+  tdClass,
+  thClass,
+} from "@/lib/ui";
 import { cn } from "@/lib/utils";
 
-export type ComparisonProduct = {
-  id: string;
+/** A product typed into a new row under the Pulse table (the columns it shows). */
+export type NewPriceListRow = {
   sku: string;
   orderName: string;
-  name: string;
   size: string;
-  unitCost: number;
-  rrp: number | null;
+  unitCost: string;
+  rrp: string;
 };
-
-/** A product typed into a new row under the Pulse table (the columns it shows). */
-export type NewPriceListRow = { sku: string; orderName: string; size: string; unitCost: string; rrp: string };
-type DraftRow = NewPriceListRow & { key: string };
-
-/** How a row's two sides were paired. */
-type Match = "manual" | "sku" | "name" | "similar" | "none";
-type Row = {
-  pulse: ComparisonProduct | null;
-  form: OrderFormLine | null;
-  /** The form line's key (for saving a match by hand); null on Pulse-only rows. */
-  lineKey: string | null;
-  match: Match;
-  /** Paired by SKU, but the names have little in common. */
-  namesDiffer: boolean;
-};
-
-/** SKUs compared ignoring case, spaces and leading zeros ("01402" = "1402"). */
-function skuKey(value: string) {
-  const compact = value.toUpperCase().replace(/\s+/g, "");
-  return /^\d+$/.test(compact) ? String(Number(compact)) : compact;
-}
-
-/** Names compared on letters and digits only ("Treatment Original 200ml" = "treatment original 200 ML"). */
-function nameKey(value: string) {
-  return value.toLowerCase().replace(/[^a-z0-9]+/g, "");
-}
-
-function words(value: string) {
-  return new Set(value.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean));
-}
-
-/** Share of words two names have in common (0 to 1). */
-function similarity(left: string, right: string) {
-  const a = words(left);
-  const b = words(right);
-  if (a.size === 0 || b.size === 0) return 0;
-  let shared = 0;
-  for (const word of a) if (b.has(word)) shared += 1;
-  return shared / (a.size + b.size - shared);
-}
-
-/**
- * Share of the shorter name's words found in the other (0 to 1), or 0 when
- * fewer than three words are shared — forms often add words ("Backbar",
- * "Launch May 2026") that shouldn't stop a match.
- */
-function containment(left: string, right: string) {
-  const a = words(left);
-  const b = words(right);
-  let shared = 0;
-  for (const word of a) if (b.has(word)) shared += 1;
-  return shared < 3 ? 0 : shared / Math.min(a.size, b.size);
-}
-
-function productLabel(product: ComparisonProduct) {
-  return [product.orderName || product.name, product.size].filter(Boolean).join(" ");
-}
-
-function productSimilarity(
-  product: ComparisonProduct,
-  line: OrderFormLine,
-  measure: (left: string, right: string) => number = similarity,
-) {
-  const formName = `${line.description} ${line.size}`;
-  return Math.max(measure(productLabel(product), formName), measure(`${product.name} ${product.size}`, formName));
-}
-
-/** Below this (share of words in common), names are too different to pair without a matching SKU. */
-const SIMILAR_NAMES = 0.7;
-/** Below this, a SKU pairing is flagged for checking. */
-const DIFFERENT_NAMES = 0.25;
-
-/** Hand-set key prefix for a product kept off the order form: `!<productId>`. */
-const KEPT_OFF = "!";
-
-/** Identifies a form line across re-uploads of the same form: its SKU and description. */
-function lineKeys(lines: OrderFormLine[]) {
-  const seen = new Map<string, number>();
-  return lines.map((line) => {
-    const base = `${skuKey(line.sku)}|${nameKey(line.description)}`;
-    const count = (seen.get(base) ?? 0) + 1;
-    seen.set(base, count);
-    return count === 1 ? base : `${base}#${count}`;
-  });
-}
-
-/** Pairs (line, product) greedily, best score first, each side used once. */
-function pairBest(
-  rows: Row[],
-  products: ComparisonProduct[],
-  unmatched: Set<string>,
-  score: (row: Row, product: ComparisonProduct) => number | null,
-  match: Match,
-) {
-  const pairs: { row: Row; product: ComparisonProduct; score: number }[] = [];
-  for (const row of rows) {
-    if (row.match !== "none" || !row.form) continue;
-    for (const product of products) {
-      if (!unmatched.has(product.id)) continue;
-      const value = score(row, product);
-      if (value != null) pairs.push({ row, product, score: value });
-    }
-  }
-  pairs.sort((left, right) => right.score - left.score);
-  for (const pair of pairs) {
-    if (pair.row.match !== "none" || !unmatched.has(pair.product.id)) continue;
-    unmatched.delete(pair.product.id);
-    pair.row.pulse = pair.product;
-    pair.row.match = match;
-    if (match === "sku") pair.row.namesDiffer = pair.score < DIFFERENT_NAMES;
-  }
-}
-
-/**
- * Lines up the order form against this brand's products on Pulse: matches set
- * by hand first (including products kept off the form), then the same SKU (the closest name wins when the form
- * repeats a SKU), then the same name, then a similar name. Products the form
- * doesn't list go at the end.
- */
-function lineUp(products: ComparisonProduct[], lines: OrderFormLine[], manual: Map<string, string | null>): Row[] {
-  const unmatched = new Set(products.map((product) => product.id));
-  const byId = new Map(products.map((product) => [product.id, product]));
-  const keys = lineKeys(lines);
-  const keptOff = new Set<string>();
-  for (const [key, productId] of manual) {
-    if (key.startsWith(KEPT_OFF) && productId && byId.has(productId)) {
-      keptOff.add(productId);
-      unmatched.delete(productId);
-    }
-  }
-
-  const rows: Row[] = lines.map((line, index) => {
-    const lineKey = keys[index];
-    if (manual.has(lineKey)) {
-      const productId = manual.get(lineKey);
-      const product = productId ? byId.get(productId) : undefined;
-      if (productId == null) return { pulse: null, form: line, lineKey, match: "manual", namesDiffer: false };
-      if (product && unmatched.has(product.id)) {
-        unmatched.delete(product.id);
-        return { pulse: product, form: line, lineKey, match: "manual", namesDiffer: false };
-      }
-    }
-    return { pulse: null, form: line, lineKey, match: "none", namesDiffer: false };
-  });
-
-  pairBest(
-    rows,
-    products,
-    unmatched,
-    (row, product) =>
-      row.form!.sku && product.sku && skuKey(row.form!.sku) === skuKey(product.sku)
-        ? productSimilarity(product, row.form!)
-        : null,
-    "sku",
-  );
-  pairBest(
-    rows,
-    products,
-    unmatched,
-    (row, product) => {
-      const formKeys = new Set([nameKey(row.form!.description), nameKey(`${row.form!.description} ${row.form!.size}`)]);
-      const same = [product.orderName, product.name, `${product.orderName} ${product.size}`, `${product.name} ${product.size}`]
-        .filter((value) => value.trim())
-        .some((value) => formKeys.has(nameKey(value)));
-      return same ? 1 : null;
-    },
-    "name",
-  );
-  pairBest(
-    rows,
-    products,
-    unmatched,
-    (row, product) => {
-      const value = productSimilarity(product, row.form!, containment);
-      return value >= SIMILAR_NAMES ? value + productSimilarity(product, row.form!) / 10 : null;
-    },
-    "similar",
-  );
-
-  for (const product of products) {
-    if (unmatched.has(product.id) || keptOff.has(product.id)) {
-      const match = keptOff.has(product.id) ? "manual" : "none";
-      rows.push({ pulse: product, form: null, lineKey: null, match, namesDiffer: false });
-    }
-  }
-  return rows;
-}
+/** `fromLine`: the order form line it was copied from, if any. */
+type DraftRow = NewPriceListRow & { key: string; fromLine?: string };
 
 const differs = (left: number | null, right: number | null) =>
   left != null && right != null && Math.abs(left - right) > 0.005;
@@ -226,7 +50,8 @@ function planSwap(a: Row, b: Row): OrderFormMatchChange[] {
     [b, a],
   ] as const) {
     if (row.lineKey) changes.push({ lineKey: row.lineKey, productId: other.pulse?.id ?? null });
-    else if (other.pulse) changes.push({ lineKey: `${KEPT_OFF}${other.pulse.id}`, productId: other.pulse.id });
+    else if (other.pulse)
+      changes.push({ lineKey: `${KEPT_OFF}${other.pulse.id}`, productId: other.pulse.id });
   }
   return changes;
 }
@@ -244,8 +69,11 @@ function planUnmatch(row: Row): OrderFormMatchChange[] {
 function applyChanges(manual: Map<string, string | null>, changes: OrderFormMatchChange[]) {
   const next = new Map(manual);
   const keys = new Set(changes.map((change) => change.lineKey));
-  const productIds = new Set(changes.flatMap((change) => (change.productId ? [change.productId] : [])));
-  for (const [key, productId] of next) if (productId && productIds.has(productId) && !keys.has(key)) next.delete(key);
+  const productIds = new Set(
+    changes.flatMap((change) => (change.productId ? [change.productId] : [])),
+  );
+  for (const [key, productId] of next)
+    if (productId && productIds.has(productId) && !keys.has(key)) next.delete(key);
   for (const change of changes) next.set(change.lineKey, change.productId);
   return next;
 }
@@ -268,9 +96,12 @@ type SizeCheck =
  * column (or its description). Ounces are converted; within 3% counts as the same.
  */
 function sizeCheckOf(pulse: ComparisonProduct | null, form: OrderFormLine | null): SizeCheck {
-  const pulseSize = pulse ? (findSize(pulse.size) ?? findSize(pulse.orderName) ?? findSize(pulse.name)) : null;
+  const pulseSize = pulse
+    ? (findSize(pulse.size) ?? findSize(pulse.orderName) ?? findSize(pulse.name))
+    : null;
   const formSize = form ? (findSize(form.size) ?? findSize(form.description)) : null;
-  if (!pulseSize || !formSize) return { state: "unknown", pulse: pulseSize?.label ?? null, form: formSize?.label ?? null };
+  if (!pulseSize || !formSize)
+    return { state: "unknown", pulse: pulseSize?.label ?? null, form: formSize?.label ?? null };
   return {
     state: sizesClose(pulseSize.ml, formSize.ml) ? "same" : "different",
     pulse: pulseSize.label,
@@ -281,7 +112,10 @@ function sizeCheckOf(pulse: ComparisonProduct | null, form: OrderFormLine | null
 function SizeCheckCell({ check }: { check: SizeCheck }) {
   if (check.state === "same") {
     return (
-      <td className={cn(tdClass, "whitespace-nowrap text-center text-emerald-700")} title={`${check.pulse} = ${check.form}`}>
+      <td
+        className={cn(tdClass, "whitespace-nowrap text-center text-emerald-700")}
+        title={`${check.pulse} = ${check.form}`}
+      >
         ✓
       </td>
     );
@@ -296,7 +130,12 @@ function SizeCheckCell({ check }: { check: SizeCheck }) {
       </td>
     );
   }
-  const missing = !check.pulse && !check.form ? "either side" : !check.pulse ? "the Pulse product" : "the order form";
+  const missing =
+    !check.pulse && !check.form
+      ? "either side"
+      : !check.pulse
+        ? "the Pulse product"
+        : "the order form";
   return (
     <td className={cn(tdClass, "text-center text-muted")} title={`No size found on ${missing}`}>
       —
@@ -316,7 +155,11 @@ function VarianceCell({ value, className }: { value: number | null; className?: 
         className,
       )}
     >
-      {value == null ? "—" : value === 0 ? formatMoney(0) : `${value > 0 ? "+" : "−"}${formatMoney(Math.abs(value))}`}
+      {value == null
+        ? "—"
+        : value === 0
+          ? formatMoney(0)
+          : `${value > 0 ? "+" : "−"}${formatMoney(Math.abs(value))}`}
     </td>
   );
 }
@@ -356,12 +199,28 @@ export function OrderFormComparison({
 }) {
   const hasForm = lines != null;
   const canSwap = hasForm && Boolean(brandId);
-  const [manual, setManual] = useState(() => new Map(matches.map((match) => [match.lineKey, match.productId])));
+  const [manual, setManual] = useState(
+    () => new Map(matches.map((match) => [match.lineKey, match.productId])),
+  );
+  /** Which swap set each hand-set row (the rows of one swap are undone together). */
+  const [swapOf, setSwapOf] = useState(
+    () => new Map(matches.map((match) => [match.lineKey, match.matchedAt])),
+  );
   /** Ticked rows (at most two). */
   const [picked, setPicked] = useState<string[]>([]);
   const [matchError, setMatchError] = useState<string | null>(null);
   const [saving, startSaving] = useTransition();
-  const rows = useMemo(() => lineUp(products, lines ?? [], manual), [products, lines, manual]);
+  // Paired rows first (in the form's order), then the unmatched ones together at the bottom for matching:
+  // form lines with no product, then products not on the form.
+  const rows = useMemo(() => {
+    const lined = lineUp(products, lines ?? [], manual);
+    return [
+      ...lined.filter((row) => row.pulse && row.form),
+      ...lined.filter((row) => row.form && !row.pulse),
+      ...lined.filter((row) => row.pulse && !row.form),
+    ];
+  }, [products, lines, manual]);
+  const firstUnmatched = hasForm ? rows.findIndex((row) => !row.pulse || !row.form) : -1;
   const pickedRows = picked.flatMap((id) => rows.filter((row) => rowIdOf(row) === id));
   const swapChanges = pickedRows.length === 2 ? planSwap(pickedRows[0], pickedRows[1]) : [];
   const unmatchChanges = pickedRows.length === 1 ? planUnmatch(pickedRows[0]) : [];
@@ -381,20 +240,45 @@ export function OrderFormComparison({
   const [addError, setAddError] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
 
+  /** Adds a new Pulse product row filled from an order form line (saved with the other new rows). */
+  function copyFromLine(lineKey: string, line: OrderFormLine) {
+    if (drafts.some((draft) => draft.fromLine === lineKey)) return;
+    setDrafts((current) => [
+      ...current,
+      {
+        key: crypto.randomUUID(),
+        fromLine: lineKey,
+        sku: line.sku,
+        orderName: line.description,
+        size: line.size,
+        unitCost: line.cost == null ? "" : line.cost.toFixed(2),
+        rrp: line.rrp == null ? "" : line.rrp.toFixed(2),
+      },
+    ]);
+    setAddError(null);
+  }
+
   function addDraft() {
     const key = crypto.randomUUID();
-    setDrafts((current) => [...current, { key, sku: "", orderName: "", size: "", unitCost: "", rrp: "" }]);
+    setDrafts((current) => [
+      ...current,
+      { key, sku: "", orderName: "", size: "", unitCost: "", rrp: "" },
+    ]);
     setFocusKey(key);
   }
 
   function updateDraft(key: string, patch: Partial<NewPriceListRow>) {
-    setDrafts((current) => current.map((draft) => (draft.key === key ? { ...draft, ...patch } : draft)));
+    setDrafts((current) =>
+      current.map((draft) => (draft.key === key ? { ...draft, ...patch } : draft)),
+    );
   }
 
   async function saveDrafts() {
     if (!onAddProducts) return;
     const filled = drafts.filter((draft) =>
-      [draft.sku, draft.orderName, draft.size, draft.unitCost, draft.rrp].some((value) => value.trim()),
+      [draft.sku, draft.orderName, draft.size, draft.unitCost, draft.rrp].some((value) =>
+        value.trim(),
+      ),
     );
     if (filled.length === 0) {
       setDrafts([]);
@@ -414,7 +298,15 @@ export function OrderFormComparison({
     setAdding(true);
     setAddError(null);
     try {
-      await onAddProducts(filled.map(({ sku, orderName, size, unitCost, rrp }) => ({ sku, orderName, size, unitCost, rrp })));
+      await onAddProducts(
+        filled.map(({ sku, orderName, size, unitCost, rrp }) => ({
+          sku,
+          orderName,
+          size,
+          unitCost,
+          rrp,
+        })),
+      );
       setDrafts([]);
     } catch (err) {
       setAddError(err instanceof Error ? err.message : "Could not add those products.");
@@ -424,10 +316,16 @@ export function OrderFormComparison({
   }
 
   /** Shows `next` straight away and saves it; puts the old matches back if saving fails. */
-  function persist(next: Map<string, string | null>, save: (brand: string) => Promise<void>) {
+  function persist(
+    next: Map<string, string | null>,
+    nextSwaps: Map<string, string>,
+    save: (brand: string) => Promise<void>,
+  ) {
     if (!brandId) return;
     const previous = manual;
+    const previousSwaps = swapOf;
     setManual(next);
+    setSwapOf(nextSwaps);
     setPicked([]);
     setMatchError(null);
     startSaving(async () => {
@@ -435,6 +333,7 @@ export function OrderFormComparison({
         await save(brandId);
       } catch (err) {
         setManual(previous);
+        setSwapOf(previousSwaps);
         setMatchError(err instanceof Error ? err.message : "Could not save that change.");
       }
     });
@@ -442,18 +341,53 @@ export function OrderFormComparison({
 
   function apply(changes: OrderFormMatchChange[]) {
     if (changes.length === 0) return;
-    persist(applyChanges(manual, changes), (brandKey) => saveOrderFormMatches(supplierId, brandKey, changes));
+    const next = applyChanges(manual, changes);
+    const swap = crypto.randomUUID();
+    const nextSwaps = new Map([...swapOf].filter(([key]) => next.has(key)));
+    for (const change of changes) nextSwaps.set(change.lineKey, swap);
+    persist(next, nextSwaps, (brandKey) => saveOrderFormMatches(supplierId, brandKey, changes));
   }
+
+  /** Undoes the swap that set this row: it and the other row(s) of that swap go back to automatic. */
+  function undoSwap(row: Row) {
+    const key = row.lineKey ?? `${KEPT_OFF}${row.pulse?.id}`;
+    const swap = swapOf.get(key);
+    const keys = swap
+      ? [...swapOf].filter(([, value]) => value === swap).map(([lineKey]) => lineKey)
+      : [key];
+    const next = new Map(manual);
+    const nextSwaps = new Map(swapOf);
+    for (const lineKey of keys) {
+      next.delete(lineKey);
+      nextSwaps.delete(lineKey);
+    }
+    persist(next, nextSwaps, (brandKey) => clearOrderFormMatches(supplierId, brandKey, keys));
+  }
+
+  const undoLink = (row: Row) => (
+    <button
+      type="button"
+      className="block text-xs text-sky-800 underline disabled:text-slate-400"
+      disabled={saving}
+      onClick={() => undoSwap(row)}
+    >
+      Undo swap
+    </button>
+  );
 
   function togglePicked(rowId: string) {
     setPicked((current) =>
-      current.includes(rowId) ? current.filter((id) => id !== rowId) : current.length >= 2 ? current : [...current, rowId],
+      current.includes(rowId)
+        ? current.filter((id) => id !== rowId)
+        : current.length >= 2
+          ? current
+          : [...current, rowId],
     );
   }
 
   function resetAll() {
     if (!window.confirm(`Put every ${brand} row back on automatic matching?`)) return;
-    persist(new Map(), (brandKey) => clearOrderFormMatches(supplierId, brandKey));
+    persist(new Map(), new Map(), (brandKey) => clearOrderFormMatches(supplierId, brandKey));
   }
 
   return (
@@ -465,10 +399,16 @@ export function OrderFormComparison({
         </h3>
         {hasForm ? (
           <p className="text-sm text-muted">
-            {counts.sku} matched by SKU · <span className="text-amber-800">{counts.name} matched by name</span> ·{" "}
+            {counts.sku} matched by SKU ·{" "}
+            <span className="text-amber-800">{counts.name} matched by name</span> ·{" "}
             <span className="text-sky-800">{counts.manual} swapped by you</span>
             {counts.manual > 0 ? (
-              <button type="button" className="ml-1 text-sky-800 underline" disabled={saving} onClick={resetAll}>
+              <button
+                type="button"
+                className="ml-1 text-sky-800 underline"
+                disabled={saving}
+                onClick={resetAll}
+              >
                 (reset all)
               </button>
             ) : null}{" "}
@@ -476,11 +416,13 @@ export function OrderFormComparison({
             <span className="text-red-700">
               {counts.formOnly} only on the order form · {counts.pulseOnly} only on Pulse
             </span>{" "}
-            · {counts.size} size, {counts.cost} unit cost and {counts.rrp} RRP differences. To fix a pairing, tick two rows and click
-            Swap; their Pulse products change places.
+            · {counts.size} size, {counts.cost} unit cost and {counts.rrp} RRP differences. To fix a
+            pairing, tick two rows and click Swap; their Pulse products change places.
           </p>
         ) : (
-          <p className="text-sm text-muted">Upload this brand&apos;s order form to compare it with these products.</p>
+          <p className="text-sm text-muted">
+            Upload this brand&apos;s order form to compare it with these products.
+          </p>
         )}
         {matchError ? <p className="mt-1 text-sm text-red-700">{matchError}</p> : null}
       </div>
@@ -565,12 +507,15 @@ export function OrderFormComparison({
           <tbody>
             {rows.length === 0 ? (
               <tr>
-                <td className={cn(tdClass, "text-muted")} colSpan={hasForm ? pulseColumns + 10 : pulseColumns}>
+                <td
+                  className={cn(tdClass, "text-muted")}
+                  colSpan={hasForm ? pulseColumns + 10 : pulseColumns}
+                >
                   No {brand} products on this price list yet.
                 </td>
               </tr>
             ) : null}
-            {rows.map((row) => {
+            {rows.map((row, rowIndex) => {
               const rowId = rowIdOf(row);
               const isPicked = picked.includes(rowId);
               const tone =
@@ -579,7 +524,13 @@ export function OrderFormComparison({
                   : row.match === "name" || row.match === "similar" || row.namesDiffer
                     ? "bg-amber-50"
                     : "";
-              const pulseTone = isPicked ? "bg-blue-100" : !hasForm ? "" : !row.form || !row.pulse ? "bg-red-50" : tone;
+              const pulseTone = isPicked
+                ? "bg-blue-100"
+                : !hasForm
+                  ? ""
+                  : !row.form || !row.pulse
+                    ? "bg-red-50"
+                    : tone;
               const formTone = !row.pulse ? "bg-red-50" : tone;
               const costDiffers = differs(row.pulse?.unitCost ?? null, row.form?.cost ?? null);
               const rrpDiffers = differs(row.pulse?.rrp ?? null, row.form?.rrp ?? null);
@@ -597,69 +548,147 @@ export function OrderFormComparison({
                 </td>
               ) : null;
               return (
-                <tr key={rowId}>
-                  {pulse ? (
-                    <>
-                      {pickBox}
-                      <td className={cn(tdClass, pulseTone, "whitespace-nowrap")}>{pulse.sku || "—"}</td>
-                      <td className={cn(tdClass, pulseTone)}>{pulse.orderName || pulse.name}</td>
-                      <td className={cn(tdClass, pulseTone, "whitespace-nowrap")}>{pulse.size || "—"}</td>
-                      <td className={cn(tdClass, pulseTone, "text-right tabular-nums", costDiffers && "font-bold")}>
-                        {formatMoney(pulse.unitCost)}
+                <Fragment key={rowId}>
+                  {rowIndex === firstUnmatched ? (
+                    <tr>
+                      <td
+                        className={cn(tdClass, "bg-red-100 text-sm font-semibold text-red-900")}
+                        colSpan={pulseColumns + 10}
+                      >
+                        Unmatched ({rows.length - firstUnmatched}): tick an order form line and a
+                        Pulse product below, then Swap to pair them.
                       </td>
-                      <td className={cn(tdClass, pulseTone, "text-right tabular-nums", rrpDiffers && "font-bold")}>
-                        {pulse.rrp == null ? "—" : formatMoney(pulse.rrp)}
-                      </td>
-                      <td className={cn(tdClass, pulseTone)}>
-                        <button
-                          type="button"
-                          className="text-sm text-blue-600 underline disabled:text-slate-400"
-                          disabled={editDisabled}
-                          onClick={() => onEditProduct(pulse.id, row.form)}
-                          title={row.form ? "Edit this product (the order form line is shown for reference)" : "Edit this product"}
-                        >
-                          Edit
-                        </button>
-                      </td>
-                    </>
-                  ) : (
-                    <>
-                      {pickBox}
-                      <td className={cn(tdClass, pulseTone, "text-sm text-red-700")} colSpan={6}>
-                        Not on Pulse
-                      </td>
-                    </>
-                  )}
-                  {hasForm ? (
-                    <>
-                      <td className="w-3 bg-card" aria-hidden />
-                      {row.form ? (
-                        <>
-                          <td className={cn(tdClass, formTone, "whitespace-nowrap")}>{row.form.sku || "—"}</td>
-                          <td className={cn(tdClass, formTone)}>
-                            {row.form.description}
-                            <span className="block text-xs text-muted">{row.form.source}</span>
-                          </td>
-                          <td className={cn(tdClass, formTone, "whitespace-nowrap")}>{row.form.size || "—"}</td>
-                          <td className={cn(tdClass, formTone, "text-right tabular-nums", costDiffers && "font-bold")}>
-                            {row.form.cost == null ? "—" : formatMoney(row.form.cost)}
-                          </td>
-                          <td className={cn(tdClass, formTone, "text-right tabular-nums", rrpDiffers && "font-bold")}>
-                            {row.form.rrp == null ? "—" : formatMoney(row.form.rrp)}
-                          </td>
-                        </>
-                      ) : (
-                        <td className={cn(tdClass, "bg-red-50 text-sm text-red-700")} colSpan={5}>
-                          Not on the order form
-                        </td>
-                      )}
-                      <td className="w-3 bg-card" aria-hidden />
-                      <SizeCheckCell check={sizeCheckOf(row.pulse, row.form)} />
-                      <VarianceCell value={varianceOf(row.pulse?.unitCost, row.form?.cost)} />
-                      <VarianceCell value={varianceOf(row.pulse?.rrp, row.form?.rrp)} />
-                    </>
+                    </tr>
                   ) : null}
-                </tr>
+                  <tr>
+                    {pulse ? (
+                      <>
+                        {pickBox}
+                        <td className={cn(tdClass, pulseTone, "whitespace-nowrap")}>
+                          {pulse.sku || "—"}
+                        </td>
+                        <td className={cn(tdClass, pulseTone)}>
+                          {pulse.orderName || pulse.name}
+                          {row.match === "manual" ? undoLink(row) : null}
+                        </td>
+                        <td className={cn(tdClass, pulseTone, "whitespace-nowrap")}>
+                          {pulse.size || "—"}
+                        </td>
+                        <td
+                          className={cn(
+                            tdClass,
+                            pulseTone,
+                            "text-right tabular-nums",
+                            costDiffers && "font-bold",
+                          )}
+                        >
+                          {formatMoney(pulse.unitCost)}
+                        </td>
+                        <td
+                          className={cn(
+                            tdClass,
+                            pulseTone,
+                            "text-right tabular-nums",
+                            rrpDiffers && "font-bold",
+                          )}
+                        >
+                          {pulse.rrp == null ? "—" : formatMoney(pulse.rrp)}
+                        </td>
+                        <td className={cn(tdClass, pulseTone)}>
+                          <button
+                            type="button"
+                            className="text-sm text-blue-600 underline disabled:text-slate-400"
+                            disabled={editDisabled}
+                            onClick={() => onEditProduct(pulse.id, row.form)}
+                            title={
+                              row.form
+                                ? "Edit this product (the order form line is shown for reference)"
+                                : "Edit this product"
+                            }
+                          >
+                            Edit
+                          </button>
+                        </td>
+                      </>
+                    ) : (
+                      <>
+                        {pickBox}
+                        <td className={cn(tdClass, pulseTone, "text-sm text-red-700")} colSpan={6}>
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <span>
+                              Not on Pulse
+                              {row.match === "manual" ? undoLink(row) : null}
+                            </span>
+                            {onAddProducts && row.form && row.lineKey ? (
+                              drafts.some((draft) => draft.fromLine === row.lineKey) ? (
+                                <span className="text-xs text-emerald-800">
+                                  Copied: save it under the table
+                                </span>
+                              ) : (
+                                <button
+                                  type="button"
+                                  className="text-sm text-blue-600 underline disabled:text-slate-400"
+                                  disabled={adding}
+                                  onClick={() => copyFromLine(row.lineKey!, row.form!)}
+                                  title="Add this line to Pulse as a new product (SKU, description, size, price and RRP), saved with Save new products"
+                                >
+                                  Copy from order form
+                                </button>
+                              )
+                            ) : null}
+                          </div>
+                        </td>
+                      </>
+                    )}
+                    {hasForm ? (
+                      <>
+                        <td className="w-3 bg-card" aria-hidden />
+                        {row.form ? (
+                          <>
+                            <td className={cn(tdClass, formTone, "whitespace-nowrap")}>
+                              {row.form.sku || "—"}
+                            </td>
+                            <td className={cn(tdClass, formTone)}>
+                              {row.form.description}
+                              <span className="block text-xs text-muted">{row.form.source}</span>
+                            </td>
+                            <td className={cn(tdClass, formTone, "whitespace-nowrap")}>
+                              {row.form.size || "—"}
+                            </td>
+                            <td
+                              className={cn(
+                                tdClass,
+                                formTone,
+                                "text-right tabular-nums",
+                                costDiffers && "font-bold",
+                              )}
+                            >
+                              {row.form.cost == null ? "—" : formatMoney(row.form.cost)}
+                            </td>
+                            <td
+                              className={cn(
+                                tdClass,
+                                formTone,
+                                "text-right tabular-nums",
+                                rrpDiffers && "font-bold",
+                              )}
+                            >
+                              {row.form.rrp == null ? "—" : formatMoney(row.form.rrp)}
+                            </td>
+                          </>
+                        ) : (
+                          <td className={cn(tdClass, "bg-red-50 text-sm text-red-700")} colSpan={5}>
+                            Not on the order form
+                          </td>
+                        )}
+                        <td className="w-3 bg-card" aria-hidden />
+                        <SizeCheckCell check={sizeCheckOf(row.pulse, row.form)} />
+                        <VarianceCell value={varianceOf(row.pulse?.unitCost, row.form?.cost)} />
+                        <VarianceCell value={varianceOf(row.pulse?.rrp, row.form?.rrp)} />
+                      </>
+                    ) : null}
+                  </tr>
+                </Fragment>
               );
             })}
             {drafts.map((draft) => (
@@ -718,7 +747,9 @@ export function OrderFormComparison({
                     type="button"
                     className="text-sm text-red-700 underline"
                     disabled={adding}
-                    onClick={() => setDrafts((current) => current.filter((item) => item.key !== draft.key))}
+                    onClick={() =>
+                      setDrafts((current) => current.filter((item) => item.key !== draft.key))
+                    }
                   >
                     Remove
                   </button>
@@ -745,8 +776,17 @@ export function OrderFormComparison({
           </button>
           {drafts.length > 0 ? (
             <>
-              <button type="button" className={btnClass} disabled={adding} onClick={() => void saveDrafts()}>
-                {adding ? "Saving…" : drafts.length === 1 ? "Save new product" : `Save ${drafts.length} new products`}
+              <button
+                type="button"
+                className={btnClass}
+                disabled={adding}
+                onClick={() => void saveDrafts()}
+              >
+                {adding
+                  ? "Saving…"
+                  : drafts.length === 1
+                    ? "Save new product"
+                    : `Save ${drafts.length} new products`}
               </button>
               <button
                 type="button"
@@ -759,13 +799,14 @@ export function OrderFormComparison({
               >
                 Cancel
               </button>
-              <span className="text-sm text-muted">New products are added to {brand} on this price list.</span>
+              <span className="text-sm text-muted">
+                New products are added to {brand} on this price list.
+              </span>
             </>
           ) : null}
           {addError ? <p className="w-full text-sm text-red-700">{addError}</p> : null}
         </div>
       ) : null}
     </section>
-
   );
 }

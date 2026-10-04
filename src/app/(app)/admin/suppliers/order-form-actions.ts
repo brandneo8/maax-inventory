@@ -2,11 +2,12 @@
 
 import { revalidatePath } from "next/cache";
 import { requireAdmin } from "@/lib/auth";
-import { ORDER_FORMS_BUCKET } from "@/lib/data/order-forms";
+import { IMAGE_FORM_EXTENSIONS, ORDER_FORMS_BUCKET, isImageFormName } from "@/lib/data/order-forms";
 import { createAdminClient } from "@/lib/supabase/admin";
 
 const MAX_BYTES = 10 * 1024 * 1024;
-const ALLOWED_EXTENSIONS = ["csv", "xlsx"];
+const ALLOWED_EXTENSIONS = ["csv", "xlsx", ...IMAGE_FORM_EXTENSIONS];
+const MAX_TYPED_LINES = 500;
 
 /** The supplier and brand, checked to belong to this company. */
 async function checkSupplierBrand(supplierId: string, brandId: string) {
@@ -23,16 +24,31 @@ function revalidatePriceList(supplierId: string) {
   revalidatePath(`/admin/suppliers/${supplierId}/products`);
 }
 
+/** Drops the lines typed in from a photo form (when it's replaced by a spreadsheet, or removed). */
+async function clearTypedLines(supplierId: string, brandId: string) {
+  const admin = createAdminClient();
+  const { error } = await admin
+    .from("supplier_order_form_lines")
+    .delete()
+    .eq("supplier_id", supplierId)
+    .eq("brand_id", brandId);
+  if (error) throw new Error(error.message || "Could not clear the typed-in lines.");
+}
+
 /**
- * Uploads a supplier's order form for one brand (CSV or Excel .xlsx, up to
- * 10 MB), replacing the brand's current form — there's only ever one.
+ * Uploads a supplier's order form for one brand (CSV or Excel .xlsx, or a
+ * JPG / PNG photo whose lines are typed in by hand; up to 10 MB), replacing
+ * the brand's current form — there's only ever one. Lines typed in from a
+ * photo are kept when it's replaced by another photo.
  */
 export async function uploadSupplierOrderForm(supplierId: string, brandId: string, formData: FormData) {
   const { companyId, user } = await checkSupplierBrand(supplierId, brandId);
   const file = formData.get("file");
   if (!(file instanceof File) || file.size === 0) throw new Error("Choose a CSV or Excel file.");
   const extension = file.name.split(".").pop()?.toLowerCase() ?? "";
-  if (!ALLOWED_EXTENSIONS.includes(extension)) throw new Error("Order forms must be a .csv or .xlsx file.");
+  if (!ALLOWED_EXTENSIONS.includes(extension)) {
+    throw new Error("Order forms must be a .csv or .xlsx file, or a .jpg or .png photo.");
+  }
   if (file.size > MAX_BYTES) throw new Error("Order forms must be smaller than 10 MB.");
 
   const admin = createAdminClient();
@@ -69,6 +85,8 @@ export async function uploadSupplierOrderForm(supplierId: string, brandId: strin
     throw new Error(saveError.message || "Could not save the order form.");
   }
 
+  if (!isImageFormName(file.name)) await clearTypedLines(supplierId, brandId);
+
   // The replaced file is no longer referenced.
   if (existing?.file_path && existing.file_path !== path) {
     await admin.storage.from(ORDER_FORMS_BUCKET).remove([existing.file_path]);
@@ -89,6 +107,7 @@ export async function removeSupplierOrderForm(supplierId: string, brandId: strin
     .maybeSingle();
   if (error) throw new Error(error.message || "Could not remove the order form.");
   if (existing?.file_path) await admin.storage.from(ORDER_FORMS_BUCKET).remove([existing.file_path]);
+  await clearTypedLines(supplierId, brandId);
   revalidatePriceList(supplierId);
 }
 
@@ -151,5 +170,59 @@ export async function clearOrderFormMatches(supplierId: string, brandId: string,
   if (lineKeys) query = query.in("line_key", lineKeys);
   const { error } = await query;
   if (error) throw new Error(error.message || "Could not reset the match.");
+  revalidatePriceList(supplierId);
+}
+
+/** A line typed in from a photo order form. Prices are text as typed ("" = none). */
+export type TypedOrderFormLine = { sku: string; description: string; size: string; cost: string; rrp: string };
+
+function typedMoney(value: string, label: string, row: number) {
+  const cleaned = value.replace(/[$,\s]/g, "");
+  if (!cleaned) return null;
+  const amount = Number(cleaned);
+  if (!Number.isFinite(amount) || amount < 0) throw new Error(`Line ${row}: ${label} "${value}" isn't a price.`);
+  return Math.round(amount * 100) / 100;
+}
+
+/**
+ * Saves the lines typed in from a brand's photo order form, replacing the
+ * ones saved before (in the order given). Blank lines are skipped.
+ */
+export async function saveTypedOrderFormLines(supplierId: string, brandId: string, lines: TypedOrderFormLine[]) {
+  const { supabase, companyId, user } = await checkSupplierBrand(supplierId, brandId);
+  const { data: form } = await supabase
+    .from("supplier_order_forms")
+    .select("file_name")
+    .eq("supplier_id", supplierId)
+    .eq("brand_id", brandId)
+    .maybeSingle();
+  if (!form || !isImageFormName(form.file_name)) throw new Error("Upload a photo of the order form first.");
+
+  const filled = lines.filter((line) => [line.sku, line.description, line.size, line.cost, line.rrp].some((value) => value.trim()));
+  if (filled.length > MAX_TYPED_LINES) throw new Error(`An order form can have up to ${MAX_TYPED_LINES} lines.`);
+  const updatedAt = new Date().toISOString();
+  const rows = filled.map((line, index) => {
+    const description = line.description.trim();
+    if (!description) throw new Error(`Line ${index + 1} needs a description.`);
+    return {
+      company_id: companyId,
+      supplier_id: supplierId,
+      brand_id: brandId,
+      position: index + 1,
+      sku: line.sku.trim(),
+      description,
+      size: line.size.trim(),
+      cost: typedMoney(line.cost, "price", index + 1),
+      rrp: typedMoney(line.rrp, "RRP", index + 1),
+      updated_at: updatedAt,
+      updated_by: user.email ?? null,
+    };
+  });
+
+  await clearTypedLines(supplierId, brandId);
+  if (rows.length > 0) {
+    const { error } = await supabase.from("supplier_order_form_lines").insert(rows);
+    if (error) throw new Error(error.message || "Could not save the lines.");
+  }
   revalidatePriceList(supplierId);
 }
