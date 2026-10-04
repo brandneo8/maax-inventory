@@ -4,8 +4,8 @@ import { Fragment, useMemo, useState } from "react";
 import { deletePosTagRule, getPosBranchExportRows, savePosTagRule } from "./actions";
 import { isOnSalonPosList, type PosTagRule } from "@/lib/data/pos-rules";
 import { downloadCsv } from "@/lib/csv";
-import { productDisplayName } from "@/lib/format";
-import { btnClass, btnSecondaryClass, tableClass, tdClass, thClass } from "@/lib/ui";
+import { formatMoney, productDisplayName } from "@/lib/format";
+import { btnClass, btnSecondaryClass, fieldClass, tableClass, tdClass, thClass } from "@/lib/ui";
 import { cn } from "@/lib/utils";
 
 type PosProduct = {
@@ -17,6 +17,9 @@ type PosProduct = {
   brand: string;
   typeLabel: string;
   sizeLabel: string | null;
+  rrp: number | null;
+  /** Confirmed retail price: the RRP, or twice the unit cost when there's none. */
+  crp: number;
   posAllowed: boolean;
   branchIds: string[];
   tagIds: string[];
@@ -53,6 +56,11 @@ export function PosTable({
   const [savingFilter, setSavingFilter] = useState(false);
   const [clearingFilter, setClearingFilter] = useState(false);
   const [tab, setTab] = useState<"allowed" | "not_allowed">("allowed");
+  /** The salon whose products the list shows. */
+  const [salonId, setSalonId] = useState(branches[0]?.id ?? "");
+  const salonLabel = branches.find((branch) => branch.id === salonId)?.label ?? "this salon";
+  /** Brand filter ("" = every brand). */
+  const [brandFilter, setBrandFilter] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [downloadingBranchId, setDownloadingBranchId] = useState<string | null>(null);
 
@@ -107,8 +115,28 @@ export function PosTable({
     }
   }
 
-  const allowed = useMemo(() => products.filter((product) => product.posAllowed), [products]);
-  const notAllowed = useMemo(() => products.filter((product) => !product.posAllowed), [products]);
+  const salonProducts = useMemo(
+    () => products.filter((product) => product.branchIds.includes(salonId)),
+    [products, salonId],
+  );
+  const brandOptions = useMemo(() => {
+    const names = new Set(salonProducts.map((product) => product.brand || UNBRANDED_LABEL));
+    if (brandFilter) names.add(brandFilter);
+    return [...names].sort((left, right) => {
+      if (left === UNBRANDED_LABEL) return 1;
+      if (right === UNBRANDED_LABEL) return -1;
+      return left.localeCompare(right, undefined, { sensitivity: "base" });
+    });
+  }, [salonProducts, brandFilter]);
+  const listed = useMemo(
+    () =>
+      brandFilter
+        ? salonProducts.filter((product) => (product.brand || UNBRANDED_LABEL) === brandFilter)
+        : salonProducts,
+    [salonProducts, brandFilter],
+  );
+  const allowed = useMemo(() => listed.filter((product) => product.posAllowed), [listed]);
+  const notAllowed = useMemo(() => listed.filter((product) => !product.posAllowed), [listed]);
   const visible = tab === "allowed" ? allowed : notAllowed;
 
   const grouped = useMemo(() => {
@@ -237,6 +265,49 @@ export function PosTable({
         </div>
       </div>
 
+      <div className="space-y-3 rounded-xl border border-border bg-card p-4">
+        <div className="flex flex-wrap items-end gap-6">
+          <div className="space-y-2">
+            <h2 className="text-lg font-semibold">Salon</h2>
+            <div className="flex flex-wrap gap-2" role="group" aria-label="Salon">
+              {branches.map((branch) => (
+                <button
+                  key={branch.id}
+                  type="button"
+                  aria-pressed={salonId === branch.id}
+                  className={cn(
+                    "rounded-lg border px-3 py-1.5 text-sm hover:bg-slate-50",
+                    salonId === branch.id ? "border-sky-400 bg-sky-100 font-medium" : "border-border",
+                  )}
+                  onClick={() => setSalonId(branch.id)}
+                >
+                  {branch.label}
+                </button>
+              ))}
+            </div>
+          </div>
+          <label className="space-y-2" htmlFor="pos-brand-filter">
+            <span className="block text-lg font-semibold">Brand</span>
+            <select
+              id="pos-brand-filter"
+              className={cn(fieldClass, "min-w-48")}
+              value={brandFilter}
+              onChange={(event) => setBrandFilter(event.target.value)}
+            >
+              <option value="">All brands</option>
+              {brandOptions.map((brand) => (
+                <option key={brand} value={brand}>
+                  {brand}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+        <p className="text-sm text-muted">
+          The list below shows the {brandFilter ? `${brandFilter} ` : ""}products assigned to {salonLabel}.
+        </p>
+      </div>
+
       {error ? (
         <p className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">{error}</p>
       ) : null}
@@ -270,9 +341,9 @@ export function PosTable({
         <table className={tableClass}>
           <thead>
             <tr>
-              <th className={cn(thClass, stickyHead)}>Name</th>
-              <th className={cn(thClass, stickyHead)}>Size</th>
               <th className={cn(thClass, stickyHead)}>Name with size</th>
+              <th className={cn(thClass, stickyHead, "text-right")}>RRP</th>
+              <th className={cn(thClass, stickyHead, "text-right")}>CRP</th>
               <th className={cn(thClass, stickyHead)}>SKU</th>
               <th className={cn(thClass, stickyHead)}>Brand</th>
               <th className={cn(thClass, stickyHead)}>Type</th>
@@ -283,22 +354,26 @@ export function PosTable({
             {grouped.length === 0 ? (
               <tr>
                 <td className={tdClass} colSpan={7}>
-                  {tab === "allowed" ? "No products are allowed in POS yet." : "Every product is allowed in POS."}
+                  {tab === "allowed"
+                    ? `No ${salonLabel} products are allowed in POS yet.`
+                    : `Every ${salonLabel} product is allowed in POS.`}
                 </td>
               </tr>
             ) : (
               grouped.map((group) => (
                 <Fragment key={group.brand}>
-                  <tr className="bg-slate-50">
-                    <td className={cn(tdClass, "font-medium text-slate-700")} colSpan={7}>
+                  <tr>
+                    <td className={cn(tdClass, "bg-slate-700 font-semibold text-white")} colSpan={7}>
                       {group.brand}
                     </td>
                   </tr>
                   {group.products.map((product) => (
                     <tr key={product.id}>
-                      <td className={tdClass}>{productDisplayName(product) || product.sku || "—"}</td>
-                      <td className={tdClass}>{product.sizeLabel || "—"}</td>
                       <td className={tdClass}>{nameWithSize(product) || "—"}</td>
+                      <td className={cn(tdClass, "text-right tabular-nums")}>
+                        {product.rrp == null ? "—" : formatMoney(product.rrp)}
+                      </td>
+                      <td className={cn(tdClass, "text-right tabular-nums")}>{formatMoney(product.crp)}</td>
                       <td className={tdClass}>{product.sku || "—"}</td>
                       <td className={tdClass}>{product.brand || "—"}</td>
                       <td className={tdClass}>{product.typeLabel || "—"}</td>

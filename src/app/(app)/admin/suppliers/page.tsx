@@ -9,12 +9,28 @@ export default async function AdminSuppliersPage() {
     getTaxRates(supabase, companyId),
   ]);
 
+  // How many products each supplier's price list holds.
+  const productCounts: Record<string, number> = {};
+  const supplierIds = suppliers.map((supplier) => supplier.id);
+  for (let from = 0; supplierIds.length > 0; from += 1000) {
+    const { data, error } = await supabase
+      .from("supplier_products")
+      .select("supplier_id, product_id")
+      .in("supplier_id", supplierIds)
+      .order("product_id")
+      .range(from, from + 999);
+    if (error) throw error;
+    for (const row of data ?? []) productCounts[row.supplier_id] = (productCounts[row.supplier_id] ?? 0) + 1;
+    if (!data || data.length < 1000) break;
+  }
+
   return (
     <div className="space-y-4">
       <div>
         <h1 className="text-2xl font-semibold tracking-tight">Suppliers</h1>
         <p className="mt-1 text-sm text-muted">
-          Maintain supplier contacts, order channel, and GST. Ticking GST saves immediately.
+          Maintain supplier contacts, order channel, and GST — click Edit to change them, or Add supplier. Open a supplier&apos;s
+          price list to edit just its products.
         </p>
       </div>
       <SuppliersTable
@@ -27,6 +43,7 @@ export default async function AdminSuppliersPage() {
           gst_registered: supplier.gst_registered,
         }))}
         taxRate={Number(taxRates.find((rate) => rate.is_default)?.rate_percentage ?? 9)}
+        productCounts={productCounts}
       />
     </div>
   );

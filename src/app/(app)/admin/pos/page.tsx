@@ -1,4 +1,5 @@
 import { requireAdmin } from "@/lib/auth";
+import { confirmedRetailPrice } from "@/lib/catalog-pricing";
 import { getBranches, getTags } from "@/lib/data/lookups";
 import { getCatalogProducts } from "@/lib/data/products";
 import { getPosTagRules } from "@/lib/data/pos-rules";
@@ -34,6 +35,8 @@ export default async function PosPage() {
           brand: product.brand,
           typeLabel: classificationTagsLabel([...new Set(Object.values(product.classificationsByBranch).flat())]),
           sizeLabel: product.sizeLabel,
+          rrp: product.rrp,
+          crp: confirmedRetailPrice(product.unitCost, product.rrp),
           posAllowed: product.posAllowed,
           branchIds: product.branchIds,
           tagIds: product.tagIds,

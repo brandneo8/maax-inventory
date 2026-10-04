@@ -17,10 +17,14 @@ import { downloadCsv } from "@/lib/csv";
 import { formatCatalogSavedLabel, formatMoney, formatPercent, formatQty, productDisplayName, productLabel } from "@/lib/format";
 import { searchFieldsMatch, searchTextMatches } from "@/lib/search";
 import { BrandSubFilter, NO_BRAND_SUB } from "@/components/brand-sub-filter";
-import { CLASSIFICATIONS, classificationTagsLabel, salonChipLabel, type ProductClassification } from "@/lib/labels";
+import { classificationTagsLabel, salonChipLabel, type ProductClassification } from "@/lib/labels";
 import { parseSize, sizesMatch } from "@/lib/product-size";
 import { btnClass, btnDangerClass, btnSecondaryClass, checkboxClass, fieldClass, tableClass, tdClass, thClass } from "@/lib/ui";
 import { cn } from "@/lib/utils";
+import { ProductFormModal, type ProductFormReference, type ProductFormValues } from "./product-form-modal";
+import { OrderFormPanel } from "./order-form-panel";
+import { OrderFormComparison, type ComparisonProduct, type NewPriceListRow } from "./order-form-comparison";
+import type { BrandOrderForm } from "@/lib/data/order-forms";
 import { BulkEditModal, type BulkEditFields } from "./bulk-edit-modal";
 
 export type BundleDraft = { productId: string; quantity: number; label: string; allocatedCost: string };
@@ -68,10 +72,11 @@ type TableDraft = ProductDraft & {
 const SELECT_COL_REM = 9;
 const wCheck = "w-36 min-w-36";
 const wField = "min-w-28";
-const wImage = "w-16 min-w-16";
+// Frozen (sticky) columns, left to right: select, image, order name.
+const wImage = "w-20 min-w-20";
+const IMAGE_COL_REM = 5;
 const wName = "w-72 min-w-72";
 const wFriendly = "min-w-44";
-const wType = "min-w-44";
 const wSupplier = "min-w-52";
 const wContents = "min-w-56";
 const stickyHead = "sticky top-0 z-20 bg-card";
@@ -129,61 +134,29 @@ function toDraft(product: ProductRow): TableDraft {
 
 const PAGE_SIZES = [50, 100] as const;
 
-const FILTERABLE_CLASSIFICATIONS = CLASSIFICATIONS.filter((item) => item.value !== "retail_inhouse");
-
 function flattenClassifications(byBranch: Record<string, ProductClassification[]>) {
   return [...new Set(Object.values(byBranch).flat())];
-}
-
-function branchClassificationsSummary(
-  byBranch: Record<string, ProductClassification[]>,
-  branches: { id: string; name: string }[],
-) {
-  return branches
-    .map((branch) => {
-      const label = classificationTagsLabel(byBranch[branch.id] ?? []);
-      return label ? `${branch.name}: ${label}` : null;
-    })
-    .filter(Boolean)
-    .join("; ");
 }
 
 const UNGROUPED = "Ungrouped";
 const NEW_PRODUCTS = "New products";
 
-type GroupBy = "none" | "brandSub" | "brand" | "salon" | "tags" | "type" | "supplier" | "size";
+// Salon and type are managed per salon under Admin > Branches, not here.
+type GroupBy = "none" | "brandSub" | "brand" | "tags" | "supplier" | "size";
 
 const GROUP_BY_OPTIONS: { value: GroupBy; label: string }[] = [
   { value: "none", label: "None" },
   { value: "brandSub", label: "Brand sub" },
   { value: "brand", label: "Brand" },
-  { value: "salon", label: "Salon" },
   { value: "tags", label: "Tags" },
-  { value: "type", label: "Type" },
   { value: "supplier", label: "Suppliers" },
   { value: "size", label: "Size" },
 ];
 
-function salonGroupLabel(row: TableDraft, branches: { id: string; name: string }[]) {
-  const labels = row.branchIds
-    .map((id) => {
-      const branch = branches.find((item) => item.id === id);
-      return branch ? salonChipLabel(branch.name) : "";
-    })
-    .filter(Boolean)
-    .sort((left, right) => left.localeCompare(right, undefined, { sensitivity: "base" }));
-  return labels.join(", ") || "No salon";
-}
-
-function rowGroupKey(
-  row: TableDraft,
-  groupBy: GroupBy,
-  branches: { id: string; name: string }[],
-) {
+function rowGroupKey(row: TableDraft, groupBy: GroupBy) {
   if (groupBy === "none") return UNGROUPED;
   if (groupBy === "brandSub") return row.brandSub.trim() || UNGROUPED;
   if (groupBy === "brand") return row.brand.trim() || UNGROUPED;
-  if (groupBy === "salon") return salonGroupLabel(row, branches);
   if (groupBy === "tags") {
     const names = row.tagNames
       .map((name) => name.trim())
@@ -191,7 +164,6 @@ function rowGroupKey(
       .sort((left, right) => left.localeCompare(right, undefined, { sensitivity: "base" }));
     return names.length > 0 ? names.join(", ") : "No tag";
   }
-  if (groupBy === "type") return classificationTagsLabel(flattenClassifications(row.classificationsByBranch)) || "No type";
   if (groupBy === "size") return row.size.trim() || "No size";
   const supplier = row.supplierName.trim();
   return supplier || "No supplier";
@@ -271,9 +243,6 @@ function brandSubListId(brand: string) {
   return `brand-sub-${brand.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
 }
 
-function productFingerprint(row: { orderName: string; sku: string; barcode: string }) {
-  return `${row.orderName.trim().toLowerCase()}|${row.sku.trim().toLowerCase()}|${row.barcode.trim().toLowerCase()}`;
-}
 
 function parsedAllocatedCost(value: string) {
   const trimmed = value.trim();
@@ -346,6 +315,7 @@ function SortableHeader({
 
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 
+/** A product's picture; click it to upload or replace (pictures aren't part of the edit forms). */
 function ProductImageCell({
   productId,
   pictureUrl,
@@ -429,7 +399,7 @@ function withParentContents(row: TableDraft, contents: BundleDraft[]): TableDraf
   };
 }
 
-function emptyRow(branchIds: string[]): TableDraft {
+function emptyRow(branchIds: string[], supplierIds: string[] = []): TableDraft {
   return {
     clientKey: crypto.randomUUID(),
     sku: "",
@@ -451,7 +421,7 @@ function emptyRow(branchIds: string[]): TableDraft {
     branchIds,
     components: [],
     componentLabels: [],
-    supplierIds: [],
+    supplierIds,
     supplierName: "",
     gstRegistered: false,
   };
@@ -495,10 +465,6 @@ function catalogCsvRow(
   const supplier =
     options.suppliers.find((item) => item.id === row.supplierIds[0])?.name ?? row.supplierName;
   return {
-    Salons: options.branches
-      .filter((branch) => row.branchIds.includes(branch.id))
-      .map((branch) => salonChipLabel(branch.name))
-      .join(", "),
     "Order name": row.orderName,
     Name: row.name,
     SKU: row.sku,
@@ -506,7 +472,6 @@ function catalogCsvRow(
     Brand: row.brand,
     "Brand sub": row.brandSub,
     Size: row.size,
-    Type: branchClassificationsSummary(row.classificationsByBranch, options.branches),
     Tags: row.tagNames.filter(Boolean).join(", "),
     Supplier: supplier,
     "Unit cost": csvNumber(unitCost),
@@ -643,6 +608,8 @@ export function ProductsTable({
   catalogSavedAt = null,
   catalogSavedByEmail = null,
   branchCosts = {},
+  lockedSupplierId = null,
+  orderForms = [],
 }: {
   products: ProductRow[];
   tags: { id: string; name: string }[];
@@ -652,14 +619,31 @@ export function ProductsTable({
   catalogSavedAt?: string | null;
   catalogSavedByEmail?: string | null;
   branchCosts?: Record<string, Record<string, number>>;
+  /**
+   * Show one supplier's price list: only that supplier's products, with the
+   * supplier filter fixed, and new rows linked to it. All products are still
+   * loaded, so bundles can use contents from any supplier.
+   */
+  lockedSupplierId?: string | null;
+  /** On a supplier's price list: each brand's uploaded order form (one per brand). */
+  orderForms?: BrandOrderForm[];
 }) {
+  const newRowSupplierIds = useMemo(() => (lockedSupplierId ? [lockedSupplierId] : []), [lockedSupplierId]);
+  // A supplier's price list is a trimmed view: brand buttons instead of the
+  // filters and grouping, and only the ordering columns (see priceListHidden).
+  const priceList = Boolean(lockedSupplierId);
+  /** Class that hides a column on a supplier's price list. */
+  const priceListHidden = priceList ? "hidden" : "";
   const router = useRouter();
   const [rows, setRows] = useState(() =>
     products.length > 0 ? products.map((product) => withBulkOverride(toDraft(product))) : [],
   );
-  const [editing, setEditing] = useState(false);
+  // Products are changed only through forms: the product form (one product,
+  // or Add product) and the bulk edit form (several). The table itself is read-only.
+  const [productForm, setProductForm] = useState<
+    { mode: "add" } | { mode: "edit"; index: number; reference?: ProductFormReference | null } | null
+  >(null);
   const [bulkOpen, setBulkOpen] = useState(false);
-  const [snapshotAt, setSnapshotAt] = useState(() => new Date());
   const [overlayTick, setOverlayTick] = useState(0);
   const [recentBulkIds, setRecentBulkIds] = useState<Set<string>>(() => new Set());
   const [selected, setSelected] = useState<string[]>([]);
@@ -668,12 +652,10 @@ export function ProductsTable({
   const [brandFilter, setBrandFilter] = useState("");
   const [brandSubFilter, setBrandSubFilter] = useState<string[]>([]);
   const [customBrandSubs, setCustomBrandSubs] = useState<{ brand: string; name: string }[]>([]);
-  const [groupBy, setGroupBy] = useState<GroupBy>("brandSub");
+  const [groupBy, setGroupBy] = useState<GroupBy>(lockedSupplierId ? "none" : "brandSub");
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(() => new Set());
-  const [salonFilter, setSalonFilter] = useState("");
   const [sizeFilter, setSizeFilter] = useState("");
-  const [supplierFilter, setSupplierFilter] = useState("");
-  const [typeFilter, setTypeFilter] = useState("");
+  const [supplierFilter, setSupplierFilter] = useState(lockedSupplierId ?? "");
   const [tagFilter, setTagFilter] = useState("");
   const [sortColumn, setSortColumn] = useState<SortColumn>("orderName");
   const [sortDirection, setSortDirection] = useState<SortDirection>("asc");
@@ -682,7 +664,6 @@ export function ProductsTable({
   const [message, setMessage] = useState<string | null>(null);
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState<(typeof PAGE_SIZES)[number]>(50);
-  const [dirty, setDirty] = useState<Set<number>>(() => new Set());
   const [bundleIndex, setBundleIndex] = useState<number | null>(null);
   const [bundleQuery, setBundleQuery] = useState("");
   const [migrationPrompt, setMigrationPrompt] = useState<{
@@ -702,10 +683,6 @@ export function ProductsTable({
   const [headHeight, setHeadHeight] = useState(41);
   const skipProductSync = useRef(false);
   const dirtyIdsRef = useRef(new Set<string>());
-  const editingRef = useRef(editing);
-  const dirtyRef = useRef(dirty);
-  editingRef.current = editing;
-  dirtyRef.current = dirty;
 
   useEffect(() => {
     pruneCaughtUpOverrides(products);
@@ -713,35 +690,9 @@ export function ProductsTable({
       skipProductSync.current = false;
       return;
     }
-    setRows((current) => {
-      if (!editing) {
-        dirtyIdsRef.current.clear();
-        setDirty(new Set());
-        return products.map((product) => withBulkOverride(toDraft(product)));
-      }
-      const currentById = new Map(
-        current.filter((row) => row.id).map((row) => [row.id as string, row]),
-      );
-      const saved = products.map((product) => {
-        const local = currentById.get(product.id);
-        const incoming = toDraft(product);
-        const base = local && dirtyIdsRef.current.has(product.id) ? local : incoming;
-        return withBulkOverride(base);
-      });
-      const savedKeys = new Set(saved.map(productFingerprint));
-      const drafts = current.filter((row) => {
-        if (row.id) return false;
-        if (!row.orderName.trim() && !row.name.trim()) return true;
-        return !savedKeys.has(productFingerprint(row));
-      });
-      if (drafts.length === 0 && saved.length === 0) {
-        return [emptyRow(branches.map((branch) => branch.id))];
-      }
-      const next = [...drafts, ...saved];
-      setDirty(new Set(next.flatMap((row, index) => (row.id && dirtyIdsRef.current.has(row.id) ? [index] : []))));
-      return next;
-    });
-  }, [branches, editing, products]);
+    dirtyIdsRef.current.clear();
+    setRows(products.map((product) => withBulkOverride(toDraft(product))));
+  }, [products]);
 
   useEffect(() => {
     if (recentBulkIds.size === 0) return;
@@ -751,11 +702,10 @@ export function ProductsTable({
 
   useEffect(() => {
     function canReload() {
-      return !(editingRef.current && (dirtyIdsRef.current.size > 0 || dirtyRef.current.size > 0));
+      return true;
     }
     function reloadIfSafe() {
       if (!canReload()) return;
-      setSnapshotAt(new Date());
       router.refresh();
     }
     function onVisibility() {
@@ -774,11 +724,52 @@ export function ProductsTable({
     () => [...new Set(rows.map((row) => row.brand.trim()).filter(Boolean))].sort((left, right) => left.localeCompare(right)),
     [rows],
   );
+  // The Brand filter on a supplier's price list only offers that supplier's
+  // brands (bulk edit still offers every brand, via brandOptions).
+  const brandFilterOptions = useMemo(() => {
+    if (!lockedSupplierId) return brandOptions;
+    const brands = new Set(
+      rows
+        .filter((row) => withBulkOverride(row).supplierIds.includes(lockedSupplierId))
+        .map((row) => withBulkOverride(row).brand.trim())
+        .filter(Boolean),
+    );
+    return [...brands].sort((left, right) => left.localeCompare(right));
+  }, [brandOptions, lockedSupplierId, rows]);
+
+  // On a price list one brand is always selected (there's no "all brands").
+  const activeBrandFilter = priceList
+    ? brandFilterOptions.includes(brandFilter)
+      ? brandFilter
+      : (brandFilterOptions[0] ?? "")
+    : brandFilter;
+  const orderFormFor = (brand: string) => orderForms.find((entry) => entry.brandName === brand);
+  // The selected brand's products on this price list, for the order form comparison.
+  const comparisonProducts = useMemo<ComparisonProduct[]>(
+    () =>
+      !lockedSupplierId
+        ? []
+        : rows
+            .map((row) => withBulkOverride(row))
+            .filter(
+              (row) => row.id && row.supplierIds.includes(lockedSupplierId) && row.brand.trim() === activeBrandFilter,
+            )
+            .map((row) => ({
+              id: row.id!,
+              sku: row.sku,
+              orderName: row.orderName,
+              name: row.name,
+              size: row.size,
+              unitCost: Number(row.unitCost) || 0,
+              rrp: row.rrp === "" ? null : Number(row.rrp),
+            })),
+    [activeBrandFilter, lockedSupplierId, rows],
+  );
 
   const rowMatchesFilters = useCallback(
     (row: TableDraft, ignoreBrandSub = false) => {
       const current = withBulkOverride(row);
-      if (brandFilter && current.brand.trim() !== brandFilter) return false;
+      if (activeBrandFilter && current.brand.trim() !== activeBrandFilter) return false;
       if (!ignoreBrandSub && brandSubFilter.length > 0) {
         const wantsNone = brandSubFilter.includes(NO_BRAND_SUB);
         const wanted = brandSubFilter.filter((name) => name !== NO_BRAND_SUB);
@@ -795,13 +786,6 @@ export function ProductsTable({
       }
       if (supplierFilter === "none" && current.supplierIds.length > 0) return false;
       if (supplierFilter && supplierFilter !== "none" && !current.supplierIds.includes(supplierFilter)) return false;
-      if (salonFilter === "none" && current.branchIds.length > 0) return false;
-      if (salonFilter && salonFilter !== "none" && !current.branchIds.includes(salonFilter)) return false;
-      const currentClassifications = flattenClassifications(current.classificationsByBranch);
-      if (typeFilter === "none" && currentClassifications.length > 0) return false;
-      if (typeFilter && typeFilter !== "none" && !currentClassifications.includes(typeFilter as ProductClassification)) {
-        return false;
-      }
       if (tagFilter === "none" && current.tagIds.length > 0) return false;
       if (tagFilter && tagFilter !== "none" && !current.tagIds.includes(tagFilter)) return false;
       const needle = deferredQuery.trim();
@@ -811,7 +795,7 @@ export function ProductsTable({
         needle,
       );
     },
-    [brandFilter, brandSubFilter, deferredQuery, overlayTick, salonFilter, sizeFilter, supplierFilter, tagFilter, typeFilter],
+    [activeBrandFilter, brandSubFilter, deferredQuery, overlayTick, sizeFilter, supplierFilter, tagFilter],
   );
 
   const brandSubOptions = useMemo(() => {
@@ -896,9 +880,9 @@ export function ProductsTable({
   const groupKeyFor = useCallback(
     (row: TableDraft, index = 0) => {
       if (index >= 0 && !row.id) return NEW_PRODUCTS;
-      return rowGroupKey(row, groupBy, branches);
+      return rowGroupKey(row, groupBy);
     },
-    [branches, groupBy],
+    [groupBy],
   );
 
   const grouped = useMemo(() => {
@@ -920,7 +904,7 @@ export function ProductsTable({
         })
         .map((item) => ({
           row: {
-            ...emptyRow(branches.map((branch) => branch.id)),
+            ...emptyRow(branches.map((branch) => branch.id), newRowSupplierIds),
             brand: item.brand,
             brandSub: item.name,
           },
@@ -950,6 +934,7 @@ export function ProductsTable({
     filtered,
     groupBy,
     groupKeyFor,
+    newRowSupplierIds,
     sortColumn,
     sortDirection,
   ]);
@@ -1001,7 +986,8 @@ export function ProductsTable({
     }
     return byChild;
   }, [overlayTick, rows]);
-  const nameLeft = `${SELECT_COL_REM}rem`;
+  const imageLeft = `${SELECT_COL_REM}rem`;
+  const nameLeft = `${SELECT_COL_REM + (priceList ? 0 : IMAGE_COL_REM)}rem`;
   const rowBg = (selectedRow: boolean) => (selectedRow ? "bg-slate-50" : "bg-card");
 
   useEffect(() => {
@@ -1090,71 +1076,11 @@ export function ProductsTable({
   const allSelected = selectableIds.length > 0 && selectableIds.every((id) => selected.includes(id));
   const selectedCount = selected.length;
 
-  function updateRow(index: number, patch: Partial<TableDraft>) {
-    setRows((current) => {
-      const next = current.map((row, rowIndex) => {
-        if (rowIndex !== index) return row;
-        if (row.id) {
-          dirtyIdsRef.current.add(row.id);
-          const currentOverride = bulkOverrides.get(row.id);
-          if (currentOverride) bulkOverrides.set(row.id, { ...currentOverride, ...patch });
-        }
-        const updated = { ...row, ...patch };
-        if (patch.size != null) {
-          updated.sizeMl = parseSize(patch.size)?.ml ?? null;
-        }
-        if (patch.isSet === false) {
-          updated.components = [];
-          updated.componentLabels = [];
-        }
-        if (patch.isSet != null) {
-          const bundleTag = tags.find((tag) => tag.name.trim().toLowerCase() === "bundle");
-          if (bundleTag) {
-            if (patch.isSet) {
-              if (!updated.tagIds.includes(bundleTag.id)) {
-                updated.tagIds = [...updated.tagIds, bundleTag.id];
-                updated.tagNames = [...updated.tagNames, bundleTag.name];
-              }
-            } else {
-              const kept = updated.tagIds
-                .map((id, tagIndex) => ({ id, name: updated.tagNames[tagIndex] ?? "" }))
-                .filter((tag) => tag.id !== bundleTag.id);
-              updated.tagIds = kept.map((tag) => tag.id);
-              updated.tagNames = kept.map((tag) => tag.name);
-            }
-          }
-        }
-        return updated;
-      });
-      const row = next[index];
-      if (row && patch.unitCost != null && row.isSet && row.componentLabels.length === 1) {
-        const withCosts = withParentContents(row, row.componentLabels);
-        next[index] = withCosts;
-        return inheritChildCosts(next, withCosts.componentLabels, dirtyIdsRef.current);
-      }
-      return next;
-    });
-    setDirty((current) => new Set(current).add(index));
-  }
 
   function toggleOne(id: string) {
     setSelected((current) => (current.includes(id) ? current.filter((item) => item !== id) : [...current, id]));
   }
 
-  function addRow() {
-    setRows((current) => [emptyRow(branches.map((branch) => branch.id)), ...current]);
-    setDirty((current) => new Set([...current].map((index) => index + 1)));
-    setBundleIndex((current) => (current == null ? null : current + 1));
-    setCollapsedGroups((current) => {
-      if (!current.has(NEW_PRODUCTS)) return current;
-      const next = new Set(current);
-      next.delete(NEW_PRODUCTS);
-      return next;
-    });
-    setPage(0);
-    setError(null);
-    setMessage(null);
-  }
 
   function groupProductIds(groupKey: string) {
     return grouped
@@ -1203,7 +1129,6 @@ export function ProductsTable({
       await postCatalogBulk({ productIds, fields });
       applyToSelected(productIds, patch);
       setBulkOpen(false);
-      setSnapshotAt(new Date());
       router.refresh();
       setMessage(`Updated ${productIds.length} product${productIds.length === 1 ? "" : "s"}.`);
     } catch (err) {
@@ -1216,128 +1141,11 @@ export function ProductsTable({
     }
   }
 
-  async function enterEdit() {
-    dirtyIdsRef.current.clear();
-    setDirty(new Set());
-    setError(null);
-    setMessage(null);
-    setSnapshotAt(new Date());
-    await router.refresh();
-    setEditing(true);
-  }
 
-  function leaveEdit() {
-    dirtyIdsRef.current.clear();
-    setDirty(new Set());
-    setBundleIndex(null);
-    setBulkOpen(false);
-    setError(null);
-    setMessage(null);
-    setEditing(false);
-    setSnapshotAt(new Date());
-    router.refresh();
-  }
 
-  function persistableDrafts() {
-    return rows.filter((row, index) => {
-      if (!row.orderName.trim()) return false;
-      if (!row.id) return dirty.has(index);
-      return dirty.has(index) || dirtyIdsRef.current.has(row.id);
-    });
-  }
 
-  async function onSave() {
-    const drafts = persistableDrafts();
-    if (drafts.length === 0) {
-      setError("Nothing to save. Edit a product or add an order name on a new row.");
-      return false;
-    }
-    const incomplete = drafts.find(
-      (row) =>
-        row.isSet &&
-        row.componentLabels.length > 1 &&
-        !bundleCostsComplete(
-          Number(row.unitCost) || 0,
-          row.componentLabels.map((item) => parsedAllocatedCost(item.allocatedCost)),
-        ),
-    );
-    if (incomplete) {
-      setError(
-        `Enter a cost breakdown for ${productDisplayName(incomplete) || incomplete.orderName || "the mixed bundle"} that adds up to its unit cost.`,
-      );
-      return false;
-    }
-    setPending(true);
-    setError(null);
-    setMessage(null);
-    try {
-      const result = await saveProducts(
-        drafts.map((row) => ({
-          id: row.id,
-          clientKey: row.clientKey,
-          sku: row.sku,
-          barcode: row.barcode,
-          name: row.name,
-          orderName: row.orderName,
-          brand: row.brand,
-          brandSub: row.brandSub,
-          size: row.size,
-          unitCost: row.unitCost,
-          rrp: row.rrp,
-          threshold: row.threshold,
-          isSet: row.isSet,
-          supplierIds: row.supplierIds,
-          components: row.componentLabels.length > 0 ? contentsPayload(row.componentLabels) : row.components,
-        })),
-      );
-      const leftover = [...(result.saved ?? [])];
-      dirtyIdsRef.current.clear();
-      skipProductSync.current = true;
-      setRows((current) =>
-        current
-          .map((row) => {
-            if (row.id) return row;
-            const byKey = leftover.findIndex((item) => item.clientKey && item.clientKey === row.clientKey);
-            if (byKey >= 0) {
-              const id = leftover[byKey].id;
-              leftover.splice(byKey, 1);
-              return { ...row, id };
-            }
-            return row;
-          })
-          .filter((row) => row.id || row.orderName.trim() || row.name.trim()),
-      );
-      setDirty(new Set());
-      setSnapshotAt(new Date());
-      await router.refresh();
-      setMessage(`Saved ${drafts.filter((row) => row.orderName.trim()).length} product${drafts.length === 1 ? "" : "s"}.`);
-      return true;
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not save products.");
-      return false;
-    } finally {
-      setPending(false);
-    }
-  }
 
-  async function finishEdit() {
-    if (persistableDrafts().length > 0) {
-      const saved = await onSave();
-      if (!saved) return;
-    }
-    leaveEdit();
-  }
 
-  function setRowSupplier(index: number, supplierId: string) {
-    const current = rows[index];
-    if (!current) return;
-    const supplier = suppliers.find((item) => item.id === supplierId);
-    updateRow(index, {
-      supplierIds: supplier ? [supplier.id] : [],
-      supplierName: supplier?.name ?? "",
-      gstRegistered: supplier?.gstRegistered ?? false,
-    });
-  }
 
   function setRowPicture(index: number, pictureUrl: string | null) {
     setRows((current) => current.map((row, rowIndex) => (rowIndex === index ? { ...row, pictureUrl } : row)));
@@ -1361,7 +1169,6 @@ export function ProductsTable({
       const next = current.map((row, rowIndex) => (rowIndex === index ? withCosts : row));
       return inheritChildCosts(next, withCosts.componentLabels, dirtyIdsRef.current);
     });
-    setDirty((current) => new Set(current).add(index));
   }
 
   async function confirmMigration() {
@@ -1390,12 +1197,8 @@ export function ProductsTable({
     }
     setRows((current) => {
       const next = current.filter((_, rowIndex) => rowIndex !== index);
-      if (editing) {
-        return next.length > 0 ? next : [emptyRow(branches.map((branch) => branch.id))];
-      }
       return next;
     });
-    setSnapshotAt(new Date());
   }
 
   async function onDelete(index: number) {
@@ -1464,20 +1267,120 @@ export function ProductsTable({
     }
   }
 
+  /** Edit: one ticked product opens its form; several open the bulk form. */
+  function openEdit() {
+    if (selectedCount === 1) {
+      const index = rows.findIndex((row) => row.id === selected[0]);
+      if (index >= 0) setProductForm({ mode: "edit", index });
+      return;
+    }
+    if (selectedCount > 1) setBulkOpen(true);
+  }
+
+  /** Opens one product's form (on a price list, with its order form line for reference). */
+  function editProduct(productId: string, reference: ProductFormReference | null = null) {
+    const index = rows.findIndex((row) => row.id === productId);
+    if (index >= 0) setProductForm({ mode: "edit", index, reference });
+  }
+
+  function formValuesFor(row: TableDraft | null | undefined): ProductFormValues {
+    return {
+      orderName: row?.orderName ?? "",
+      name: row?.name ?? "",
+      sku: row?.sku ?? "",
+      barcode: row?.barcode ?? "",
+      brand: row?.brand ?? "",
+      brandSub: row?.brandSub ?? "",
+      size: row?.size ?? "",
+      supplierId: row ? (row.supplierIds[0] ?? "") : (newRowSupplierIds[0] ?? ""),
+      unitCost: row?.unitCost ?? "",
+      rrp: row?.rrp ?? "",
+      threshold: row?.threshold ?? "",
+      isSet: row?.isSet ?? false,
+    };
+  }
+
+  /** Saves the product form: a new product, or the one being edited. */
+  async function saveProductForm(values: ProductFormValues, row: TableDraft | null | undefined) {
+    const base = row ?? emptyRow(branches.map((branch) => branch.id), newRowSupplierIds);
+    const unitCost = Number(values.unitCost) || 0;
+    // A mixed bundle's cost breakdown must still add up to its unit cost.
+    if (
+      values.isSet &&
+      base.componentLabels.length > 1 &&
+      !bundleCostsComplete(
+        unitCost,
+        base.componentLabels.map((item) => parsedAllocatedCost(item.allocatedCost)),
+      )
+    ) {
+      throw new Error("This bundle's cost breakdown no longer adds up to its unit cost. Adjust it in Edit contents first.");
+    }
+    await saveProducts([
+      {
+        id: base.id,
+        clientKey: base.clientKey,
+        sku: values.sku,
+        barcode: values.barcode,
+        name: values.name,
+        orderName: values.orderName,
+        brand: values.brand,
+        brandSub: values.brandSub,
+        size: values.size,
+        unitCost: values.unitCost,
+        rrp: values.rrp,
+        threshold: values.threshold,
+        isSet: values.isSet,
+        supplierIds: values.supplierId ? [values.supplierId] : [],
+        components: base.componentLabels.length > 0 ? contentsPayload(base.componentLabels) : base.components,
+      },
+    ]);
+    setProductForm(null);
+    setMessage(row ? `Saved ${values.orderName.trim()}.` : `Added ${values.orderName.trim()}.`);
+    router.refresh();
+  }
+
+  /** Adds products typed into a price list's Pulse table, under its brand and supplier. */
+  async function addPriceListProducts(entries: NewPriceListRow[]) {
+    const branchIds = branches.map((branch) => branch.id);
+    await saveProducts(
+      entries.map((entry) => {
+        const base = emptyRow(branchIds, newRowSupplierIds);
+        return {
+          clientKey: base.clientKey,
+          sku: entry.sku,
+          barcode: "",
+          name: "",
+          orderName: entry.orderName,
+          brand: activeBrandFilter,
+          brandSub: "",
+          size: entry.size,
+          unitCost: entry.unitCost,
+          rrp: entry.rrp,
+          threshold: "",
+          isSet: false,
+          supplierIds: newRowSupplierIds,
+          components: [],
+        };
+      }),
+    );
+    setMessage(entries.length === 1 ? `Added ${entries[0].orderName.trim()}.` : `Added ${entries.length} products.`);
+    router.refresh();
+  }
+
   const editingBundle = bundleIndex == null ? null : rows[bundleIndex];
 
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <p className="text-sm text-muted">
-          {editing
-            ? `Editing catalog. Snapshot from ${snapshotAt.toLocaleString()}. Click Done to save if this is your session.`
-            : "Viewing catalog. Open Edit catalog to change products."}
+          {priceList
+            ? "Click Edit on a product to change it, or add rows under the Pulse table."
+            : "Tick a product and click Edit to change it (tick several to change them together), or Add product."}
         </p>
         <div className="flex flex-wrap items-center gap-3">
           <p
             className="text-sm text-muted"
-            title="Set when someone clicks Done after saving catalog edits. This tab also reloads when you come back to it."
+            title="Updated whenever a product is added or saved. This tab also reloads when you come back to it."
           >
             {formatCatalogSavedLabel(catalogSavedAt, catalogSavedByEmail)}
           </p>
@@ -1493,207 +1396,194 @@ export function ProductsTable({
         </div>
       </div>
 
-      <div className="grid grid-cols-1 items-start gap-3 lg:grid-cols-[minmax(0,1fr)_auto]">
-      <div className="grid gap-3 rounded-xl border border-border bg-card p-4 md:grid-cols-2 xl:grid-cols-4">
-        <label className="space-y-1 text-sm">
-          <span>Find product</span>
-          <input
-            className={fieldClass}
-            value={query}
-            onChange={(event) => {
-              setQuery(event.target.value);
-              setPage(0);
-            }}
-            placeholder="SKU, barcode, or name"
-          />
-        </label>
-        <label className="space-y-1 text-sm">
-          <span>Brand</span>
-          <select
-            className={fieldClass}
-            value={brandFilter}
-            onChange={(event) => {
-              setBrandFilter(event.target.value);
-              setBrandSubFilter([]);
-              setPage(0);
-            }}
+      {priceList ? (
+        <div className="space-y-3">
+          <div
+            className="flex flex-wrap items-center gap-2 rounded-xl border border-border bg-card p-3"
+            role="group"
+            aria-label="Brand"
           >
-            <option value="">All brands</option>
-            {brandOptions.map((brand) => (
-              <option key={brand} value={brand}>
-                {brand}
-              </option>
-            ))}
-          </select>
-        </label>
-        <div>
-          <BrandSubFilter
-            brand={brandFilter}
-            options={brandSubOptions}
-            selected={brandSubFilter}
-            onChange={(values) => {
-              setBrandSubFilter(values);
-              setPage(0);
-            }}
-            onCreate={createBrandSub}
-            disabled={pending}
-          />
+            <span className="text-sm text-muted">Brand:</span>
+            {brandFilterOptions.length === 0 ? (
+              <span className="text-sm text-muted">No brands on this price list yet.</span>
+            ) : null}
+            {brandFilterOptions.map((brand) => {
+              const hasForm = Boolean(orderFormFor(brand)?.form);
+              const active = activeBrandFilter === brand;
+              return (
+                <button
+                  key={brand}
+                  type="button"
+                  aria-pressed={active}
+                  title={hasForm ? "Order form uploaded" : "No order form yet"}
+                  className={cn(
+                    "inline-flex items-center gap-2 rounded-lg border px-3 py-1.5 text-sm hover:bg-slate-50",
+                    active ? "border-sky-400 bg-sky-100 font-medium" : "border-border",
+                  )}
+                  onClick={() => {
+                    setBrandFilter(brand);
+                    setBrandSubFilter([]);
+                    setPage(0);
+                  }}
+                >
+                  <span
+                    className={cn(
+                      "inline-block size-2.5 rounded-full",
+                      hasForm ? "bg-emerald-500" : "border border-slate-400 bg-transparent",
+                    )}
+                    aria-hidden
+                  />
+                  {brand}
+                  <span className="sr-only">{hasForm ? " (order form uploaded)" : " (no order form)"}</span>
+                </button>
+              );
+            })}
+          </div>
+          {lockedSupplierId && orderFormFor(activeBrandFilter) ? (
+            <OrderFormPanel supplierId={lockedSupplierId} entry={orderFormFor(activeBrandFilter)!} />
+          ) : null}
+          {orderFormFor(activeBrandFilter)?.form?.readError ? (
+            <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+              The order form couldn&apos;t be read: {orderFormFor(activeBrandFilter)!.form!.readError}
+            </p>
+          ) : null}
+
         </div>
-        <label className="space-y-1 text-sm">
-          <span>Salon</span>
-          <select
-            className={fieldClass}
-            value={salonFilter}
-            onChange={(event) => {
-              setSalonFilter(event.target.value);
-              setPage(0);
-            }}
-          >
-            <option value="">All salons</option>
-            {branches.map((branch) => (
-              <option key={branch.id} value={branch.id}>
-                {salonChipLabel(branch.name)}
-              </option>
-            ))}
-            <option value="none">No salon</option>
-          </select>
-        </label>
-        <label className="space-y-1 text-sm">
-          <span>Size</span>
-          <select
-            className={fieldClass}
-            value={sizeFilter}
-            onChange={(event) => {
-              setSizeFilter(event.target.value);
-              setPage(0);
-            }}
-          >
-            <option value="">All sizes</option>
-            {sizeOptions.map((size) => (
-              <option key={`${size.ml ?? size.label}:${size.label}`} value={size.label}>
-                {size.label}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="space-y-1 text-sm">
-          <span>Supplier</span>
-          <select
-            className={fieldClass}
-            value={supplierFilter}
-            onChange={(event) => {
-              setSupplierFilter(event.target.value);
-              setPage(0);
-            }}
-          >
-            <option value="">All suppliers</option>
-            <option value="none">No supplier</option>
-            {suppliers.map((supplier) => (
-              <option key={supplier.id} value={supplier.id}>
-                {supplier.name}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="space-y-1 text-sm">
-          <span>Type</span>
-          <select
-            className={fieldClass}
-            value={typeFilter}
-            onChange={(event) => {
-              setTypeFilter(event.target.value);
-              setPage(0);
-            }}
-          >
-            <option value="">All types</option>
-            {FILTERABLE_CLASSIFICATIONS.map((item) => (
-              <option key={item.value} value={item.value}>
-                {item.label}
-              </option>
-            ))}
-            <option value="none">No type</option>
-          </select>
-        </label>
-        <label className="space-y-1 text-sm">
-          <span>Tag</span>
-          <select
-            className={fieldClass}
-            value={tagFilter}
-            onChange={(event) => {
-              setTagFilter(event.target.value);
-              setPage(0);
-            }}
-          >
-            <option value="">All tags</option>
-            {tags.map((tag) => (
-              <option key={tag.id} value={tag.id}>
-                {tag.name}
-              </option>
-            ))}
-            <option value="none">No tag</option>
-          </select>
-        </label>
-        <div className="flex flex-wrap items-center gap-2 md:col-span-2 xl:col-span-4">
-          {FILTERABLE_CLASSIFICATIONS.map((item) => (
-            <button
-              key={item.value}
-              type="button"
-              className={cn(
-                "rounded-lg border px-3 py-1.5 text-sm hover:bg-slate-50",
-                typeFilter === item.value ? "border-sky-400 bg-sky-100 font-medium" : "border-border",
-              )}
-              onClick={() => {
-                setTypeFilter((current) => (current === item.value ? "" : item.value));
+      ) : (
+        <div className="grid grid-cols-1 items-start gap-3 lg:grid-cols-[minmax(0,1fr)_auto]">
+        <div className="grid gap-3 rounded-xl border border-border bg-card p-4 md:grid-cols-2 xl:grid-cols-4">
+          <label className="space-y-1 text-sm">
+            <span>Find product</span>
+            <input
+              className={fieldClass}
+              value={query}
+              onChange={(event) => {
+                setQuery(event.target.value);
+                setPage(0);
+              }}
+              placeholder="SKU, barcode, or name"
+            />
+          </label>
+          <label className="space-y-1 text-sm">
+            <span>Brand</span>
+            <select
+              className={fieldClass}
+              value={brandFilter}
+              onChange={(event) => {
+                setBrandFilter(event.target.value);
+                setBrandSubFilter([]);
                 setPage(0);
               }}
             >
-              {item.label}
-            </button>
-          ))}
-          {typeFilter ? (
-            <button
-              type="button"
-              className="rounded-lg border border-border px-3 py-1.5 text-sm hover:bg-slate-50"
-              onClick={() => {
-                setTypeFilter("");
+              <option value="">All brands</option>
+              {brandFilterOptions.map((brand) => (
+                <option key={brand} value={brand}>
+                  {brand}
+                </option>
+              ))}
+            </select>
+          </label>
+          <div>
+            <BrandSubFilter
+              brand={brandFilter}
+              options={brandSubOptions}
+              selected={brandSubFilter}
+              onChange={(values) => {
+                setBrandSubFilter(values);
+                setPage(0);
+              }}
+              onCreate={createBrandSub}
+              disabled={pending}
+            />
+          </div>
+          <label className="space-y-1 text-sm">
+            <span>Size</span>
+            <select
+              className={fieldClass}
+              value={sizeFilter}
+              onChange={(event) => {
+                setSizeFilter(event.target.value);
                 setPage(0);
               }}
             >
-              All types
+              <option value="">All sizes</option>
+              {sizeOptions.map((size) => (
+                <option key={`${size.ml ?? size.label}:${size.label}`} value={size.label}>
+                  {size.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className={cn("space-y-1 text-sm", lockedSupplierId && "hidden")}>
+            <span>Supplier</span>
+            <select
+              className={fieldClass}
+              value={supplierFilter}
+              onChange={(event) => {
+                setSupplierFilter(event.target.value);
+                setPage(0);
+              }}
+            >
+              <option value="">All suppliers</option>
+              <option value="none">No supplier</option>
+              {suppliers.map((supplier) => (
+                <option key={supplier.id} value={supplier.id}>
+                  {supplier.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="space-y-1 text-sm">
+            <span>Tag</span>
+            <select
+              className={fieldClass}
+              value={tagFilter}
+              onChange={(event) => {
+                setTagFilter(event.target.value);
+                setPage(0);
+              }}
+            >
+              <option value="">All tags</option>
+              {tags.map((tag) => (
+                <option key={tag.id} value={tag.id}>
+                  {tag.name}
+                </option>
+              ))}
+              <option value="none">No tag</option>
+            </select>
+          </label>
+        </div>
+        <div className="flex items-end gap-3 self-start rounded-xl border border-sky-300 bg-sky-200 px-4 py-3">
+          <label className="min-w-40 space-y-1 text-sm">
+            <span className="font-medium text-sky-950">Group by</span>
+            <select
+              className={cn(fieldClass, "border-sky-400 bg-sky-100")}
+              value={groupBy}
+              onChange={(event) => {
+                setGroupBy(event.target.value as GroupBy);
+                setCollapsedGroups(new Set());
+                setPage(0);
+              }}
+            >
+              {GROUP_BY_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          {groupBy !== "none" ? (
+            <button
+              className="inline-flex items-center justify-center rounded-lg border border-sky-300 bg-sky-600 px-3 py-2 text-sm font-medium text-white hover:bg-sky-700 disabled:opacity-50"
+              type="button"
+              onClick={allGroupsCollapsed ? expandAllGroups : collapseAllGroups}
+            >
+              {allGroupsCollapsed ? "Expand all groups" : "Collapse all groups"}
             </button>
           ) : null}
         </div>
-      </div>
-      <div className="flex items-end gap-3 self-start rounded-xl border border-sky-300 bg-sky-200 px-4 py-3">
-        <label className="min-w-40 space-y-1 text-sm">
-          <span className="font-medium text-sky-950">Group by</span>
-          <select
-            className={cn(fieldClass, "border-sky-400 bg-sky-100")}
-            value={groupBy}
-            onChange={(event) => {
-              setGroupBy(event.target.value as GroupBy);
-              setCollapsedGroups(new Set());
-              setPage(0);
-            }}
-          >
-            {GROUP_BY_OPTIONS.map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </select>
-        </label>
-        {groupBy !== "none" ? (
-          <button
-            className="inline-flex items-center justify-center rounded-lg border border-sky-300 bg-sky-600 px-3 py-2 text-sm font-medium text-white hover:bg-sky-700 disabled:opacity-50"
-            type="button"
-            onClick={allGroupsCollapsed ? expandAllGroups : collapseAllGroups}
-          >
-            {allGroupsCollapsed ? "Expand all groups" : "Collapse all groups"}
-          </button>
-        ) : null}
-      </div>
-      </div>
+        </div>
+      )}
       <div className="flex flex-wrap items-center justify-between gap-2">
         <p className="text-sm text-muted">
           {listedProductCount} product{listedProductCount === 1 ? "" : "s"}
@@ -1704,22 +1594,13 @@ export function ProductsTable({
             ? ` · grouped by ${GROUP_BY_OPTIONS.find((option) => option.value === groupBy)?.label}`
             : ""}
         </p>
-        <div className="flex flex-wrap gap-2">
-          {editing ? (
-            <button className={btnSecondaryClass} type="button" onClick={addRow}>
+        {priceList ? null : (
+          <div className="flex flex-wrap gap-2">
+            <button className={btnClass} type="button" disabled={pending} onClick={() => setProductForm({ mode: "add" })}>
               Add product
             </button>
-          ) : null}
-          {editing ? (
-            <button className={btnClass} type="button" disabled={pending} onClick={() => void finishEdit()}>
-              {pending ? "Saving…" : "Done"}
-            </button>
-          ) : (
-            <button className={btnClass} type="button" disabled={pending} onClick={() => void enterEdit()}>
-              Edit catalog
-            </button>
-          )}
-        </div>
+          </div>
+        )}
       </div>
 
       {error ? (
@@ -1739,563 +1620,454 @@ export function ProductsTable({
         </datalist>
       ))}
 
-      <div className="max-h-[min(70vh,44rem)] overflow-auto rounded-xl border border-border bg-card">
-        <table className={cn(tableClass, "border-separate border-spacing-0")}>
-          <thead ref={headRef}>
-            <tr>
-              <th className={cn(thClass, wCheck, stickyCheckHead)}>
-                <div className="flex items-center gap-1.5 whitespace-nowrap">
-                  <input
-                    type="checkbox"
-                    className={checkboxClass}
-                    checked={allSelected}
-                    onChange={toggleAll}
-                    aria-label="Select all products"
-                  />
-                  <button
-                    className={cn(
-                      "whitespace-nowrap text-sm font-medium underline",
-                      editing ? "text-blue-600" : "text-slate-900",
-                    )}
-                    type="button"
-                    disabled={!editing || pending || selectedCount === 0}
-                    title={
-                      !editing
-                        ? "Edit catalog to bulk edit"
-                        : selectedCount === 0
-                          ? "Select products first"
-                          : "Bulk edit selected products"
-                    }
-                    onClick={() => setBulkOpen(true)}
-                  >
-                    Bulk edit
-                  </button>
-                </div>
-              </th>
-              <th className={cn(thClass, wName, stickyNameHead)} style={{ left: nameLeft }}>
-                <SortableHeader column="orderName" active={sortColumn === "orderName"} direction={sortDirection} onSort={toggleSort}>
-                  Order name
-                </SortableHeader>
-              </th>
-              <th className={cn(thClass, wImage, stickyHead)}>Image</th>
-              <th className={cn(thClass, wFriendly, stickyHead)}>
-                <SortableHeader column="name" active={sortColumn === "name"} direction={sortDirection} onSort={toggleSort}>
-                  Name
-                </SortableHeader>
-              </th>
-              <th className={cn(thClass, wField, stickyHead)}>
-                <SortableHeader column="sku" active={sortColumn === "sku"} direction={sortDirection} onSort={toggleSort}>
-                  SKU
-                </SortableHeader>
-              </th>
-              <th className={cn(thClass, wField, stickyHead)}>
-                <SortableHeader column="barcode" active={sortColumn === "barcode"} direction={sortDirection} onSort={toggleSort}>
-                  Barcode
-                </SortableHeader>
-              </th>
-              <th className={cn(thClass, wField, stickyHead)}>
-                <SortableHeader column="brand" active={sortColumn === "brand"} direction={sortDirection} onSort={toggleSort}>
-                  Brand
-                </SortableHeader>
-              </th>
-              <th className={cn(thClass, wField, stickyHead)}>
-                <SortableHeader column="brandSub" active={sortColumn === "brandSub"} direction={sortDirection} onSort={toggleSort}>
-                  Brand sub
-                </SortableHeader>
-              </th>
-              <th className={cn(thClass, wField, stickyHead)}>
-                <SortableHeader column="size" active={sortColumn === "size"} direction={sortDirection} onSort={toggleSort}>
-                  Size
-                </SortableHeader>
-              </th>
-              <th className={cn(thClass, wType, stickyHead)}>
-                <SortableHeader column="type" active={sortColumn === "type"} direction={sortDirection} onSort={toggleSort}>
-                  Type
-                </SortableHeader>
-              </th>
-              <th className={cn(thClass, wSupplier, stickyHead)}>
-                <SortableHeader column="supplier" active={sortColumn === "supplier"} direction={sortDirection} onSort={toggleSort}>
-                  Supplier
-                </SortableHeader>
-              </th>
-              <th className={cn(thClass, wField, stickyHead)}>
-                <SortableHeader column="unitCost" active={sortColumn === "unitCost"} direction={sortDirection} onSort={toggleSort}>
-                  Unit cost
-                </SortableHeader>
-              </th>
-              <th className={cn(thClass, wField, stickyHead)}>Tax amount</th>
-              <th className={cn(thClass, wField, stickyHead)}>Unit cost with tax</th>
-              {branches.map((branch) => (
-                <th
-                  key={branch.id}
-                  className={cn(thClass, wField, stickyHead)}
-                  title="Running weighted-average cost from actual receipts at this salon"
-                >
-                  {salonChipLabel(branch.name)} avg cost
-                </th>
-              ))}
-              <th className={cn(thClass, wField, stickyHead)} title="Recommended retail price from the supplier">
-                <SortableHeader
-                  column="rrp"
-                  active={sortColumn === "rrp"}
-                  direction={sortDirection}
-                  onSort={toggleSort}
-                  title="Recommended retail price from the supplier"
-                >
-                  RRP
-                </SortableHeader>
-              </th>
-              <th className={cn(thClass, wField, stickyHead)} title="Confirmed retail price. Uses RRP when RRP is above 0, otherwise unit cost × 2.">
-                CRP
-              </th>
-              <th className={cn(thClass, wField, stickyHead)} title="(CRP − unit cost) ÷ CRP">
-                Gross margin
-              </th>
-              <th className={cn(thClass, wField, stickyHead)} title="(CRP − unit cost with tax) ÷ CRP">
-                Gross margin 2
-              </th>
-              <th className={cn(thClass, wField, stickyHead)}>
-                <SortableHeader column="threshold" active={sortColumn === "threshold"} direction={sortDirection} onSort={toggleSort}>
-                  Threshold
-                </SortableHeader>
-              </th>
-              <th className={cn(thClass, wCheck, stickyHead)} title="This SKU is a bundle of other products, not a salon assignment.">
-                Bundle
-              </th>
-              <th className={cn(thClass, wContents, stickyHead)}>Contents</th>
-              <th
-                className={cn(thClass, wContents, stickyHead)}
-                title="Which bundle SKUs include this product, and how many per kit."
-              >
-                In bundle
-              </th>
-              <th className={cn(thClass, wField, stickyHead)} />
-            </tr>
-          </thead>
-          <tbody>
-            {visible.length === 0 ? (
+      {priceList && lockedSupplierId ? (
+        <OrderFormComparison
+          key={`${activeBrandFilter}:${orderFormFor(activeBrandFilter)?.form?.uploadedAt ?? ""}`}
+          supplierId={lockedSupplierId}
+          brandId={orderFormFor(activeBrandFilter)?.brandId ?? null}
+          brand={activeBrandFilter}
+          products={comparisonProducts}
+          lines={orderFormFor(activeBrandFilter)?.form?.lines ?? null}
+          matches={orderFormFor(activeBrandFilter)?.matches ?? []}
+          onEditProduct={editProduct}
+          onAddProducts={addPriceListProducts}
+          editDisabled={pending}
+        />
+      ) : (
+        <>
+        <div className="max-h-[min(70vh,44rem)] overflow-auto rounded-xl border border-border bg-card">
+          <table className={cn(tableClass, "border-separate border-spacing-0")}>
+            <thead ref={headRef}>
               <tr>
-                <td className={tdClass} colSpan={columnCount}>
-                  No products match that search.
-                </td>
+                <th className={cn(thClass, wCheck, stickyCheckHead)}>
+                  <div className="flex items-center gap-1.5 whitespace-nowrap">
+                    <input
+                      type="checkbox"
+                      className={checkboxClass}
+                      checked={allSelected}
+                      onChange={toggleAll}
+                      aria-label="Select all products"
+                    />
+                    <button
+                      className={cn(
+                        "whitespace-nowrap text-sm font-medium underline",
+                        selectedCount > 0 ? "text-blue-600" : "text-slate-400",
+                      )}
+                      type="button"
+                      disabled={pending || selectedCount === 0}
+                      title={
+                        selectedCount === 0
+                          ? "Tick products first"
+                          : selectedCount === 1
+                            ? "Edit this product"
+                            : `Edit ${selectedCount} products together`
+                      }
+                      onClick={openEdit}
+                    >
+                      Edit
+                    </button>
+                  </div>
+                </th>
+                <th className={cn(thClass, wImage, stickyCheckHead, priceListHidden)} style={{ left: imageLeft }}>
+                  Image
+                </th>
+                <th className={cn(thClass, wName, stickyNameHead)} style={{ left: nameLeft }}>
+                  <SortableHeader column="orderName" active={sortColumn === "orderName"} direction={sortDirection} onSort={toggleSort}>
+                    Order name
+                  </SortableHeader>
+                </th>
+                <th className={cn(thClass, wFriendly, stickyHead, priceListHidden)}>
+                  <SortableHeader column="name" active={sortColumn === "name"} direction={sortDirection} onSort={toggleSort}>
+                    Name
+                  </SortableHeader>
+                </th>
+                <th className={cn(thClass, wField, stickyHead)}>
+                  <SortableHeader column="sku" active={sortColumn === "sku"} direction={sortDirection} onSort={toggleSort}>
+                    SKU
+                  </SortableHeader>
+                </th>
+                <th className={cn(thClass, wField, stickyHead)}>
+                  <SortableHeader column="barcode" active={sortColumn === "barcode"} direction={sortDirection} onSort={toggleSort}>
+                    Barcode
+                  </SortableHeader>
+                </th>
+                <th className={cn(thClass, wField, stickyHead)}>
+                  <SortableHeader column="brand" active={sortColumn === "brand"} direction={sortDirection} onSort={toggleSort}>
+                    Brand
+                  </SortableHeader>
+                </th>
+                <th className={cn(thClass, wField, stickyHead)}>
+                  <SortableHeader column="brandSub" active={sortColumn === "brandSub"} direction={sortDirection} onSort={toggleSort}>
+                    Brand sub
+                  </SortableHeader>
+                </th>
+                <th className={cn(thClass, wField, stickyHead)}>
+                  <SortableHeader column="size" active={sortColumn === "size"} direction={sortDirection} onSort={toggleSort}>
+                    Size
+                  </SortableHeader>
+                </th>
+                <th className={cn(thClass, wSupplier, stickyHead)}>
+                  <SortableHeader column="supplier" active={sortColumn === "supplier"} direction={sortDirection} onSort={toggleSort}>
+                    Supplier
+                  </SortableHeader>
+                </th>
+                <th className={cn(thClass, wField, stickyHead)}>
+                  <SortableHeader column="unitCost" active={sortColumn === "unitCost"} direction={sortDirection} onSort={toggleSort}>
+                    Unit cost
+                  </SortableHeader>
+                </th>
+                <th className={cn(thClass, wField, stickyHead, priceListHidden)}>Tax amount</th>
+                <th className={cn(thClass, wField, stickyHead)}>Unit cost with tax</th>
+                {branches.map((branch) => (
+                  <th
+                    key={branch.id}
+                    className={cn(thClass, wField, stickyHead, priceListHidden)}
+                    title="Running weighted-average cost from actual receipts at this salon"
+                  >
+                    {salonChipLabel(branch.name)} avg cost
+                  </th>
+                ))}
+                <th className={cn(thClass, wField, stickyHead)} title="Recommended retail price from the supplier">
+                  <SortableHeader
+                    column="rrp"
+                    active={sortColumn === "rrp"}
+                    direction={sortDirection}
+                    onSort={toggleSort}
+                    title="Recommended retail price from the supplier"
+                  >
+                    RRP
+                  </SortableHeader>
+                </th>
+                <th className={cn(thClass, wField, stickyHead)} title="Confirmed retail price. Uses RRP when RRP is above 0, otherwise unit cost × 2.">
+                  CRP
+                </th>
+                <th className={cn(thClass, wField, stickyHead, priceListHidden)} title="(CRP − unit cost) ÷ CRP">
+                  Gross margin
+                </th>
+                <th className={cn(thClass, wField, stickyHead, priceListHidden)} title="(CRP − unit cost with tax) ÷ CRP">
+                  Gross margin 2
+                </th>
+                <th className={cn(thClass, wField, stickyHead, priceListHidden)}>
+                  <SortableHeader column="threshold" active={sortColumn === "threshold"} direction={sortDirection} onSort={toggleSort}>
+                    Threshold
+                  </SortableHeader>
+                </th>
+                <th className={cn(thClass, wCheck, stickyHead)} title="This SKU is a bundle of other products, not a salon assignment.">
+                  Bundle
+                </th>
+                <th className={cn(thClass, wContents, stickyHead)}>Contents</th>
+                <th
+                  className={cn(thClass, wContents, stickyHead, priceListHidden)}
+                  title="Which bundle SKUs include this product, and how many per kit."
+                >
+                  In bundle
+                </th>
               </tr>
-            ) : (
-              visible.map(({ row, index }, visibleIndex) => {
-                const isSelected = Boolean(row.id && selected.includes(row.id));
-                const gstRegistered =
-                  row.supplierIds.length > 0
-                    ? row.supplierIds.some((id) => gstBySupplier.get(id))
-                    : row.gstRegistered;
-                const unitCost = Number(row.unitCost) || 0;
-                const pricing = catalogTax(unitCost, gstRegistered, gstRate);
-                const crp = confirmedRetailPrice(unitCost, row.rrp === "" ? null : Number(row.rrp));
-                const margin = grossMarginPercent(crp, unitCost);
-                const marginWithTax = grossMarginPercent(crp, pricing.unitCostWithTax);
-                const groupKey = groupKeyFor(row, index);
-                const previous = visible[visibleIndex - 1];
-                const previousKey = previous ? groupKeyFor(previous.row, previous.index) : null;
-                const showGroup = groupBy !== "none" && previousKey !== groupKey;
-                const groupIds = showGroup ? groupProductIds(groupKey) : [];
-                const groupSelectedCount = groupIds.filter((id) => selected.includes(id)).length;
-                const groupCollapsed = groupKey !== NEW_PRODUCTS && collapsedGroups.has(groupKey);
-                const inBundles = row.id ? usedInBundles.get(row.id) ?? [] : [];
-                const contentsLabel = row.isSet
-                  ? row.componentLabels.length === 0
-                    ? "Choose products"
-                    : row.componentLabels.length === 1
-                      ? "1 item"
-                      : bundleCostsComplete(
-                            Number(row.unitCost) || 0,
-                            row.componentLabels.map((item) => parsedAllocatedCost(item.allocatedCost)),
-                          )
-                        ? `${row.componentLabels.length} items`
-                        : `${row.componentLabels.length} items · set cost split`
-                  : "—";
-                return (
-                  <Fragment key={index < 0 ? `empty-group-${row.brand}-${row.brandSub}` : row.id ?? `new-${index}`}>
-                    {showGroup ? (
-                      <tr className={groupCollapsed ? "bg-slate-200" : "bg-slate-100"}>
-                        <td
-                          className={cn(
-                            tdClass,
-                            "pointer-events-none sticky z-20 font-semibold",
-                            groupCollapsed ? "bg-slate-200" : "bg-slate-100",
-                          )}
-                          colSpan={columnCount}
-                          style={{ top: headHeight }}
-                        >
-                          <div
+            </thead>
+            <tbody>
+              {visible.length === 0 ? (
+                <tr>
+                  <td className={tdClass} colSpan={columnCount}>
+                    No products match that search.
+                  </td>
+                </tr>
+              ) : (
+                visible.map(({ row, index }, visibleIndex) => {
+                  const isSelected = Boolean(row.id && selected.includes(row.id));
+                  const gstRegistered =
+                    row.supplierIds.length > 0
+                      ? row.supplierIds.some((id) => gstBySupplier.get(id))
+                      : row.gstRegistered;
+                  const unitCost = Number(row.unitCost) || 0;
+                  const pricing = catalogTax(unitCost, gstRegistered, gstRate);
+                  const crp = confirmedRetailPrice(unitCost, row.rrp === "" ? null : Number(row.rrp));
+                  const margin = grossMarginPercent(crp, unitCost);
+                  const marginWithTax = grossMarginPercent(crp, pricing.unitCostWithTax);
+                  const groupKey = groupKeyFor(row, index);
+                  const previous = visible[visibleIndex - 1];
+                  const previousKey = previous ? groupKeyFor(previous.row, previous.index) : null;
+                  const showGroup = groupBy !== "none" && previousKey !== groupKey;
+                  const groupIds = showGroup ? groupProductIds(groupKey) : [];
+                  const groupSelectedCount = groupIds.filter((id) => selected.includes(id)).length;
+                  const groupCollapsed = groupKey !== NEW_PRODUCTS && collapsedGroups.has(groupKey);
+                  const inBundles = row.id ? usedInBundles.get(row.id) ?? [] : [];
+                  const contentsLabel = row.isSet
+                    ? row.componentLabels.length === 0
+                      ? "Choose products"
+                      : row.componentLabels.length === 1
+                        ? "1 item"
+                        : bundleCostsComplete(
+                              Number(row.unitCost) || 0,
+                              row.componentLabels.map((item) => parsedAllocatedCost(item.allocatedCost)),
+                            )
+                          ? `${row.componentLabels.length} items`
+                          : `${row.componentLabels.length} items · set cost split`
+                    : "—";
+                  return (
+                    <Fragment key={index < 0 ? `empty-group-${row.brand}-${row.brandSub}` : row.id ?? `new-${index}`}>
+                      {showGroup ? (
+                        <tr className={groupCollapsed ? "bg-slate-200" : "bg-slate-100"}>
+                          <td
                             className={cn(
-                              "pointer-events-auto sticky left-0 inline-flex w-max items-center gap-2",
+                              tdClass,
+                              "pointer-events-none sticky z-20 font-semibold",
                               groupCollapsed ? "bg-slate-200" : "bg-slate-100",
                             )}
+                            colSpan={columnCount}
+                            style={{ top: headHeight }}
                           >
-                            {groupIds.length > 0 ? (
-                              <input
-                                type="checkbox"
-                                className={checkboxClass}
-                                checked={groupSelectedCount === groupIds.length}
-                                ref={(input) => {
-                                  if (!input) return;
-                                  input.indeterminate =
-                                    groupSelectedCount > 0 && groupSelectedCount < groupIds.length;
-                                }}
-                                onChange={() => toggleGroup(groupKey)}
-                                aria-label={`Select ${groupKey}`}
-                              />
-                            ) : null}
-                            {groupKey === NEW_PRODUCTS ? (
-                              <span>
-                                {groupKey} · {groupCounts.get(groupKey) ?? 0} product
-                                {(groupCounts.get(groupKey) ?? 0) === 1 ? "" : "s"} · set brand, type, and
-                                tags here
-                              </span>
-                            ) : (
-                              <button
-                                className="inline-flex items-center gap-2 text-left"
-                                type="button"
-                                onClick={() => toggleGroupCollapse(groupKey)}
-                                aria-expanded={!groupCollapsed}
-                                aria-label={`${groupCollapsed ? "Expand" : "Collapse"} ${groupKey}`}
-                              >
-                                <span aria-hidden="true" className="w-3 text-xs text-muted">
-                                  {groupCollapsed ? "▸" : "▾"}
-                                </span>
+                            <div
+                              className={cn(
+                                "pointer-events-auto sticky left-0 inline-flex w-max items-center gap-2",
+                                groupCollapsed ? "bg-slate-200" : "bg-slate-100",
+                              )}
+                            >
+                              {groupIds.length > 0 ? (
+                                <input
+                                  type="checkbox"
+                                  className={checkboxClass}
+                                  checked={groupSelectedCount === groupIds.length}
+                                  ref={(input) => {
+                                    if (!input) return;
+                                    input.indeterminate =
+                                      groupSelectedCount > 0 && groupSelectedCount < groupIds.length;
+                                  }}
+                                  onChange={() => toggleGroup(groupKey)}
+                                  aria-label={`Select ${groupKey}`}
+                                />
+                              ) : null}
+                              {groupKey === NEW_PRODUCTS ? (
                                 <span>
                                   {groupKey} · {groupCounts.get(groupKey) ?? 0} product
-                                  {(groupCounts.get(groupKey) ?? 0) === 1 ? "" : "s"}
+                                  {(groupCounts.get(groupKey) ?? 0) === 1 ? "" : "s"} · set brand, type, and
+                                  tags here
                                 </span>
-                              </button>
-                            )}
-                          </div>
-                        </td>
-                      </tr>
-                    ) : null}
-                  {groupCollapsed || index < 0 ? null : (
-                  <tr className={isSelected ? "bg-slate-50" : "bg-card"}>
-                    <td className={cn(tdClass, wCheck, stickyCheck, rowBg(isSelected))}>
-                      {row.id ? (
-                        <input
-                          type="checkbox"
-                          className={checkboxClass}
-                          checked={isSelected}
-                          onChange={() => toggleOne(row.id!)}
-                          aria-label={`Select ${productDisplayName(row) || row.orderName || "product"}`}
-                        />
+                              ) : (
+                                <button
+                                  className="inline-flex items-center gap-2 text-left"
+                                  type="button"
+                                  onClick={() => toggleGroupCollapse(groupKey)}
+                                  aria-expanded={!groupCollapsed}
+                                  aria-label={`${groupCollapsed ? "Expand" : "Collapse"} ${groupKey}`}
+                                >
+                                  <span aria-hidden="true" className="w-3 text-xs text-muted">
+                                    {groupCollapsed ? "▸" : "▾"}
+                                  </span>
+                                  <span>
+                                    {groupKey} · {groupCounts.get(groupKey) ?? 0} product
+                                    {(groupCounts.get(groupKey) ?? 0) === 1 ? "" : "s"}
+                                  </span>
+                                </button>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
                       ) : null}
-                    </td>
-                    <td className={cn(tdClass, wName, stickyName, rowBg(isSelected))} style={{ left: nameLeft }}>
-                      {editing ? (
-                        <input
-                          className={cn(fieldClass, wName)}
-                          value={row.orderName}
-                          autoFocus={!row.id && visibleIndex === 0 && currentPage === 0}
-                          placeholder={!row.id ? "Order name" : undefined}
-                          onChange={(event) => updateRow(index, { orderName: event.target.value })}
+                    {groupCollapsed || index < 0 ? null : (
+                    <tr className={isSelected ? "bg-slate-50" : "bg-card"}>
+                      <td className={cn(tdClass, wCheck, stickyCheck, rowBg(isSelected))}>
+                        {row.id ? (
+                          <input
+                            type="checkbox"
+                            className={checkboxClass}
+                            checked={isSelected}
+                            onChange={() => toggleOne(row.id!)}
+                            aria-label={`Select ${productDisplayName(row) || row.orderName || "product"}`}
+                          />
+                        ) : null}
+                      </td>
+                      <td
+                        className={cn(tdClass, wImage, "sticky z-10", rowBg(isSelected), priceListHidden)}
+                        style={{ left: imageLeft }}
+                      >
+                        <ProductImageCell
+                          productId={row.id}
+                          pictureUrl={row.pictureUrl}
+                          label={productDisplayName(row) || row.orderName}
+                          onUploaded={(url) => setRowPicture(index, url)}
                         />
-                      ) : (
+                      </td>
+                      <td className={cn(tdClass, wName, stickyName, rowBg(isSelected))} style={{ left: nameLeft }}>
                         <ViewValue>{dash(row.orderName)}</ViewValue>
-                      )}
-                    </td>
-                    <td className={cn(tdClass, wImage)}>
-                      <ProductImageCell
-                        productId={row.id}
-                        pictureUrl={row.pictureUrl}
-                        label={productDisplayName(row) || row.orderName}
-                        onUploaded={(url) => setRowPicture(index, url)}
-                      />
-                    </td>
-                    <td className={cn(tdClass, wFriendly)}>
-                      {editing ? (
-                        <input
-                          className={cn(fieldClass, wFriendly)}
-                          value={row.name}
-                          placeholder="Optional"
-                          onChange={(event) => updateRow(index, { name: event.target.value })}
-                          aria-label={`Recognizable name for ${row.orderName || "product"}`}
-                        />
-                      ) : (
+                      </td>
+                      <td className={cn(tdClass, wFriendly, priceListHidden)}>
                         <ViewValue>{dash(row.name)}</ViewValue>
-                      )}
-                    </td>
-                    <td className={cn(tdClass, wField)}>
-                      {editing ? (
-                        <input
-                          className={cn(fieldClass, wField)}
-                          value={row.sku}
-                          autoComplete="off"
-                          autoCorrect="off"
-                          spellCheck={false}
-                          onChange={(event) => updateRow(index, { sku: event.target.value })}
-                        />
-                      ) : (
+                      </td>
+                      <td className={cn(tdClass, wField)}>
                         <ViewValue>{dash(row.sku)}</ViewValue>
-                      )}
-                    </td>
-                    <td className={cn(tdClass, wField)}>
-                      {editing ? (
-                        <input
-                          className={cn(fieldClass, wField)}
-                          value={row.barcode}
-                          autoComplete="off"
-                          autoCorrect="off"
-                          spellCheck={false}
-                          onChange={(event) => updateRow(index, { barcode: event.target.value })}
-                        />
-                      ) : (
+                      </td>
+                      <td className={cn(tdClass, wField)}>
                         <ViewValue>{dash(row.barcode)}</ViewValue>
-                      )}
-                    </td>
-                    <td className={cn(tdClass, wField)}>
-                      {editing ? (
-                        <input
-                          className={cn(fieldClass, wField)}
-                          value={row.brand}
-                          onChange={(event) => updateRow(index, { brand: event.target.value })}
-                        />
-                      ) : (
+                      </td>
+                      <td className={cn(tdClass, wField)}>
                         <ViewValue>{dash(row.brand)}</ViewValue>
-                      )}
-                    </td>
-                    <td className={cn(tdClass, wField)}>
-                      {editing ? (
-                        <input
-                          className={cn(fieldClass, wField)}
-                          value={row.brandSub}
-                          list={row.brand.trim() ? brandSubListId(row.brand) : undefined}
-                          onChange={(event) => updateRow(index, { brandSub: event.target.value })}
-                        />
-                      ) : (
+                      </td>
+                      <td className={cn(tdClass, wField)}>
                         <ViewValue>{dash(row.brandSub)}</ViewValue>
-                      )}
-                    </td>
-                    <td className={cn(tdClass, wField)}>
-                      {editing ? (
-                        <input
-                          className={cn(fieldClass, wField)}
-                          value={row.size}
-                          onChange={(event) => updateRow(index, { size: event.target.value })}
-                        />
-                      ) : (
+                      </td>
+                      <td className={cn(tdClass, wField)}>
                         <ViewValue>{dash(row.size)}</ViewValue>
-                      )}
-                    </td>
-                    <td className={cn(tdClass, wType)} title="Set per salon on Home &gt; Products">
-                      <ViewValue>{branchClassificationsSummary(row.classificationsByBranch, branches) || "—"}</ViewValue>
-                    </td>
-                    <td className={cn(tdClass, wSupplier)}>
-                      {editing ? (
-                        suppliers.length === 0 && !row.supplierIds[0] ? (
-                          <span className="text-sm text-muted">—</span>
-                        ) : (
-                          <select
-                            className={cn(fieldClass, wSupplier)}
-                            value={row.supplierIds[0] ?? ""}
-                            onChange={(event) => setRowSupplier(index, event.target.value)}
-                            aria-label={`Supplier for ${productDisplayName(row) || row.orderName || "product"}`}
-                          >
-                            <option value="">None</option>
-                            {row.supplierIds[0] && !suppliers.some((supplier) => supplier.id === row.supplierIds[0]) ? (
-                              <option value={row.supplierIds[0]}>{row.supplierName || "Unknown supplier"}</option>
-                            ) : null}
-                            {suppliers.map((supplier) => (
-                              <option key={supplier.id} value={supplier.id}>
-                                {supplier.name}
-                              </option>
-                            ))}
-                          </select>
-                        )
-                      ) : (
+                      </td>
+                      <td className={cn(tdClass, wSupplier)}>
                         <ViewValue>
                           {dash(
                             suppliers.find((item) => item.id === row.supplierIds[0])?.name ?? row.supplierName,
                           )}
                         </ViewValue>
-                      )}
-                    </td>
-                    <td className={cn(tdClass, wField)}>
-                      {editing ? (
-                        <input
-                          className={cn(fieldClass, wField)}
-                          type="number"
-                          min="0"
-                          step="0.01"
-                          value={row.unitCost}
-                          onChange={(event) => updateRow(index, { unitCost: event.target.value })}
-                        />
-                      ) : (
+                      </td>
+                      <td className={cn(tdClass, wField)}>
                         <ViewValue>{formatMoney(unitCost)}</ViewValue>
-                      )}
-                    </td>
-                    <td className={cn(tdClass, wField)}>
-                      <span className="block min-w-28 text-sm">
-                        {formatMoney(pricing.taxAmount)}
-                      </span>
-                    </td>
-                    <td className={cn(tdClass, wField)}>
-                      <span className="block min-w-28 text-sm">{formatMoney(pricing.unitCostWithTax)}</span>
-                    </td>
-                    {branches.map((branch) => (
-                      <td key={branch.id} className={cn(tdClass, wField)}>
+                      </td>
+                      <td className={cn(tdClass, wField, priceListHidden)}>
                         <span className="block min-w-28 text-sm">
-                          {row.id && branchCosts[row.id]?.[branch.id] !== undefined
-                            ? formatMoney(branchCosts[row.id][branch.id])
-                            : "—"}
+                          {formatMoney(pricing.taxAmount)}
                         </span>
                       </td>
-                    ))}
-                    <td className={cn(tdClass, wField)}>
-                      {editing ? (
-                        <input
-                          className={cn(fieldClass, wField)}
-                          type="number"
-                          min="0"
-                          step="0.01"
-                          value={row.rrp}
-                          onChange={(event) => updateRow(index, { rrp: event.target.value })}
-                        />
-                      ) : (
+                      <td className={cn(tdClass, wField)}>
+                        <span className="block min-w-28 text-sm">{formatMoney(pricing.unitCostWithTax)}</span>
+                      </td>
+                      {branches.map((branch) => (
+                        <td key={branch.id} className={cn(tdClass, wField, priceListHidden)}>
+                          <span className="block min-w-28 text-sm">
+                            {row.id && branchCosts[row.id]?.[branch.id] !== undefined
+                              ? formatMoney(branchCosts[row.id][branch.id])
+                              : "—"}
+                          </span>
+                        </td>
+                      ))}
+                      <td className={cn(tdClass, wField)}>
                         <ViewValue>{row.rrp === "" ? "—" : formatMoney(Number(row.rrp))}</ViewValue>
-                      )}
-                    </td>
-                    <td className={cn(tdClass, wField)}>
-                      <span className="block min-w-28 text-sm">{formatMoney(crp)}</span>
-                    </td>
-                    <td className={cn(tdClass, wField)}>
-                      <span className="block min-w-28 text-sm">{formatPercent(margin)}</span>
-                    </td>
-                    <td className={cn(tdClass, wField)}>
-                      <span className="block min-w-28 text-sm">{formatPercent(marginWithTax)}</span>
-                    </td>
-                    <td className={cn(tdClass, wField)}>
-                      {editing ? (
-                        <input
-                          className={cn(fieldClass, wField)}
-                          type="number"
-                          min="0"
-                          step="0.01"
-                          value={row.threshold}
-                          onChange={(event) => updateRow(index, { threshold: event.target.value })}
-                        />
-                      ) : (
+                      </td>
+                      <td className={cn(tdClass, wField)}>
+                        <span className="block min-w-28 text-sm">{formatMoney(crp)}</span>
+                      </td>
+                      <td className={cn(tdClass, wField, priceListHidden)}>
+                        <span className="block min-w-28 text-sm">{formatPercent(margin)}</span>
+                      </td>
+                      <td className={cn(tdClass, wField, priceListHidden)}>
+                        <span className="block min-w-28 text-sm">{formatPercent(marginWithTax)}</span>
+                      </td>
+                      <td className={cn(tdClass, wField, priceListHidden)}>
                         <ViewValue>{row.threshold === "" ? "—" : dash(row.threshold)}</ViewValue>
-                      )}
-                    </td>
-                    <td className={cn(tdClass, wCheck)}>
-                      {editing ? (
-                        <input
-                          type="checkbox"
-                          className={checkboxClass}
-                          checked={row.isSet}
-                          onChange={(event) => updateRow(index, { isSet: event.target.checked })}
-                          aria-label={`Mark ${productDisplayName(row) || row.orderName || "product"} as a bundle`}
-                          title="Bundle of other products, not a salon assignment"
-                        />
-                      ) : (
+                      </td>
+                      <td className={cn(tdClass, wCheck)}>
                         <ViewValue>{row.isSet ? "Yes" : "No"}</ViewValue>
-                      )}
-                    </td>
-                    <td className={cn(tdClass, wContents)}>
-                      {editing ? (
-                        <button
-                          className={cn(btnSecondaryClass, "min-w-56 whitespace-nowrap")}
-                          type="button"
-                          disabled={!row.isSet}
-                          onClick={() => {
-                            setBundleQuery("");
-                            setBundleIndex(index);
-                          }}
-                        >
-                          {contentsLabel}
-                        </button>
-                      ) : (
+                      </td>
+                      <td className={cn(tdClass, wContents)}>
                         <ViewValue>{contentsLabel === "Choose products" ? "—" : contentsLabel}</ViewValue>
-                      )}
-                    </td>
-                    <td className={cn(tdClass, wContents)}>
-                      {inBundles.length > 0 ? (
-                        <span className="block min-w-56 max-w-72 truncate text-sm" title={inBundles.join(", ")}>
-                          {inBundles.join(", ")}
-                        </span>
-                      ) : (
-                        <span className="text-sm text-muted">—</span>
-                      )}
-                    </td>
-                    <td className={cn(tdClass, wField)}>
-                      {editing ? (
-                        <button
-                          className="text-sm text-muted underline"
-                          type="button"
-                          disabled={pending}
-                          onClick={() => onDelete(index)}
-                        >
-                          Delete
-                        </button>
-                      ) : null}
-                    </td>
-                  </tr>
-                  )}
-                  </Fragment>
-                );
-              })
-            )}
-          </tbody>
-        </table>
-      </div>
+                      </td>
+                      <td className={cn(tdClass, wContents, priceListHidden)}>
+                        {inBundles.length > 0 ? (
+                          <span className="block min-w-56 max-w-72 truncate text-sm" title={inBundles.join(", ")}>
+                            {inBundles.join(", ")}
+                          </span>
+                        ) : (
+                          <span className="text-sm text-muted">—</span>
+                        )}
+                      </td>
+                    </tr>
+                    )}
+                    </Fragment>
+                  );
+                })
+              )}
+            </tbody>
+          </table>
+        </div>
 
-      <div className="flex flex-wrap items-center gap-2">
-        <label className="flex items-center gap-2 text-sm">
-          <span className="text-muted">Rows</span>
-          <select
-            className={cn(fieldClass, "w-24")}
-            value={pageSize}
-            onChange={(event) => {
-              setPageSize(Number(event.target.value) as (typeof PAGE_SIZES)[number]);
-              setPage(0);
-            }}
-          >
-            {PAGE_SIZES.map((size) => (
-              <option key={size} value={size}>
-                {size}
-              </option>
-            ))}
-          </select>
-        </label>
-        {pageCount > 1 ? (
-          <>
-            <button
-              className={btnSecondaryClass}
-              type="button"
-              disabled={currentPage === 0}
-              onClick={() => setPage((current) => Math.max(0, current - 1))}
+        <div className="flex flex-wrap items-center gap-2">
+          <label className="flex items-center gap-2 text-sm">
+            <span className="text-muted">Rows</span>
+            <select
+              className={cn(fieldClass, "w-24")}
+              value={pageSize}
+              onChange={(event) => {
+                setPageSize(Number(event.target.value) as (typeof PAGE_SIZES)[number]);
+                setPage(0);
+              }}
             >
-              Previous
-            </button>
-            <button
-              className={btnSecondaryClass}
-              type="button"
-              disabled={currentPage >= pageCount - 1}
-              onClick={() => setPage((current) => Math.min(pageCount - 1, current + 1))}
-            >
-              Next
-            </button>
-            <span className="text-sm text-muted">
-              Page {currentPage + 1} of {pageCount}
-            </span>
-          </>
-        ) : null}
-      </div>
+              {PAGE_SIZES.map((size) => (
+                <option key={size} value={size}>
+                  {size}
+                </option>
+              ))}
+            </select>
+          </label>
+          {pageCount > 1 ? (
+            <>
+              <button
+                className={btnSecondaryClass}
+                type="button"
+                disabled={currentPage === 0}
+                onClick={() => setPage((current) => Math.max(0, current - 1))}
+              >
+                Previous
+              </button>
+              <button
+                className={btnSecondaryClass}
+                type="button"
+                disabled={currentPage >= pageCount - 1}
+                onClick={() => setPage((current) => Math.min(pageCount - 1, current + 1))}
+              >
+                Next
+              </button>
+              <span className="text-sm text-muted">
+                Page {currentPage + 1} of {pageCount}
+              </span>
+            </>
+          ) : null}
+        </div>
+        </>
+      )}
 
-      {editing ? (
-        <BulkEditModal
-          open={bulkOpen}
-          pending={pending}
-          selectedCount={selectedCount}
+      
+
+      <BulkEditModal
+        open={bulkOpen}
+        pending={pending}
+        selectedCount={selectedCount}
+        suppliers={suppliers}
+        brandOptions={brandOptions}
+        brandSubsByBrand={brandSubsByBrand}
+        onClose={() => setBulkOpen(false)}
+        onApply={applyBulk}
+      />
+
+      {productForm ? (
+        <ProductFormModal
+          key={productForm.mode === "edit" ? `edit-${productForm.index}` : "add"}
+          mode={productForm.mode}
+          initial={formValuesFor(productForm.mode === "edit" ? rows[productForm.index] : null)}
           suppliers={suppliers}
           brandOptions={brandOptions}
           brandSubsByBrand={brandSubsByBrand}
-          onClose={() => setBulkOpen(false)}
-          onApply={applyBulk}
+          reference={productForm.mode === "edit" ? (productForm.reference ?? null) : null}
+          bundleContentsLabel={
+            productForm.mode === "edit" && rows[productForm.index]?.componentLabels.length
+              ? `${rows[productForm.index].componentLabels.length} product${rows[productForm.index].componentLabels.length === 1 ? "" : "s"}`
+              : null
+          }
+          onSubmit={(values) => saveProductForm(values, productForm.mode === "edit" ? rows[productForm.index] : null)}
+          onEditContents={
+            productForm.mode === "edit"
+              ? () => {
+                  const index = productForm.index;
+                  setProductForm(null);
+                  setBundleQuery("");
+                  setBundleIndex(index);
+                }
+              : undefined
+          }
+          onDelete={
+            productForm.mode === "edit"
+              ? () => {
+                  const index = productForm.index;
+                  setProductForm(null);
+                  void onDelete(index);
+                }
+              : undefined
+          }
+          onClose={() => setProductForm(null)}
         />
       ) : null}
 

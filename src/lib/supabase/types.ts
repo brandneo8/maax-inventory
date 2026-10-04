@@ -1710,6 +1710,136 @@ export type Database = {
           },
         ]
       }
+      supplier_order_form_matches: {
+        Row: {
+          brand_id: string
+          company_id: string
+          id: string
+          line_key: string
+          matched_at: string
+          matched_by: string | null
+          product_id: string | null
+          supplier_id: string
+        }
+        Insert: {
+          brand_id: string
+          company_id: string
+          id?: string
+          line_key: string
+          matched_at?: string
+          matched_by?: string | null
+          product_id?: string | null
+          supplier_id: string
+        }
+        Update: {
+          brand_id?: string
+          company_id?: string
+          id?: string
+          line_key?: string
+          matched_at?: string
+          matched_by?: string | null
+          product_id?: string | null
+          supplier_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "supplier_order_form_matches_brand_id_fkey"
+            columns: ["brand_id"]
+            isOneToOne: false
+            referencedRelation: "brands"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "supplier_order_form_matches_company_id_fkey"
+            columns: ["company_id"]
+            isOneToOne: false
+            referencedRelation: "companies"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "supplier_order_form_matches_product_id_fkey"
+            columns: ["product_id"]
+            isOneToOne: false
+            referencedRelation: "low_stock_alerts"
+            referencedColumns: ["product_id"]
+          },
+          {
+            foreignKeyName: "supplier_order_form_matches_product_id_fkey"
+            columns: ["product_id"]
+            isOneToOne: false
+            referencedRelation: "products"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "supplier_order_form_matches_supplier_id_fkey"
+            columns: ["supplier_id"]
+            isOneToOne: false
+            referencedRelation: "suppliers"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      supplier_order_forms: {
+        Row: {
+          brand_id: string
+          company_id: string
+          content_type: string | null
+          file_name: string
+          file_path: string
+          id: string
+          size_bytes: number | null
+          supplier_id: string
+          uploaded_at: string
+          uploaded_by: string | null
+        }
+        Insert: {
+          brand_id: string
+          company_id: string
+          content_type?: string | null
+          file_name: string
+          file_path: string
+          id?: string
+          size_bytes?: number | null
+          supplier_id: string
+          uploaded_at?: string
+          uploaded_by?: string | null
+        }
+        Update: {
+          brand_id?: string
+          company_id?: string
+          content_type?: string | null
+          file_name?: string
+          file_path?: string
+          id?: string
+          size_bytes?: number | null
+          supplier_id?: string
+          uploaded_at?: string
+          uploaded_by?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "supplier_order_forms_brand_id_fkey"
+            columns: ["brand_id"]
+            isOneToOne: false
+            referencedRelation: "brands"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "supplier_order_forms_company_id_fkey"
+            columns: ["company_id"]
+            isOneToOne: false
+            referencedRelation: "companies"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "supplier_order_forms_supplier_id_fkey"
+            columns: ["supplier_id"]
+            isOneToOne: false
+            referencedRelation: "suppliers"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       supplier_products: {
         Row: {
           id: string
