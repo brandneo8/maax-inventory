@@ -1,6 +1,7 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, type KeyboardEvent } from "react";
+import { unstable_rethrow } from "next/navigation";
 import { createPurchaseOrder } from "../actions";
 import { btnClass, fieldClass } from "@/lib/ui";
 import { AddOrderLine, OrderLinesTable, type EditableLine } from "../order-line-row";
@@ -92,13 +93,22 @@ export function OrderForm({
         })),
       });
     } catch (err) {
+      // Success redirects to the new order (thrown as a navigation); let that through.
+      unstable_rethrow(err);
       setError(err instanceof Error ? err.message : "Could not create the order.");
       setPending(false);
     }
   }
 
+  /** Enter in a box (or a barcode scanner) shouldn't create the order mid-entry — only the button does. */
+  function onFormKeyDown(event: KeyboardEvent<HTMLFormElement>) {
+    if (event.key !== "Enter") return;
+    const target = event.target as HTMLElement;
+    if (target instanceof HTMLInputElement || target instanceof HTMLSelectElement) event.preventDefault();
+  }
+
   return (
-    <form action={onSubmit} className="space-y-6">
+    <form action={onSubmit} onKeyDown={onFormKeyDown} className="space-y-6">
       {error ? (
         <p className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">{error}</p>
       ) : null}

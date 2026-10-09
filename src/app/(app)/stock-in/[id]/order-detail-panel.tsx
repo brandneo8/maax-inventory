@@ -152,12 +152,23 @@ function ReceiptInvoiceRow({ receipt }: { receipt: ReceiptSummary }) {
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  /** Opens the editor from the receipt as saved now (it may have changed elsewhere, e.g. its rounding). */
+  function startEditing() {
+    setReference(receipt.invoiceReference ?? "");
+    setReceivedDate(receipt.receivedDate);
+    setRoundingAdjustmentText(String(receipt.roundingAdjustment));
+    setFxAdjustmentText(String(receipt.fxAdjustment));
+    setError(null);
+    setEditing(true);
+  }
+
   async function save(formData: FormData) {
+    if (pending) return;
     setPending(true);
     setError(null);
     try {
       const file = formData.get("invoice_attachment");
-      await updateGoodsReceiptInvoice(
+      const result = await updateGoodsReceiptInvoice(
         receipt.id,
         reference,
         receivedDate,
@@ -165,16 +176,22 @@ function ReceiptInvoiceRow({ receipt }: { receipt: ReceiptSummary }) {
         fxAdjustment,
         file instanceof File && file.size > 0 ? file : null,
       );
+      if (!result.ok) {
+        setError(result.error);
+        return;
+      }
+      if (result.warning) window.alert(result.warning);
       setEditing(false);
       router.refresh();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not save the receipt.");
+    } catch {
+      setError("Could not reach the server. Check your connection and try again.");
     } finally {
       setPending(false);
     }
   }
 
   async function remove() {
+    if (pending) return;
     const ok = window.confirm(
       "Remove this receipt? This reverses its stock and cost impact, as long as none of it has been used/sold and nothing newer has been received for the same products — otherwise it'll be blocked and tell you why.",
     );
@@ -182,11 +199,14 @@ function ReceiptInvoiceRow({ receipt }: { receipt: ReceiptSummary }) {
     setPending(true);
     setError(null);
     try {
-      await removeGoodsReceipt(receipt.id);
+      const result = await removeGoodsReceipt(receipt.id);
+      if (!result.ok) {
+        setError(result.error);
+        return;
+      }
       router.refresh();
-    } catch (err) {
-      unstable_rethrow(err);
-      setError(err instanceof Error ? err.message : "Could not remove this receipt.");
+    } catch {
+      setError("Could not reach the server. Check your connection, then reload to see whether the receipt was removed.");
     } finally {
       setPending(false);
     }
@@ -202,7 +222,7 @@ function ReceiptInvoiceRow({ receipt }: { receipt: ReceiptSummary }) {
         </div>
         {!editing ? (
           <div className="flex gap-2">
-            <button className={btnSecondaryClass} type="button" onClick={() => setEditing(true)}>
+            <button className={btnSecondaryClass} type="button" onClick={startEditing}>
               {receipt.invoiceReference || receipt.invoiceAttachmentUrl ? "Edit receipt" : "Add invoice"}
             </button>
             <button className={btnDangerClass} type="button" onClick={() => void remove()} disabled={pending}>
@@ -216,7 +236,11 @@ function ReceiptInvoiceRow({ receipt }: { receipt: ReceiptSummary }) {
 
       {editing ? (
         <form
-          action={(formData) => void save(formData)}
+          // A plain submit, so a failed save doesn't clear the chosen invoice file.
+          onSubmit={(event) => {
+            event.preventDefault();
+            void save(new FormData(event.currentTarget));
+          }}
           className="mt-3 grid gap-3 sm:grid-cols-2"
         >
           <label className="space-y-1">
@@ -399,13 +423,14 @@ export function OrderDetailPanel({
 
   async function saveRoundingAdjustment(value: number) {
     if (!onlyReceipt) return;
-    await updateGoodsReceiptInvoice(
+    const result = await updateGoodsReceiptInvoice(
       onlyReceipt.id,
       onlyReceipt.invoiceReference ?? "",
       onlyReceipt.receivedDate,
       value,
       onlyReceipt.fxAdjustment,
     );
+    if (!result.ok) throw new Error(result.error);
     router.refresh();
   }
 
@@ -482,10 +507,11 @@ export function OrderDetailPanel({
   }
 
   async function save() {
+    if (pending) return;
     setPending(true);
     setError(null);
     try {
-      await updatePurchaseOrder({
+      const result = await updatePurchaseOrder({
         purchase_order_id: purchaseOrderId,
         supplier_id: editSupplierId,
         order_date: editOrderDate,
@@ -497,10 +523,14 @@ export function OrderDetailPanel({
           unit_price: line.unit_price,
         })),
       });
+      if (!result.ok) {
+        setError(result.error);
+        return;
+      }
       setEditing(false);
       router.refresh();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not save changes.");
+    } catch {
+      setError("Could not reach the server. Check your connection and try again.");
     } finally {
       setPending(false);
     }

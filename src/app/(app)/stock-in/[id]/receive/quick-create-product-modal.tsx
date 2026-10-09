@@ -14,7 +14,8 @@ export function QuickCreateProductModal({
 }: {
   defaultClassification: ProductClassification;
   onClose: () => void;
-  onCreated: (product: Option) => void;
+  /** The new product and the type picked for it. */
+  onCreated: (product: Option, classification: ProductClassification) => void;
 }) {
   const [orderName, setOrderName] = useState("");
   const [sku, setSku] = useState("");
@@ -41,7 +42,7 @@ export function QuickCreateProductModal({
         unit_cost_price: unitCost,
         classification,
       });
-      onCreated(product);
+      onCreated(product, classification);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not create the product.");
     } finally {

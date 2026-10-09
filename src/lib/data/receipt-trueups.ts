@@ -274,6 +274,63 @@ async function applyLateModeTrueUps(
 }
 
 /**
+ * Checks, before anything is changed, that the receipts' count true-ups can
+ * be lifted: none of them may be a shortfall a product sale or stock-out line
+ * has since been applied to. Removing, voiding and re-dating run this first,
+ * so they refuse up front instead of failing half-way.
+ */
+export async function assertReceiptTrueUpsRemovable(supabase: Client, receiptIds: string[]) {
+  if (receiptIds.length === 0) return;
+  const { data: rows, error } = await supabase
+    .from("inventory_transactions")
+    .select("id")
+    .in("trueup_goods_receipt_id", receiptIds);
+  if (error) throw error;
+  const rowIds = (rows ?? []).map((row) => row.id);
+  if (rowIds.length === 0) return;
+  for (const ids of chunk(rowIds)) {
+    const [{ data: saleLinks, error: saleError }, { data: useLinks, error: useError }] = await Promise.all([
+      supabase.from("product_sale_items").select("id").in("linked_count_txn_id", ids).limit(1),
+      supabase.from("retail_use_entries").select("id").in("linked_count_txn_id", ids).limit(1),
+    ]);
+    if (saleError) throw saleError;
+    if (useError) throw useError;
+    if (saleLinks?.length) {
+      throw new Error(
+        "A product sale is applied to a count shortfall this receipt created. Remove that sale (or its link) first.",
+      );
+    }
+    if (useLinks?.length) {
+      throw new Error(
+        "A stock-out line is assigned to a count shortfall this receipt created. Set it back to an extra deduction first.",
+      );
+    }
+  }
+}
+
+/**
+ * Puts receipts' count true-ups back to what their current dates call for —
+ * the undo step when removing, voiding or re-dating doesn't go through.
+ * Carries on past a failing receipt and reports the first error.
+ */
+export async function restoreReceiptTrueUps(
+  supabase: Client,
+  scopes: { companyId: string; branchId: string; receiptId: string }[],
+  createdBy: string | undefined,
+) {
+  let firstError: unknown = null;
+  for (const scope of scopes) {
+    try {
+      await removeLateReceiptTrueUps(supabase, scope);
+      await applyLateReceiptTrueUps(supabase, { ...scope, createdBy });
+    } catch (err) {
+      firstError ??= err;
+    }
+  }
+  if (firstError) throw firstError;
+}
+
+/**
  * Removes a receipt's count true-up rows and replays cost for the products
  * they touched — the cost trigger only fires on insert. Run before a receipt
  * is removed or re-dated.

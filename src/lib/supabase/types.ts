@@ -2289,6 +2289,35 @@ export type Database = {
         Returns: Json
       }
       fn_my_company_ids: { Args: never; Returns: string[] }
+      fn_receive_goods: {
+        Args: {
+          p_allow_over_receipt: boolean
+          p_branch_id: string
+          p_company_id: string
+          p_free_goods_only: boolean
+          p_fx_adjustment: number
+          p_invoice_reference: string
+          p_items: Json
+          p_notes: string
+          p_purchase_order_id: string
+          p_receipt_id: string
+          p_received_date: string
+          p_rounding_adjustment: number
+          p_user: string
+        }
+        Returns: undefined
+      }
+      fn_receive_goods_items: {
+        Args: { p_items: Json }
+        Returns: {
+          classification: Database["public"]["Enums"]["product_classification"]
+          product_id: string
+          purchase_order_item_id: string
+          quantity_received: number
+          store_location_id: string
+          unit_cost: number
+        }[]
+      }
       fn_recompute_branch_cost: {
         Args: {
           p_branch_id: string

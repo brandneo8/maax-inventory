@@ -5,7 +5,7 @@ import { LoaderCircle, Trash2 } from "lucide-react";
 import { addFreeGoodsReceipt } from "../actions";
 import { blurOnWheel, btnClass, btnSecondaryClass, fieldClass, numberFieldClass, tableClass, tdClass, thClass } from "@/lib/ui";
 import { cn } from "@/lib/utils";
-import { formatQty } from "@/lib/format";
+import { formatQty, singaporeToday } from "@/lib/format";
 import { classificationLabel, type ProductClassification } from "@/lib/labels";
 import { ProductPicker, type ProductOption } from "@/components/product-picker";
 
@@ -33,7 +33,7 @@ export function AddFreeGoodsModal({
   onClose: () => void;
   onSaved: () => void;
 }) {
-  const today = useMemo(() => new Date().toISOString().slice(0, 10), []);
+  const today = useMemo(() => singaporeToday(), []);
   const [receivedDate, setReceivedDate] = useState(today);
   const [notes, setNotes] = useState("");
   const [productId, setProductId] = useState("");
@@ -70,10 +70,11 @@ export function AddFreeGoodsModal({
       setError("Add at least one free product.");
       return;
     }
+    if (pending) return;
     setPending(true);
     setError(null);
     try {
-      await addFreeGoodsReceipt({
+      const result = await addFreeGoodsReceipt({
         purchase_order_id: purchaseOrderId,
         received_date: receivedDate,
         notes,
@@ -83,9 +84,14 @@ export function AddFreeGoodsModal({
           classification: line.classification,
         })),
       });
+      if (!result.ok) {
+        setError(result.error);
+        return;
+      }
+      if (result.warning) window.alert(result.warning);
       onSaved();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not save the free goods.");
+    } catch {
+      setError("Could not reach the server. Check your connection, then check the order before trying again.");
     } finally {
       setPending(false);
     }
@@ -110,6 +116,7 @@ export function AddFreeGoodsModal({
             <input
               className={fieldClass}
               type="date"
+              max={today}
               value={receivedDate}
               onChange={(event) => setReceivedDate(event.target.value)}
             />

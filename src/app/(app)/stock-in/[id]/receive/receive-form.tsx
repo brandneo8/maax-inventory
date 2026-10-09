@@ -1,10 +1,11 @@
 "use client";
 
-import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
+import { useRouter } from "next/navigation";
 import { Trash2 } from "lucide-react";
 import { receivePurchaseOrder } from "../../actions";
 import { blurOnWheel, btnClass, btnSecondaryClass, fieldClass, numberFieldClass, tableClass, tdClass, thClass } from "@/lib/ui";
-import { formatDate, formatMoney, formatQty } from "@/lib/format";
+import { formatDate, formatMoney, formatQty, singaporeToday } from "@/lib/format";
 import { classificationLabel, type ProductClassification } from "@/lib/labels";
 import { ProductPicker, type Option } from "@/components/product-picker";
 import { QuickCreateProductModal } from "./quick-create-product-modal";
@@ -108,8 +109,9 @@ function AddFreeGoodsLine({
         <QuickCreateProductModal
           defaultClassification="gwp"
           onClose={() => setShowCreate(false)}
-          onCreated={(product) => {
-            onProductCreated({ ...product, defaultClassification: null });
+          onCreated={(product, classification) => {
+            // Keep the type picked when creating it, so the line is received as that type.
+            onProductCreated({ ...product, defaultClassification: classification });
             setProductId(product.id);
             setShowCreate(false);
           }}
@@ -140,7 +142,9 @@ export function ReceiveForm({
   /** Date of this salon's latest confirmed count — a receipt dated before it gets trued up against it. */
   latestCountDate?: string | null;
 }) {
-  const today = useMemo(() => new Date().toISOString().slice(0, 10), []);
+  const router = useRouter();
+  // Today in Singapore (the received date can't be later).
+  const today = useMemo(() => singaporeToday(), []);
   // Mirrors the (deliberately uncontrolled) date input, only to show the
   // before-a-count notice.
   const [receivedDate, setReceivedDate] = useState(today);
@@ -162,6 +166,10 @@ export function ReceiveForm({
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
   const [pendingFormData, setPendingFormData] = useState<FormData | null>(null);
+  // Blocks a second receive while the first is still running.
+  const receivingRef = useRef(false);
+  /** Lines receiving more than is still to come (over-deliveries) — confirmed in the review step. */
+  const overLines = lines.filter((line) => line.quantity_received > Math.max(0, line.remaining));
 
   const previewUrl = useMemo(() => (invoiceFile ? URL.createObjectURL(invoiceFile) : null), [invoiceFile]);
   useEffect(() => {
@@ -194,7 +202,8 @@ export function ReceiveForm({
   }
 
   function applyBulkQuantity(qty: number) {
-    setLines((current) => current.map((line) => ({ ...line, quantity_received: qty })));
+    // Fully received lines stay at 0.
+    setLines((current) => current.map((line) => ({ ...line, quantity_received: line.remaining > 0 ? qty : 0 })));
   }
 
   function applyBulkUnitPrice(price: number) {
@@ -216,14 +225,26 @@ export function ReceiveForm({
     setPendingFormData(new FormData(event.currentTarget));
   }
 
+  /**
+   * Enter in a box (or a barcode scanner, which ends with Enter) shouldn't
+   * open the confirm step mid-entry — only the Receive button does.
+   */
+  function onFormKeyDown(event: KeyboardEvent<HTMLFormElement>) {
+    if (event.key !== "Enter") return;
+    const target = event.target as HTMLElement;
+    if (target instanceof HTMLInputElement || target instanceof HTMLSelectElement) event.preventDefault();
+  }
+
   async function confirmReceive() {
     const formData = pendingFormData;
-    if (!formData) return;
+    if (!formData || receivingRef.current) return;
+    receivingRef.current = true;
     setPendingFormData(null);
     setPending(true);
     setError(null);
+    let opening = false;
     try {
-      await receivePurchaseOrder(
+      const result = await receivePurchaseOrder(
         {
           purchase_order_id: purchaseOrderId,
           received_date: String(formData.get("received_date") ?? ""),
@@ -231,6 +252,7 @@ export function ReceiveForm({
           invoice_reference: String(formData.get("invoice_reference") ?? ""),
           rounding_adjustment: roundingAdjustment,
           fx_adjustment: fxAdjustment,
+          allow_over_receipt: overLines.length > 0,
           lines: [
             ...lines.map((line) => ({
               purchase_order_item_id: line.purchase_order_item_id,
@@ -252,9 +274,22 @@ export function ReceiveForm({
         },
         invoiceFile,
       );
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not receive this order.");
-      setPending(false);
+      if (!result.ok) {
+        setError(result.error);
+        return;
+      }
+      if (result.warning) window.alert(result.warning);
+      // Keep the button disabled while the order opens.
+      opening = true;
+      router.push(`/stock-in/${result.orderId}`);
+      router.refresh();
+    } catch {
+      setError("Could not reach the server. Check your connection and try again — then check the order before receiving again.");
+    } finally {
+      if (!opening) {
+        receivingRef.current = false;
+        setPending(false);
+      }
     }
   }
 
@@ -270,9 +305,11 @@ export function ReceiveForm({
   ]).size;
 
   return (
-    <form onSubmit={onSubmit} className="space-y-6">
+    <form onSubmit={onSubmit} onKeyDown={onFormKeyDown} className="space-y-6">
       {error ? (
-        <p className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">{error}</p>
+        <p role="alert" className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
+          {error}
+        </p>
       ) : null}
 
       <div className="space-y-4 rounded-xl border border-border bg-card p-4">
@@ -284,6 +321,7 @@ export function ReceiveForm({
               type="date"
               name="received_date"
               defaultValue={today}
+              max={today}
               onChange={(event) => setReceivedDate(event.target.value)}
             />
           </label>
@@ -506,9 +544,12 @@ export function ReceiveForm({
         </p>
       </div>
 
-      <button className={btnClass} disabled={pending} type="submit">
-        {pending ? "Receiving…" : "Receive into stock"}
-      </button>
+      <div className="space-y-2">
+        {error ? <p className="text-sm text-red-700">{error}</p> : null}
+        <button className={btnClass} disabled={pending} type="submit">
+          {pending ? "Receiving…" : "Receive into stock"}
+        </button>
+      </div>
 
       {pendingFormData ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
@@ -519,6 +560,15 @@ export function ReceiveForm({
               {receivingLines.length + receivingFreeLines.length === 1 ? "" : "s"} to stock and cannot be edited
               afterward — only voided.
             </p>
+
+            {overLines.length > 0 ? (
+              <p className="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
+                More than is still to come: {overLines
+                  .map((line) => `${line.label} (receiving ${formatQty(line.quantity_received)}, ${formatQty(Math.max(0, line.remaining))} to come)`)
+                  .join(", ")}
+                . Confirm only if the supplier really delivered extra.
+              </p>
+            ) : null}
 
             {skippedLines.length > 0 ? (
               <p className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
@@ -581,10 +631,10 @@ export function ReceiveForm({
               <button
                 className={btnClass}
                 type="button"
-                disabled={receivingLines.length + receivingFreeLines.length === 0}
+                disabled={pending || receivingLines.length + receivingFreeLines.length === 0}
                 onClick={() => void confirmReceive()}
               >
-                Confirm &amp; receive
+                {overLines.length > 0 ? "Confirm over-delivery & receive" : "Confirm & receive"}
               </button>
             </div>
           </div>

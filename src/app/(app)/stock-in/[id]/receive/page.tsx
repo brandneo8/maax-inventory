@@ -59,7 +59,15 @@ export default async function ReceiveOrderPage({
       ) : (
         <ReceiveForm
           purchaseOrderId={order.id}
-          initialFxAdjustment={Number(order.fx_adjustment ?? 0)}
+          initialFxAdjustment={
+            // The order's planned FX, less what earlier receipts already carried, so a
+            // second partial receipt doesn't count it again.
+            Math.round(
+              (Number(order.fx_adjustment ?? 0) -
+                order.receipts.reduce((sum, receipt) => sum + Number(receipt.fx_adjustment ?? 0), 0)) *
+                100,
+            ) / 100
+          }
           latestCountDate={latestCountDate}
           defaultLocationId={branchLocations[0].id}
           gstRegistered={gstRegistered}

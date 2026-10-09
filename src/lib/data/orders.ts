@@ -1,3 +1,4 @@
+import { singaporeToday } from "@/lib/format";
 import type { createClient } from "@/lib/supabase/server";
 import type { PoStatus } from "@/lib/labels";
 
@@ -138,7 +139,8 @@ export async function getPurchaseOrder(
  */
 export async function nextPoNumber(supabase: Client, companyId: string) {
   const highest = await highestOrderSequence(supabase, companyId, false);
-  const year = new Date().getFullYear();
+  // The year in Singapore, so an order raised just after midnight on 1 Jan gets the new year.
+  const year = Number(singaporeToday().slice(0, 4));
   return `PO-${year}-${String(highest + 1).padStart(4, "0")}`;
 }
 
