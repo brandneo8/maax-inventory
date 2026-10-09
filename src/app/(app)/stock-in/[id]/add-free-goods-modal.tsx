@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Trash2 } from "lucide-react";
+import { LoaderCircle, Trash2 } from "lucide-react";
 import { addFreeGoodsReceipt } from "../actions";
 import { blurOnWheel, btnClass, btnSecondaryClass, fieldClass, numberFieldClass, tableClass, tdClass, thClass } from "@/lib/ui";
 import { cn } from "@/lib/utils";
@@ -20,11 +20,16 @@ type StagedLine = {
 export function AddFreeGoodsModal({
   purchaseOrderId,
   products,
+  productsError,
+  onRetryProducts,
   onClose,
   onSaved,
 }: {
   purchaseOrderId: string;
-  products: ProductOption[];
+  /** The catalog to pick from; null while it's still being fetched. */
+  products: ProductOption[] | null;
+  productsError: string | null;
+  onRetryProducts: () => void;
   onClose: () => void;
   onSaved: () => void;
 }) {
@@ -37,7 +42,7 @@ export function AddFreeGoodsModal({
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const selected = products.find((product) => product.id === productId);
+  const selected = products?.find((product) => product.id === productId);
   const canAdd = Boolean(selected) && quantity > 0;
 
   function addLine() {
@@ -118,7 +123,24 @@ export function AddFreeGoodsModal({
         <div className="mt-3 flex flex-wrap items-end gap-2 rounded-xl border border-border bg-card p-3">
           <label className="min-w-64 flex-1 space-y-1 text-sm">
             <span>Search product</span>
-            <ProductPicker products={products} value={productId} onSelect={(product) => setProductId(product.id)} />
+            {products ? (
+              <ProductPicker products={products} value={productId} onSelect={(product) => setProductId(product.id)} />
+            ) : productsError ? (
+              <span className="flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-red-800">
+                <span className="flex-1">{productsError}</span>
+                <button className="font-medium underline" type="button" onClick={onRetryProducts}>
+                  Try again
+                </button>
+              </span>
+            ) : (
+              <span
+                role="status"
+                className="flex items-center gap-2 rounded-lg border border-border bg-white px-3 py-2 text-muted"
+              >
+                <LoaderCircle className="size-4 animate-spin motion-reduce:animate-none" aria-hidden />
+                Loading products…
+              </span>
+            )}
           </label>
           <label className="w-28 space-y-1 text-sm">
             <span>Quantity</span>

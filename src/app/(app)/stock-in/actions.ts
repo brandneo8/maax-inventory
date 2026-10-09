@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { requireAdminBranch } from "@/lib/auth";
+import { requireBranch } from "@/lib/auth";
 import { assertNoActiveCount } from "@/lib/data/counts";
 import { nextDraftNumber, nextPoNumber } from "@/lib/data/orders";
 import { getDefaultStoreLocationId } from "@/lib/data/lookups";
@@ -68,7 +68,7 @@ export async function createPurchaseOrder(input: {
   /** Planning drafts: who's asking for these products. */
   requestedBy?: string;
 }) {
-  const { supabase, companyId, user, branch } = await requireAdminBranch();
+  const { supabase, companyId, user, branch } = await requireBranch();
   if (input.branch_id && input.branch_id !== branch.id) {
     throw new Error("The form is for a different salon. Switch branch and try again.");
   }
@@ -130,7 +130,7 @@ export async function updatePurchaseOrder(input: {
   fx_adjustment?: number;
   lines: OrderLineInput[];
 }) {
-  const { supabase, companyId, branch } = await requireAdminBranch();
+  const { supabase, companyId, branch } = await requireBranch();
   const lines = input.lines.filter((line) => line.product_id && line.quantity_ordered > 0);
 
   if (lines.length === 0) {
@@ -204,7 +204,7 @@ export async function receivePurchaseOrder(
   },
   invoiceFile?: File | null,
 ) {
-  const { supabase, companyId, user, branch } = await requireAdminBranch();
+  const { supabase, companyId, user, branch } = await requireBranch();
   await assertNoActiveCount(supabase, companyId, branch.id, "receive stock");
   const lines = input.lines.filter((line) => line.quantity_received > 0 && line.store_location_id);
 
@@ -310,7 +310,7 @@ export async function addFreeGoodsReceipt(input: {
   notes: string;
   lines: { product_id: string; quantity_received: number; classification: ProductClassification }[];
 }) {
-  const { supabase, companyId, user, branch } = await requireAdminBranch();
+  const { supabase, companyId, user, branch } = await requireBranch();
   await assertNoActiveCount(supabase, companyId, branch.id, "receive stock");
   const lines = input.lines.filter((line) => line.quantity_received > 0 && line.product_id);
 
@@ -388,7 +388,7 @@ export async function addFreeGoodsReceipt(input: {
 }
 
 export async function voidPurchaseOrder(formData: FormData) {
-  const { supabase, companyId, branch, user } = await requireAdminBranch();
+  const { supabase, companyId, branch, user } = await requireBranch();
   const id = String(formData.get("id") ?? "");
 
   // Voiding reverses every live receipt on the order, so their count
@@ -434,7 +434,7 @@ export async function voidPurchaseOrder(formData: FormData) {
  * editable after receiving. Drafts change it through updatePurchaseOrder.
  */
 export async function updatePurchaseOrderDate(purchaseOrderId: string, orderDate: string) {
-  const { supabase, companyId, branch, user } = await requireAdminBranch();
+  const { supabase, companyId, branch, user } = await requireBranch();
   if (!/^\d{4}-\d{2}-\d{2}$/.test(orderDate)) throw new Error("Enter a valid order date.");
 
   const { data: order, error: orderError } = await supabase
@@ -467,7 +467,7 @@ export async function updatePurchaseOrderDate(purchaseOrderId: string, orderDate
 
 /** Deletes a draft order outright — nothing has been received or sent on it yet. */
 export async function deleteDraftPurchaseOrder(formData: FormData) {
-  const { supabase, companyId, branch } = await requireAdminBranch();
+  const { supabase, companyId, branch } = await requireBranch();
   const id = String(formData.get("id") ?? "");
 
   const { data: order, error: orderError } = await supabase
@@ -501,7 +501,7 @@ export async function deleteDraftPurchaseOrder(formData: FormData) {
 }
 
 export async function duplicatePurchaseOrder(formData: FormData) {
-  const { supabase, companyId, user, branch } = await requireAdminBranch();
+  const { supabase, companyId, user, branch } = await requireBranch();
   const id = String(formData.get("id") ?? "");
 
   const { data: order, error: orderError } = await supabase
@@ -561,7 +561,7 @@ export async function duplicatePurchaseOrder(formData: FormData) {
  * fall before (or no longer before) a confirmed count.
  */
 async function redateReceiptLedger(
-  supabase: Awaited<ReturnType<typeof requireAdminBranch>>["supabase"],
+  supabase: Awaited<ReturnType<typeof requireBranch>>["supabase"],
   input: { companyId: string; branchId: string; receiptId: string; receivedDate: string; createdBy: string | undefined },
 ) {
   const scope = { companyId: input.companyId, branchId: input.branchId, receiptId: input.receiptId };
@@ -597,7 +597,7 @@ async function redateReceiptLedger(
 }
 
 export async function removeGoodsReceipt(goodsReceiptId: string) {
-  const { supabase, companyId, branch, user } = await requireAdminBranch();
+  const { supabase, companyId, branch, user } = await requireBranch();
 
   const { data: receipt, error: receiptError } = await supabase
     .from("goods_receipts")
@@ -634,7 +634,7 @@ export async function updateGoodsReceiptInvoice(
   fxAdjustment: number,
   invoiceFile?: File | null,
 ) {
-  const { supabase, companyId, branch, user } = await requireAdminBranch();
+  const { supabase, companyId, branch, user } = await requireBranch();
 
   if (!/^\d{4}-\d{2}-\d{2}$/.test(receivedDate)) {
     throw new Error("Enter a valid received date.");

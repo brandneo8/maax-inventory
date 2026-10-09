@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { requireAdminBranch } from "@/lib/auth";
+import { requireBranch } from "@/lib/auth";
 import { singaporeToday } from "@/lib/format";
 import { createPurchaseOrder, type OrderLineInput } from "../stock-in/actions";
 
@@ -49,7 +49,7 @@ export async function savePlanningOrders(input: {
 
 /** A planning draft (saved on /orders) at the current salon, or an error. */
 async function getPlanningOrder(orderId: string) {
-  const context = await requireAdminBranch();
+  const context = await requireBranch();
   const { data: order, error } = await context.supabase
     .from("purchase_orders")
     .select("id, po_number, status")

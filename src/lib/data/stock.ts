@@ -1,5 +1,6 @@
 import type { createClient } from "@/lib/supabase/server";
 import { productDisplayName } from "@/lib/format";
+import { getBranchLocationIds } from "@/lib/data/lookups";
 import {
   LATE_RECEIPT_SURPLUS_NOTE,
   REMOVED_RECEIPT_SHORTFALL_NOTE,
@@ -133,6 +134,47 @@ function chunkIds<T>(items: T[], size = 200) {
   return chunks;
 }
 
+/**
+ * A ledger row that's a genuine inflow ("ordered"): a goods receipt, a count
+ * surplus, or a late receipt taking back a count surplus (which undoes part of
+ * that inflow). Everything else is a usage-side outflow.
+ */
+function isInflowRow(row: { txn_type: string; notes: string | null; quantity_change: number }) {
+  const isCountVariance = row.txn_type === "count_adjustment" && row.notes === "Count variance";
+  return (
+    row.txn_type === "goods_receipt" ||
+    (isCountVariance && Number(row.quantity_change) > 0) ||
+    (row.txn_type === "count_adjustment" && row.notes === LATE_RECEIPT_SURPLUS_NOTE)
+  );
+}
+
+/** Invoice rounding (part of COGS) and realised FX per received month; removed receipts left out. */
+async function getReceiptAdjustmentsByMonth(
+  supabase: Client,
+  companyId: string,
+  branchId: string,
+  fromMonth: string,
+  toMonth: string,
+) {
+  const roundingByMonth = new Map<string, number>();
+  const fxByMonth = new Map<string, number>();
+  const { data: receipts, error: receiptsError } = await supabase
+    .from("goods_receipts")
+    .select("received_date, rounding_adjustment, fx_adjustment")
+    .eq("company_id", companyId)
+    .eq("branch_id", branchId)
+    .is("voided_at", null)
+    .gte("received_date", `${fromMonth}-01`)
+    .lt("received_date", `${nextMonth(toMonth)}-01`);
+  if (receiptsError) throw receiptsError;
+  for (const receipt of receipts ?? []) {
+    const monthKey = receipt.received_date.slice(0, 7);
+    roundingByMonth.set(monthKey, (roundingByMonth.get(monthKey) ?? 0) + Number(receipt.rounding_adjustment ?? 0));
+    fxByMonth.set(monthKey, (fxByMonth.get(monthKey) ?? 0) + Number(receipt.fx_adjustment ?? 0));
+  }
+  return { roundingByMonth, fxByMonth };
+}
+
 const NO_BRAND = "No brand";
 const UNTAGGED = "Untagged";
 
@@ -186,12 +228,12 @@ export async function getMonthlyInventoryReport(
   };
   if (months.length === 0) return empty;
 
-  const { data: locations, error: locationError } = await supabase
-    .from("store_locations")
-    .select("id")
-    .eq("branch_id", branchId);
-  if (locationError) throw locationError;
-  const locationIds = (locations ?? []).map((location) => location.id);
+  // Receipt rounding/FX doesn't depend on the ledger, so it's read alongside it.
+  const receiptAdjustments = getReceiptAdjustmentsByMonth(supabase, companyId, branchId, fromMonth, toMonth);
+  // Settled even if the ledger read fails first, so its rejection is never unhandled.
+  receiptAdjustments.catch(() => {});
+
+  const locationIds = await getBranchLocationIds(supabase, branchId);
   if (locationIds.length === 0) return empty;
 
   // Voided counts are left out (see inventory_transactions_effective), and
@@ -249,11 +291,7 @@ export async function getMonthlyInventoryReport(
   for (const row of rows ?? []) {
     const value = Number(row.quantity_change) * Number(row.unit_cost ?? 0);
     const isCountVariance = row.txn_type === "count_adjustment" && row.notes === "Count variance";
-    // A late receipt taking back a count surplus undoes part of that inflow.
-    const isInflow =
-      row.txn_type === "goods_receipt" ||
-      (isCountVariance && Number(row.quantity_change) > 0) ||
-      (row.txn_type === "count_adjustment" && row.notes === LATE_RECEIPT_SURPLUS_NOTE);
+    const isInflow = isInflowRow(row);
 
     if (row.txn_date < fromBoundary) {
       openingCarry += value;
@@ -303,12 +341,33 @@ export async function getMonthlyInventoryReport(
   }
 
   const inhouseProductIds = [...new Set(inhouseEntries.map((entry) => entry.productId))];
+  // Every product that appears anywhere in this branch's history up to
+  // toMonth might carry a nonzero balance into the displayed range, even
+  // with no activity of its own within it — so this is every product key
+  // seen above, not just ones with a delta inside [fromMonth, toMonth].
+  const summaryProductIds = [...new Set([...openingCarryByProduct.keys(), ...productMonthDelta.keys()])];
+
+  // The in-house tag lookup and the brand/tag batches are independent, so
+  // they're all fetched at once (batches are read back in order).
+  const [tagResult, productBatches] = await Promise.all([
+    inhouseProductIds.length > 0
+      ? supabase.from("product_tags").select("product_id, tags(name)").in("product_id", inhouseProductIds)
+      : null,
+    Promise.all(
+      chunkIds(summaryProductIds).map(async (idsChunk) => {
+        const { data: productRows, error: productError } = await supabase
+          .from("products")
+          .select("id, brands(name), product_tags(tags(name))")
+          .in("id", idsChunk);
+        if (productError) throw productError;
+        return productRows ?? [];
+      }),
+    ),
+  ]);
+
   const tagNamesByProduct = new Map<string, string[]>();
-  if (inhouseProductIds.length > 0) {
-    const { data: tagRows, error: tagError } = await supabase
-      .from("product_tags")
-      .select("product_id, tags(name)")
-      .in("product_id", inhouseProductIds);
+  if (tagResult) {
+    const { data: tagRows, error: tagError } = tagResult;
     if (tagError) throw tagError;
     for (const tagRow of tagRows ?? []) {
       const name = tagNameFrom(tagRow.tags);
@@ -334,11 +393,6 @@ export async function getMonthlyInventoryReport(
     values: months.map((month) => byTagAndMonth.get(`${tagName}|${month}`) ?? 0),
   }));
 
-  // Every product that appears anywhere in this branch's history up to
-  // toMonth might carry a nonzero balance into the displayed range, even
-  // with no activity of its own within it — so this is every product key
-  // seen above, not just ones with a delta inside [fromMonth, toMonth].
-  const summaryProductIds = [...new Set([...openingCarryByProduct.keys(), ...productMonthDelta.keys()])];
   const closingByProduct = new Map<string, number[]>();
   for (const productId of summaryProductIds) {
     const deltas = productMonthDelta.get(productId);
@@ -352,13 +406,8 @@ export async function getMonthlyInventoryReport(
 
   const brandByProduct = new Map<string, string>();
   const tagNamesByProductForInventory = new Map<string, string[]>();
-  for (const idsChunk of chunkIds(summaryProductIds)) {
-    const { data: productRows, error: productError } = await supabase
-      .from("products")
-      .select("id, brands(name), product_tags(tags(name))")
-      .in("id", idsChunk);
-    if (productError) throw productError;
-    for (const productRow of productRows ?? []) {
+  for (const productRows of productBatches) {
+    for (const productRow of productRows) {
       brandByProduct.set(productRow.id, tagNameFrom(productRow.brands) || NO_BRAND);
       const names = (productRow.product_tags ?? []).flatMap((productTag) => {
         const name = tagNameFrom(productTag.tags);
@@ -392,22 +441,7 @@ export async function getMonthlyInventoryReport(
   // Receipt-level amounts that aren't stock movements: invoice rounding
   // (part of cost of goods sold) and the FX clearing amount (realised FX,
   // reported outside it). Removed receipts are left out.
-  const roundingByMonth = new Map<string, number>();
-  const fxByMonth = new Map<string, number>();
-  const { data: receipts, error: receiptsError } = await supabase
-    .from("goods_receipts")
-    .select("received_date, rounding_adjustment, fx_adjustment")
-    .eq("company_id", companyId)
-    .eq("branch_id", branchId)
-    .is("voided_at", null)
-    .gte("received_date", `${fromMonth}-01`)
-    .lt("received_date", `${nextMonth(toMonth)}-01`);
-  if (receiptsError) throw receiptsError;
-  for (const receipt of receipts ?? []) {
-    const monthKey = receipt.received_date.slice(0, 7);
-    roundingByMonth.set(monthKey, (roundingByMonth.get(monthKey) ?? 0) + Number(receipt.rounding_adjustment ?? 0));
-    fxByMonth.set(monthKey, (fxByMonth.get(monthKey) ?? 0) + Number(receipt.fx_adjustment ?? 0));
-  }
+  const { roundingByMonth, fxByMonth } = await receiptAdjustments;
 
   const openingBalance: number[] = [];
   const ordered: number[] = [];
@@ -462,6 +496,76 @@ export async function getMonthlyInventoryReport(
   };
 }
 
+/**
+ * Just the purchases ("ordered") and cost-of-goods-sold rows of
+ * getMonthlyInventoryReport, for Home's chart — same figures, but only the
+ * ledger rows inside [fromMonth, toMonth] are read. Neither figure depends on
+ * earlier rows (each row's unit_cost is already its point-in-time average
+ * cost; earlier rows only feed the opening balances, which aren't needed
+ * here), and the brand/tag breakdowns are skipped.
+ */
+export async function getMonthlyPurchasesAndCogs(
+  supabase: Client,
+  companyId: string,
+  branchId: string,
+  fromMonth: string,
+  toMonth: string,
+): Promise<Pick<MonthlyInventoryReport, "months" | "ordered" | "cogsTotal">> {
+  const months = monthRange(fromMonth, toMonth);
+  const empty = { months, ordered: months.map(() => 0), cogsTotal: months.map(() => 0) };
+  if (months.length === 0) return empty;
+
+  const receiptAdjustments = getReceiptAdjustmentsByMonth(supabase, companyId, branchId, fromMonth, toMonth);
+  receiptAdjustments.catch(() => {});
+
+  const locationIds = await getBranchLocationIds(supabase, branchId);
+  if (locationIds.length === 0) return empty;
+
+  const fromBoundary = monthStartIso(fromMonth);
+  // A day of slack below the range: rows before fromBoundary are skipped in
+  // JS by the same string comparison the full report uses, whatever offset
+  // txn_date comes back in.
+  const readFrom = new Date(Date.parse(fromBoundary) - 24 * 60 * 60 * 1000).toISOString();
+  const orderedByMonth = new Map<string, number>();
+  const usedByMonth = new Map<string, number>();
+  // Same paging and id order as getMonthlyInventoryReport, so each month's
+  // sums add up in the same order and come out identical.
+  for (let from = 0; ; from += 1000) {
+    const { data, error } = await supabase
+      .from("inventory_transactions_effective")
+      .select("id, product_id, txn_type, quantity_change, unit_cost, notes, txn_date")
+      .eq("company_id", companyId)
+      .in("store_location_id", locationIds)
+      .gte("txn_date", readFrom)
+      .lt("txn_date", monthStartIso(nextMonth(toMonth)))
+      .order("id")
+      .range(from, from + 999);
+    if (error) throw error;
+    for (const row of data ?? []) {
+      if (!row.product_id || !row.txn_type || !row.txn_date) continue;
+      // The full report compares these as strings (a row stamped exactly at
+      // midnight UTC on the 1st lands in its opening balance) — kept the same.
+      if (row.txn_date < fromBoundary) continue;
+      const quantityChange = Number(row.quantity_change);
+      const value = quantityChange * Number(row.unit_cost ?? 0);
+      const monthKey = row.txn_date.slice(0, 7);
+      if (isInflowRow({ txn_type: row.txn_type, notes: row.notes, quantity_change: quantityChange })) {
+        orderedByMonth.set(monthKey, (orderedByMonth.get(monthKey) ?? 0) + value);
+      } else {
+        usedByMonth.set(monthKey, (usedByMonth.get(monthKey) ?? 0) + -value);
+      }
+    }
+    if (!data || data.length < 1000) break;
+  }
+
+  const { roundingByMonth } = await receiptAdjustments;
+  return {
+    months,
+    ordered: months.map((month) => orderedByMonth.get(month) ?? 0),
+    cogsTotal: months.map((month) => (usedByMonth.get(month) ?? 0) + (roundingByMonth.get(month) ?? 0)),
+  };
+}
+
 function firstOfOne<T>(value: T | T[] | null | undefined): T | null {
   if (!value) return null;
   return Array.isArray(value) ? (value[0] ?? null) : value;
@@ -485,12 +589,7 @@ export type ProductLedgerRow = {
  * instead of the whole branch.
  */
 export async function getProductLedger(supabase: Client, companyId: string, branchId: string, productId: string) {
-  const { data: locations, error: locationError } = await supabase
-    .from("store_locations")
-    .select("id")
-    .eq("branch_id", branchId);
-  if (locationError) throw locationError;
-  const locationIds = (locations ?? []).map((location) => location.id);
+  const locationIds = await getBranchLocationIds(supabase, branchId);
   if (locationIds.length === 0) return [] as ProductLedgerRow[];
 
   // The effective ledger: a voided count or a removed receipt (and the rows

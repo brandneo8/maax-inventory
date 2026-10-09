@@ -11,12 +11,42 @@ export type OrderFormLine = {
   cost: number | null;
   /** Suggested retail price, when the form gives one. */
   rrp: number | null;
+  /** When the form is in another currency: the price and RRP as written, before converting to SGD. */
+  originalCost?: number | null;
+  originalRrp?: number | null;
 };
+
+/** Currency markers looked for in a form's title and heading rows, and the ISO code each means. */
+const CURRENCY_MARKERS: [RegExp, string][] = [
+  [/\bSGD\b|\bS\$/, "SGD"],
+  [/\bRM\b|\bMYR\b|[Rr]inggit/, "MYR"],
+  [/\bUSD\b|\bUS\$/, "USD"],
+  [/\bEUR\b|€/, "EUR"],
+  [/\bGBP\b|£/, "GBP"],
+  [/\bAUD\b|\bA\$/, "AUD"],
+  [/\bHKD\b|\bHK\$/, "HKD"],
+  [/\bRMB\b|\bCNY\b/, "CNY"],
+  [/\bJPY\b|¥/, "JPY"],
+  [/\bTHB\b|฿/, "THB"],
+  [/\bIDR\b/, "IDR"],
+  [/\bKRW\b|₩/, "KRW"],
+];
+
+/** The currency a form's title and heading text name, if any (the first marker found wins). */
+function currencyIn(texts: string[]) {
+  const text = texts.join(" ");
+  let found: { code: string; at: number } | null = null;
+  for (const [pattern, code] of CURRENCY_MARKERS) {
+    const at = text.search(pattern);
+    if (at >= 0 && (!found || at < found.at)) found = { code, at };
+  }
+  return found?.code ?? null;
+}
 
 type Grid = { sheet: string; rows: string[][] };
 
 const SKU_HEADER = /^(sku|code|sku code|code number|item code|product code)$/i;
-const DESCRIPTION_HEADER = /(description|item name|product name)/i;
+const DESCRIPTION_HEADER = /(description|item name|product name|^product$|^item$|^name$)/i;
 const SIZE_HEADER = /^(size|volume|volume ?\/ ?size|pack)$/i;
 const RRP_HEADER = /(retail|rrp)/i;
 const COST_HEADER = /(salon price|pro price|invoice price|salon \$|price)/i;
@@ -102,14 +132,28 @@ function money(value: string) {
  * the same sheet starts a new block with its own columns.
  */
 export async function readOrderForm(buffer: ArrayBuffer, fileName: string): Promise<OrderFormLine[]> {
+  return (await readOrderFormDetails(buffer, fileName)).lines;
+}
+
+/**
+ * Reads an order form's lines (see readOrderForm), and the currency its
+ * title or heading rows name ("Salon Price (RM)" = MYR), if any.
+ */
+export async function readOrderFormDetails(
+  buffer: ArrayBuffer,
+  fileName: string,
+): Promise<{ lines: OrderFormLine[]; currency: string | null }> {
   const grids = fileName.toLowerCase().endsWith(".csv")
     ? readCsv(new TextDecoder("utf-8").decode(buffer).replace(/^﻿/, ""))
     : await readXlsx(buffer);
 
   const lines: OrderFormLine[] = [];
+  /** Text above and on each sheet's first heading row: titles, notes and column headings. */
+  const headingTexts: string[] = [];
   for (const grid of grids) {
     let columns: { sku: number; description: number; size: number; cost: number; rrp: number } | null = null;
     grid.rows.forEach((cells, rowIndex) => {
+      if (!columns) headingTexts.push(...cells.filter(Boolean));
       const sku = cells.findIndex((cell) => SKU_HEADER.test(cell));
       const description = cells.findIndex((cell) => DESCRIPTION_HEADER.test(cell));
       if (sku >= 0 && description >= 0) {
@@ -133,5 +177,5 @@ export async function readOrderForm(buffer: ArrayBuffer, fileName: string): Prom
       });
     });
   }
-  return lines;
+  return { lines, currency: currencyIn(headingTexts) };
 }

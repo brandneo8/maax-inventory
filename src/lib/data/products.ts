@@ -1,5 +1,6 @@
+import { cache } from "react";
 import type { createClient } from "@/lib/supabase/server";
-import { getProducts } from "@/lib/data/lookups";
+import { getBranchLocationIds, getProducts } from "@/lib/data/lookups";
 import { isOnSalonPosList } from "@/lib/data/pos-rules";
 import { getBundleComponentsForProducts } from "@/lib/data/product-components";
 import {
@@ -97,6 +98,11 @@ const IN_CHUNK = 200;
 const PICKER_SELECT =
   "id, sku, barcode, name, order_name, brand_sub, unit_cost_price, rrp, size_label, size_ml, pos_allowed, is_set, brands(name), product_tags(tags(name)), product_branch_classifications(branch_id, classification), supplier_products(supplier_id)";
 
+// PICKER_SELECT without the tag and supplier joins, for callers that don't
+// show them (Home's products table); those rows read as having none.
+const BALANCE_SELECT =
+  "id, sku, barcode, name, order_name, brand_sub, unit_cost_price, rrp, size_label, size_ml, pos_allowed, is_set, brands(name), product_branch_classifications(branch_id, classification)";
+
 type PickerRow = {
   id: string;
   sku: string | null;
@@ -111,9 +117,9 @@ type PickerRow = {
   pos_allowed: boolean | null;
   is_set: boolean | null;
   brands: { name: string | null } | { name: string | null }[] | null;
-  product_tags: { tags: { name: string | null } | { name: string | null }[] | null }[] | null;
+  product_tags?: { tags: { name: string | null } | { name: string | null }[] | null }[] | null;
   product_branch_classifications: { branch_id: string; classification: ProductClassification }[] | null;
-  supplier_products: { supplier_id: string }[] | null;
+  supplier_products?: { supplier_id: string }[] | null;
 };
 
 function chunkIds<T>(items: T[], size = IN_CHUNK) {
@@ -156,33 +162,42 @@ async function getAssignedProductIds(supabase: Client, branchId: string) {
   return ids;
 }
 
-async function loadPickerRows(supabase: Client, companyId: string, productIds?: string[]) {
+async function loadPickerRows(
+  supabase: Client,
+  companyId: string,
+  productIds?: string[],
+  select: typeof PICKER_SELECT | typeof BALANCE_SELECT = PICKER_SELECT,
+) {
   const rows: PickerRow[] = [];
   if (productIds) {
     if (productIds.length === 0) return rows;
-    for (const ids of chunkIds(productIds)) {
-      const { data, error } = await supabase
-        .from("products")
-        .select(PICKER_SELECT)
-        .eq("company_id", companyId)
-        .eq("is_active", true)
-        .in("id", ids);
-      if (error) throw new Error(error.message || "Could not load products.");
-      rows.push(...((data ?? []) as PickerRow[]));
-    }
+    // Batches are independent, so they're fetched together; rows stay in batch order.
+    const batches = await Promise.all(
+      chunkIds(productIds).map(async (ids) => {
+        const { data, error } = await supabase
+          .from("products")
+          .select(select)
+          .eq("company_id", companyId)
+          .eq("is_active", true)
+          .in("id", ids);
+        if (error) throw new Error(error.message || "Could not load products.");
+        return (data ?? []) as unknown as PickerRow[];
+      }),
+    );
+    for (const batch of batches) rows.push(...batch);
     return rows;
   }
 
   for (let from = 0; ; from += PAGE_SIZE) {
     const { data, error } = await supabase
       .from("products")
-      .select(PICKER_SELECT)
+      .select(select)
       .eq("company_id", companyId)
       .eq("is_active", true)
       .order("order_name")
       .range(from, from + PAGE_SIZE - 1);
     if (error) throw new Error(error.message || "Could not load products.");
-    rows.push(...((data ?? []) as PickerRow[]));
+    rows.push(...((data ?? []) as unknown as PickerRow[]));
     if (!data || data.length < PAGE_SIZE) break;
   }
   return rows;
@@ -258,14 +273,18 @@ function pickSupplier(
 
 async function getSupplierLinksByProduct(supabase: Client, productIds: string[]) {
   const byProduct = new Map<string, { supplier_id: string; is_preferred: boolean }[]>();
-  for (let index = 0; index < productIds.length; index += 200) {
-    const chunk = productIds.slice(index, index + 200);
-    const { data, error } = await supabase
-      .from("supplier_products")
-      .select("product_id, supplier_id, is_preferred")
-      .in("product_id", chunk);
-    if (error) throw new Error(error.message || "Could not load supplier links.");
-    for (const row of data ?? []) {
+  const batches = await Promise.all(
+    chunkIds(productIds).map(async (chunk) => {
+      const { data, error } = await supabase
+        .from("supplier_products")
+        .select("product_id, supplier_id, is_preferred")
+        .in("product_id", chunk);
+      if (error) throw new Error(error.message || "Could not load supplier links.");
+      return data ?? [];
+    }),
+  );
+  for (const data of batches) {
+    for (const row of data) {
       const list = byProduct.get(row.product_id) ?? [];
       list.push({ supplier_id: row.supplier_id, is_preferred: row.is_preferred });
       byProduct.set(row.product_id, list);
@@ -383,7 +402,9 @@ export async function getProductBranchCosts(supabase: Client, companyId: string)
   return byProduct;
 }
 
-export async function getBranchAvgCosts(supabase: Client, companyId: string, branchId: string) {
+// Cached per request: the receive page reads it directly and through
+// getOrderProductOptions with the same client and ids, so that's one query.
+export const getBranchAvgCosts = cache(async (supabase: Client, companyId: string, branchId: string) => {
   const { data, error } = await supabase
     .from("product_branch_costs")
     .select("product_id, avg_unit_cost")
@@ -393,7 +414,7 @@ export async function getBranchAvgCosts(supabase: Client, companyId: string, bra
   const byProduct: Record<string, number> = {};
   for (const row of data ?? []) byProduct[row.product_id] = Number(row.avg_unit_cost);
   return byProduct;
-}
+});
 
 export async function getOrderProductOptions(supabase: Client, companyId: string, branchId: string) {
   const [rows, avgCosts] = await Promise.all([
@@ -496,10 +517,15 @@ export async function getBranchPosProducts(
     getBranchOnHand(supabase, companyId, branchId, [...posRows.map((product) => product.id), ...componentIds]),
     (async () => {
       const labels = new Map<string, string>();
-      for (const ids of chunkIds(componentIds)) {
-        const { data, error } = await supabase.from("products").select("id, sku, name, order_name").in("id", ids);
-        if (error) throw new Error(error.message || "Could not load bundle components.");
-        for (const row of data ?? []) labels.set(row.id, productDisplayName(row) || row.sku || "—");
+      const batches = await Promise.all(
+        chunkIds(componentIds).map(async (ids) => {
+          const { data, error } = await supabase.from("products").select("id, sku, name, order_name").in("id", ids);
+          if (error) throw new Error(error.message || "Could not load bundle components.");
+          return data ?? [];
+        }),
+      );
+      for (const data of batches) {
+        for (const row of data) labels.set(row.id, productDisplayName(row) || row.sku || "—");
       }
       return labels;
     })(),
@@ -558,12 +584,7 @@ export async function getMonthToDateUsageDetail(
   const usage = new Map<string, { quantity: number; cost: number }>();
   if (productIds.length === 0) return usage;
 
-  const { data: locations, error: locationError } = await supabase
-    .from("store_locations")
-    .select("id")
-    .eq("branch_id", branchId);
-  if (locationError) throw new Error(locationError.message || "Could not load storage locations.");
-  const locationIds = (locations ?? []).map((location) => location.id);
+  const locationIds = await getBranchLocationIds(supabase, branchId);
   if (locationIds.length === 0) return usage;
 
   const currentMonth = singaporeToday().slice(0, 7);
@@ -585,42 +606,47 @@ export async function getMonthToDateUsageDetail(
     }
   }
 
-  for (const ids of chunkIds(productIds)) {
-    const [
-      { data: useRows, error: useError },
-      { data: countRows, error: countError },
-      { data: reclassRows, error: reclassError },
-    ] = await Promise.all([
-      supabase
-        .from("inventory_transactions_effective")
-        .select("product_id, quantity_change, unit_cost")
-        .in("product_id", ids)
-        .in("store_location_id", locationIds)
-        .in("txn_type", ["retail_use", "gwp_use", "inhouse_use"])
-        .gte("txn_date", monthStart)
-        .lt("txn_date", monthEnd),
-      supabase
-        .from("inventory_transactions_effective")
-        .select("product_id, quantity_change, unit_cost")
-        .in("product_id", ids)
-        .in("store_location_id", locationIds)
-        .eq("txn_type", "count_adjustment")
-        .eq("notes", "Count variance")
-        .gte("txn_date", monthStart)
-        .lt("txn_date", monthEnd),
-      // A shortfall reclassified as a product sale is one unit of usage (the
-      // sale), not two — this offsets the shortfall it cancels. A surplus a
-      // late receipt explains wasn't usage either, so it cancels likewise.
-      supabase
-        .from("inventory_transactions_effective")
-        .select("product_id, quantity_change, unit_cost")
-        .in("product_id", ids)
-        .in("store_location_id", locationIds)
-        .eq("txn_type", "count_adjustment")
-        .in("notes", [SALE_RECLASS_NOTE, USE_RECLASS_NOTE, LATE_RECEIPT_SURPLUS_NOTE, REMOVED_RECEIPT_SHORTFALL_NOTE])
-        .gte("txn_date", monthStart)
-        .lt("txn_date", monthEnd),
-    ]);
+  // Every batch is fetched at once; they're summed in batch order below.
+  const batches = await Promise.all(
+    chunkIds(productIds).map((ids) =>
+      Promise.all([
+        supabase
+          .from("inventory_transactions_effective")
+          .select("product_id, quantity_change, unit_cost")
+          .in("product_id", ids)
+          .in("store_location_id", locationIds)
+          .in("txn_type", ["retail_use", "gwp_use", "inhouse_use"])
+          .gte("txn_date", monthStart)
+          .lt("txn_date", monthEnd),
+        supabase
+          .from("inventory_transactions_effective")
+          .select("product_id, quantity_change, unit_cost")
+          .in("product_id", ids)
+          .in("store_location_id", locationIds)
+          .eq("txn_type", "count_adjustment")
+          .eq("notes", "Count variance")
+          .gte("txn_date", monthStart)
+          .lt("txn_date", monthEnd),
+        // A shortfall reclassified as a product sale is one unit of usage (the
+        // sale), not two — this offsets the shortfall it cancels. A surplus a
+        // late receipt explains wasn't usage either, so it cancels likewise.
+        supabase
+          .from("inventory_transactions_effective")
+          .select("product_id, quantity_change, unit_cost")
+          .in("product_id", ids)
+          .in("store_location_id", locationIds)
+          .eq("txn_type", "count_adjustment")
+          .in("notes", [SALE_RECLASS_NOTE, USE_RECLASS_NOTE, LATE_RECEIPT_SURPLUS_NOTE, REMOVED_RECEIPT_SHORTFALL_NOTE])
+          .gte("txn_date", monthStart)
+          .lt("txn_date", monthEnd),
+      ]),
+    ),
+  );
+  for (const [
+    { data: useRows, error: useError },
+    { data: countRows, error: countError },
+    { data: reclassRows, error: reclassError },
+  ] of batches) {
     if (useError) throw new Error(useError.message || "Could not load month-to-date usage.");
     if (countError) throw new Error(countError.message || "Could not load month-to-date usage.");
     if (reclassError) throw new Error(reclassError.message || "Could not load month-to-date usage.");
@@ -668,13 +694,23 @@ export async function getOrderBalanceProducts(
   branchId: string,
   /** Months for monthToDateUse/Cost to cover instead of this one (Home's month range filter). */
   usageRange?: { from: string; to: string },
+  /**
+   * skipPlanning: leave out what only /orders shows — average monthly use
+   * (monthlyUse is then just monthToDateUse), tags and suppliers (empty).
+   */
+  options?: { skipPlanning?: boolean },
 ) {
-  const assignedIds = await getAssignedProductIds(supabase, branchId);
+  const skipPlanning = options?.skipPlanning ?? false;
+  // Location ids are cached per request; starting them now saves a round trip later.
+  const [assignedIds] = await Promise.all([
+    getAssignedProductIds(supabase, branchId),
+    getBranchLocationIds(supabase, branchId),
+  ]);
   const [rows, onHand, monthToDateDetail, monthlyUse] = await Promise.all([
-    loadPickerRows(supabase, companyId, assignedIds),
+    loadPickerRows(supabase, companyId, assignedIds, skipPlanning ? BALANCE_SELECT : PICKER_SELECT),
     getBranchOnHand(supabase, companyId, branchId, assignedIds),
     getMonthToDateUsageDetail(supabase, branchId, assignedIds, usageRange),
-    getAverageMonthlyUsage(supabase, branchId, assignedIds),
+    skipPlanning ? new Map<string, number>() : getAverageMonthlyUsage(supabase, branchId, assignedIds),
   ]);
   const monthToDateUse = new Map([...monthToDateDetail].map(([id, row]) => [id, row.quantity]));
   return rows
@@ -716,22 +752,22 @@ export async function getBranchOnHand(
   const qty = new Map<string, number>();
   if (productIds.length === 0) return qty;
 
-  const { data: locations, error: locationError } = await supabase
-    .from("store_locations")
-    .select("id")
-    .eq("branch_id", branchId);
-  if (locationError) throw new Error(locationError.message || "Could not load storage locations.");
-  const locationIds = (locations ?? []).map((location) => location.id);
+  const locationIds = await getBranchLocationIds(supabase, branchId);
   if (locationIds.length === 0) return qty;
 
-  for (const ids of chunkIds(productIds)) {
-    const { data, error } = await supabase
-      .from("current_stock")
-      .select("product_id, quantity_on_hand")
-      .in("product_id", ids)
-      .in("store_location_id", locationIds);
-    if (error) throw new Error(error.message || "Could not load on-hand quantities.");
-    for (const row of data ?? []) {
+  const batches = await Promise.all(
+    chunkIds(productIds).map(async (ids) => {
+      const { data, error } = await supabase
+        .from("current_stock")
+        .select("product_id, quantity_on_hand")
+        .in("product_id", ids)
+        .in("store_location_id", locationIds);
+      if (error) throw new Error(error.message || "Could not load on-hand quantities.");
+      return data ?? [];
+    }),
+  );
+  for (const data of batches) {
+    for (const row of data) {
       if (!row.product_id) continue;
       qty.set(row.product_id, (qty.get(row.product_id) ?? 0) + Number(row.quantity_on_hand ?? 0));
     }

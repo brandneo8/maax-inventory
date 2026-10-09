@@ -1456,7 +1456,7 @@ export function ProductsTable({
               brand={activeBrandFilter}
               imageUrl={orderFormFor(activeBrandFilter)!.form!.imageUrl}
               fileName={orderFormFor(activeBrandFilter)!.form!.fileName}
-              lines={orderFormFor(activeBrandFilter)!.form!.lines ?? []}
+              lines={orderFormFor(activeBrandFilter)!.form!.typedLines}
               pulseProducts={comparisonProducts}
             />
           ) : null}
@@ -1642,6 +1642,11 @@ export function ProductsTable({
           products={comparisonProducts}
           lines={orderFormFor(activeBrandFilter)?.form?.lines ?? null}
           matches={orderFormFor(activeBrandFilter)?.matches ?? []}
+          formCurrency={
+            orderFormFor(activeBrandFilter)?.form?.fxRate != null
+              ? (orderFormFor(activeBrandFilter)?.form?.currency ?? null)
+              : null
+          }
           onEditProduct={editProduct}
           onAddProducts={addPriceListProducts}
           editDisabled={pending}

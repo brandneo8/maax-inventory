@@ -1,8 +1,7 @@
 "use client";
 
 import { formatDate } from "@/lib/format";
-import { fieldClass } from "@/lib/ui";
-import { cn } from "@/lib/utils";
+import { PeriodDateInput } from "./stock-out-lines-editor";
 
 /**
  * The period a stock-out covers: a fixed start (the day after the previous
@@ -14,11 +13,14 @@ export function StockOutPeriod({
   end,
   maxEnd,
   onEndChange,
+  endLocked = false,
 }: {
   start: string;
   end: string;
   maxEnd: string;
   onEndChange: (end: string) => void;
+  /** A later stock-out starts the day after this one ends, so the end date can't move. */
+  endLocked?: boolean;
 }) {
   return (
     <div className="space-y-3 rounded-xl border border-sky-200 bg-sky-50/60 p-4">
@@ -39,24 +41,24 @@ export function StockOutPeriod({
         <span className="pb-2 text-sky-900" aria-hidden>
           to
         </span>
-        <label className="space-y-1">
-          <span className="block text-xs font-medium text-sky-900">End date</span>
-          <input
-            id="stock-out-end-date"
-            className={cn(fieldClass, "w-auto")}
-            type="date"
-            min={start}
-            max={maxEnd}
-            value={end}
-            onChange={(event) => {
-              const value = event.target.value;
-              if (!value) return;
-              onEndChange(value < start ? start : value > maxEnd ? maxEnd : value);
-            }}
-            required
-          />
-        </label>
-        <p className="pb-2 text-xs text-sky-900/80">Latest allowed: {formatDate(maxEnd)}</p>
+        {endLocked ? (
+          <div className="space-y-1">
+            <span className="block text-xs font-medium text-sky-900">End date</span>
+            <p className="rounded-lg border border-sky-200 bg-white px-3 py-2 font-medium tabular-nums">
+              {formatDate(end)}
+            </p>
+          </div>
+        ) : (
+          <label className="space-y-1">
+            <span className="block text-xs font-medium text-sky-900">End date</span>
+            <PeriodDateInput id="stock-out-end-date" className="w-auto" value={end} min={start} max={maxEnd} onChange={onEndChange} />
+          </label>
+        )}
+        <p className="pb-2 text-xs text-sky-900/80">
+          {endLocked
+            ? "Fixed: the next stock-out starts the day after."
+            : `Latest allowed: ${formatDate(maxEnd)}`}
+        </p>
       </div>
     </div>
   );

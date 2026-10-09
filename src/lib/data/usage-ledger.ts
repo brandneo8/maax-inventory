@@ -71,6 +71,48 @@ export async function insertUsageLedgerRows(
 ) {
   if (input.lines.length === 0) return;
 
+  const rows = await buildUsageLedgerRows(supabase, input);
+  const { error } = await supabase.from("inventory_transactions").insert(
+    rows.map((row) => ({
+      company_id: input.companyId,
+      product_id: row.productId,
+      store_location_id: input.storeLocationId,
+      txn_type: input.txnType,
+      quantity_change: row.quantityChange,
+      reference_table: input.referenceTable,
+      reference_id: row.referenceId,
+      created_by: input.userEmail,
+      notes: row.notes,
+      unit_cost: row.unitCost,
+      classification: input.classification,
+      txn_date: row.txnDate,
+    })),
+  );
+  if (error) throw error;
+}
+
+/** One stock deduction worked out by buildUsageLedgerRows (bundles already unpacked). */
+export type UsageLedgerRow = {
+  referenceId: string;
+  productId: string;
+  quantityChange: number;
+  notes: string;
+  unitCost: number;
+  txnDate: string;
+};
+
+/**
+ * Works out the stock deductions for a batch of usage lines without writing
+ * them: bundles unpacked into their contents, the current average cost and
+ * the ledger date. insertUsageLedgerRows writes them; stock-out saves pass
+ * them to fn_save_stock_out so everything is written in one transaction.
+ */
+export async function buildUsageLedgerRows(
+  supabase: Client,
+  input: { branchId: string; baseNote: string; lines: UsageLedgerLine[] },
+): Promise<UsageLedgerRow[]> {
+  if (input.lines.length === 0) return [];
+
   const componentsByProduct = await getBundleComponentsForProducts(
     supabase,
     input.lines.map((line) => line.productId),
@@ -99,21 +141,12 @@ export async function insertUsageLedgerRows(
     .in("product_id", [...new Set(txnLines.map((line) => line.productId))]);
   const costByProduct = new Map((costs ?? []).map((row) => [row.product_id, row.avg_unit_cost]));
 
-  const { error } = await supabase.from("inventory_transactions").insert(
-    txnLines.map((line) => ({
-      company_id: input.companyId,
-      product_id: line.productId,
-      store_location_id: input.storeLocationId,
-      txn_type: input.txnType,
-      quantity_change: -line.quantity,
-      reference_table: input.referenceTable,
-      reference_id: line.referenceId,
-      created_by: input.userEmail,
-      notes: line.notes,
-      unit_cost: costByProduct.get(line.productId) ?? 0,
-      classification: input.classification,
-      txn_date: line.txnDate,
-    })),
-  );
-  if (error) throw error;
+  return txnLines.map((line) => ({
+    referenceId: line.referenceId,
+    productId: line.productId,
+    quantityChange: -line.quantity,
+    notes: line.notes,
+    unitCost: Number(costByProduct.get(line.productId) ?? 0),
+    txnDate: line.txnDate,
+  }));
 }

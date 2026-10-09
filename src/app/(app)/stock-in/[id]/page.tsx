@@ -12,8 +12,7 @@ export default async function OrderDetailPage({
 }: {
   params: Promise<{ id: string }>;
 }) {
-  const { id } = await params;
-  const { supabase, companyId, branch } = await requireBranch();
+  const [{ id }, { supabase, companyId, branch }] = await Promise.all([params, requireBranch()]);
   const [order, taxRates] = await Promise.all([
     getPurchaseOrder(supabase, companyId, id, branch.id).catch(() => null),
     getTaxRates(supabase, companyId),
@@ -27,9 +26,12 @@ export default async function OrderDetailPage({
   const addFreeGoodsNow = canAddFreeGoods(order.status);
   const gstRate = Number(taxRates.find((rate) => rate.is_default)?.rate_percentage ?? 9);
 
+  // Only the draft editor needs the catalog up front. "Add free goods" fetches
+  // it when its modal opens (free-goods-actions.ts), so received orders don't
+  // pay for the full product list on every view.
   const [suppliers, products] = await Promise.all([
     editableOrder ? getSuppliers(supabase, companyId) : Promise.resolve([]),
-    editableOrder || addFreeGoodsNow ? getOrderProductOptions(supabase, companyId, branch.id) : Promise.resolve([]),
+    editableOrder ? getOrderProductOptions(supabase, companyId, branch.id) : Promise.resolve([]),
   ]);
 
   const items = order.items.map((item) => {

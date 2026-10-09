@@ -10,15 +10,15 @@ export default async function OrdersPage() {
   const { supabase, companyId, branch } = await requireBranch();
   const [products, orders, suppliers, taxRates] = await Promise.all([
     getOrderBalanceProducts(supabase, companyId, branch.id),
-    getPurchaseOrders(supabase, companyId, branch.id, true),
+    getPurchaseOrders(supabase, companyId, branch.id, true, ["draft", "sent"]),
     getSuppliers(supabase, companyId),
     getTaxRates(supabase, companyId),
   ]);
   const gstRate = Number(taxRates.find((rate) => rate.is_default)?.rate_percentage ?? 9);
 
-  // Planning drafts saved from this page — they never go to Stock-in.
+  // Planning drafts saved from this page — they never go to Stock-in. Only
+  // draft/sent ones are loaded (see getPurchaseOrders above).
   const orderRows: DraftOrderRow[] = orders
-    .filter((order) => order.status === "draft" || order.status === "sent")
     .map((order) => {
       const supplier = Array.isArray(order.suppliers) ? order.suppliers[0] : order.suppliers;
       const items = order.purchase_order_items ?? [];

@@ -10,11 +10,15 @@ export default async function StockOutDetailPage({
 }: {
   params: Promise<{ id: string }>;
 }) {
-  const { id } = await params;
-  const { supabase, companyId, branch } = await requireBranch();
-  const report = await getStockOutReport(supabase, companyId, branch.id, id).catch(() => null);
+  const [{ id }, { supabase, companyId, branch }] = await Promise.all([params, requireBranch()]);
+  // The product list and the period don't depend on the report's lines, so they load alongside it.
+  const [report, { inhouse }, period] = await Promise.all([
+    getStockOutReport(supabase, companyId, branch.id, id).catch(() => null),
+    getBranchStockOutProducts(supabase, companyId, branch.id),
+    getStockOutPeriodBounds(supabase, companyId, branch.id, id).catch(() => null),
+  ]);
 
-  if (!report) notFound();
+  if (!report || !period) notFound();
 
   const lines = report.lines.map((line) => {
     const product = Array.isArray(line.products) ? line.products[0] : line.products;
@@ -30,25 +34,21 @@ export default async function StockOutDetailPage({
     };
   });
 
-  const [{ inhouse }, countReview, period] = await Promise.all([
-    getBranchStockOutProducts(supabase, companyId, branch.id),
-    getStockOutCountReview(
-      supabase,
-      companyId,
-      branch.id,
-      lines.map((line) => ({
-        id: line.id,
-        product_id: line.productId,
-        quantity_used: line.quantityUsed,
-        entry_date: line.entryDate,
-        linked_count_txn_id: line.linkedCountTxnId,
-        linked_quantity: line.linkedQuantity,
-        label: line.label,
-        sku: line.sku,
-      })),
-    ),
-    getStockOutPeriodBounds(supabase, companyId, branch.id, report.id),
-  ]);
+  const countReview = await getStockOutCountReview(
+    supabase,
+    companyId,
+    branch.id,
+    lines.map((line) => ({
+      id: line.id,
+      product_id: line.productId,
+      quantity_used: line.quantityUsed,
+      entry_date: line.entryDate,
+      linked_count_txn_id: line.linkedCountTxnId,
+      linked_quantity: line.linkedQuantity,
+      label: line.label,
+      sku: line.sku,
+    })),
+  );
 
   return (
     <StockOutDetailPanel
@@ -57,6 +57,7 @@ export default async function StockOutDetailPage({
       entryDate={report.entry_date}
       periodStart={period.start}
       maxEnd={period.maxEnd}
+      hasLater={period.hasLater}
       notes={report.notes}
       keyedInBy={report.keyed_in_by}
       createdAt={report.created_at}

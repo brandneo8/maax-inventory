@@ -59,12 +59,16 @@ async function loadUser() {
     redirect("/login");
   }
 
-  let { data: membership } = await supabase
-    .from("company_users")
-    .select("company_id, role")
-    .eq("user_id", user.id)
-    .limit(1)
-    .maybeSingle();
+  // The username is only needed for the display name of someone without a
+  // real email yet, and doesn't depend on the membership — so it's read
+  // alongside it, and only when needed.
+  const [{ data: firstMembership }, { data: profile }] = await Promise.all([
+    supabase.from("company_users").select("company_id, role").eq("user_id", user.id).limit(1).maybeSingle(),
+    realEmail(user.email)
+      ? Promise.resolve({ data: null })
+      : supabase.from("user_profiles").select("username").eq("user_id", user.id).maybeSingle(),
+  ]);
+  let membership = firstMembership;
 
   if (!membership) {
     await grantDefaultAdminAccess(user.id, user.email);
@@ -100,22 +104,14 @@ async function loadUser() {
   }
 
   const isAdmin = membership.role === "admin";
-  const allowedBranches = await loadAllowedBranches(
-    supabase,
-    user.id,
-    membership.company_id,
-    isAdmin,
-  );
+  const [allowedBranches, cookieStore] = await Promise.all([
+    loadAllowedBranches(supabase, user.id, membership.company_id, isAdmin),
+    cookies(),
+  ]);
 
-  const { data: profile } = await supabase
-    .from("user_profiles")
-    .select("username")
-    .eq("user_id", user.id)
-    .maybeSingle();
   /** What to show for the signed-in person: their email, or username if they have none yet. */
   const displayName = realEmail(user.email) || profile?.username || user.email || "";
 
-  const cookieStore = await cookies();
   const requestedId = cookieStore.get(BRANCH_COOKIE)?.value;
   const branch = allowedBranches.find((item) => item.id === requestedId) ?? allowedBranches[0] ?? null;
 

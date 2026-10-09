@@ -1,5 +1,5 @@
 import { lineUp, type ComparisonProduct } from "@/lib/order-form-match";
-import { readOrderForm, type OrderFormLine } from "@/lib/order-form-reader";
+import { readOrderFormDetails, type OrderFormLine } from "@/lib/order-form-reader";
 import { createAdminClient } from "@/lib/supabase/admin";
 import type { createClient } from "@/lib/supabase/server";
 
@@ -11,8 +11,8 @@ const IN_CHUNK = 200;
 /** How long a download link stays valid. */
 const LINK_SECONDS = 60 * 60;
 
-/** Order forms sent as a photo: their lines are typed in by hand. */
-export const IMAGE_FORM_EXTENSIONS = ["jpg", "jpeg", "png"];
+/** Order forms sent as a photo or a PDF: shown on the page, with their lines typed in by hand. */
+export const IMAGE_FORM_EXTENSIONS = ["jpg", "jpeg", "png", "pdf"];
 
 export function isImageFormName(fileName: string) {
   return IMAGE_FORM_EXTENSIONS.includes(fileName.split(".").pop()?.toLowerCase() ?? "");
@@ -22,19 +22,37 @@ export function isImageFormName(fileName: string) {
  * Lines read from uploaded spreadsheets, by storage path. Each upload gets
  * a new path, so a cached file never changes underneath its entry.
  */
-const sheetCache = new Map<string, OrderFormLine[]>();
+type SheetRead = { lines: OrderFormLine[]; currency: string | null };
+const sheetCache = new Map<string, SheetRead>();
 const SHEET_CACHE_LIMIT = 50;
 
-/** Reads a stored spreadsheet form (cached by its path). */
-async function readStoredSheet(filePath: string, fileName: string) {
+/** Reads a stored spreadsheet form: its lines and the currency it names (cached by its path). */
+async function readStoredSheet(filePath: string, fileName: string): Promise<SheetRead> {
   const cached = sheetCache.get(filePath);
   if (cached) return cached;
   const { data: file, error } = await createAdminClient().storage.from(ORDER_FORMS_BUCKET).download(filePath);
   if (error || !file) throw new Error(error?.message || "The file couldn't be downloaded.");
-  const lines = await readOrderForm(await file.arrayBuffer(), fileName);
-  if (sheetCache.size >= SHEET_CACHE_LIMIT) sheetCache.delete(sheetCache.keys().next().value!);
-  sheetCache.set(filePath, lines);
-  return lines;
+  const read = await readOrderFormDetails(await file.arrayBuffer(), fileName);
+  // A form read as empty isn't cached, so a reader fix applies without re-uploading it.
+  if (read.lines.length > 0) {
+    if (sheetCache.size >= SHEET_CACHE_LIMIT) sheetCache.delete(sheetCache.keys().next().value!);
+    sheetCache.set(filePath, read);
+  }
+  return read;
+}
+
+const roundMoney = (value: number) => Math.round(value * 100) / 100;
+
+/** A form's lines with price and RRP converted to SGD at `rate`, keeping the amounts as written. */
+function convertLines(lines: OrderFormLine[], rate: number | null) {
+  if (rate == null) return lines;
+  return lines.map((line) => ({
+    ...line,
+    cost: line.cost == null ? null : roundMoney(line.cost * rate),
+    rrp: line.rrp == null ? null : roundMoney(line.rrp * rate),
+    originalCost: line.cost,
+    originalRrp: line.rrp,
+  }));
 }
 
 /** A match set by hand: order form line (by its key) to a product, or to nothing. */
@@ -53,23 +71,30 @@ export type BrandOrderForm = {
   /** The current uploaded form, or null if none yet. */
   form: {
     fileName: string;
-    /** A spreadsheet (lines read from the file) or a photo (lines typed in by hand). */
+    /** A spreadsheet (lines read from the file) or a photo / PDF (lines typed in by hand). */
     kind: "sheet" | "image";
-    /** For a photo: a link to show it on the page. */
+    /** For a photo or PDF: a link to show it on the page. */
     imageUrl: string | null;
     sizeBytes: number | null;
     uploadedAt: string;
     uploadedBy: string | null;
     downloadUrl: string | null;
-    /** The product lines read from the file, or null if it couldn't be read. */
+    /** The product lines read from the file (prices in SGD), or null if it couldn't be read. */
     lines: OrderFormLine[] | null;
+    /** For a photo / PDF: the lines as typed, before any currency conversion. */
+    typedLines: OrderFormLine[];
     readError: string | null;
+    /** The currency set for the form's prices (null = SGD), and SGD per 1 unit of it. */
+    currency: string | null;
+    fxRate: number | null;
+    /** The currency the spreadsheet's title or headings name, if any ("Salon Price (RM)" = MYR). */
+    detectedCurrency: string | null;
   } | null;
 };
 
 const formKey = (supplierId: string, brandId: string) => `${supplierId}:${brandId}`;
 
-/** Lines typed in from photo order forms, by supplier + brand (formKey), in order. */
+/** Lines typed in from photo / PDF order forms, by supplier + brand (formKey), in order. */
 async function getTypedOrderFormLines(supabase: Client, companyId: string, supplierId: string | null = null) {
   const byBrand = new Map<string, OrderFormLine[]>();
   for (let from = 0; ; from += PAGE_SIZE) {
@@ -141,7 +166,7 @@ export async function getSupplierBrandOrderForms(
 
   const { data: forms, error: formsError } = await supabase
     .from("supplier_order_forms")
-    .select("brand_id, file_path, file_name, size_bytes, uploaded_at, uploaded_by")
+    .select("brand_id, file_path, file_name, size_bytes, uploaded_at, uploaded_by, currency, fx_rate")
     .eq("company_id", companyId)
     .eq("supplier_id", supplierId);
   if (formsError) throw formsError;
@@ -170,21 +195,31 @@ export async function getSupplierBrandOrderForms(
       .createSignedUrl(form.file_path, LINK_SECONDS, { download: form.file_name });
     let imageUrl: string | null = null;
     let lines: OrderFormLine[] | null = null;
+    let typed: OrderFormLine[] = [];
+    let detectedCurrency: string | null = null;
     let readError: string | null = null;
+    const fxRate = form.currency && form.currency !== "SGD" && form.fx_rate != null ? Number(form.fx_rate) : null;
     if (kind === "image") {
       const { data: view } = await admin.storage.from(ORDER_FORMS_BUCKET).createSignedUrl(form.file_path, LINK_SECONDS);
       imageUrl = view?.signedUrl ?? null;
-      lines = typedLines.get(formKey(supplierId, form.brand_id)) ?? [];
+      typed = typedLines.get(formKey(supplierId, form.brand_id)) ?? [];
+      lines = convertLines(typed, fxRate);
     } else {
       try {
-        lines = await readStoredSheet(form.file_path, form.file_name);
+        const read = await readStoredSheet(form.file_path, form.file_name);
+        lines = convertLines(read.lines, fxRate);
+        detectedCurrency = read.currency;
       } catch (err) {
         readError = err instanceof Error ? err.message : "The file couldn't be read.";
       }
     }
     formByBrand.set(form.brand_id, {
       lines,
+      typedLines: typed,
       readError,
+      currency: form.currency,
+      fxRate,
+      detectedCurrency,
       kind,
       imageUrl,
       fileName: form.file_name,
@@ -285,7 +320,7 @@ export async function getOrderFormMatchCounts(supabase: Client, companyId: strin
       if (isImageFormName(form.file_name)) lines = typedLines.get(key) ?? [];
       else {
         try {
-          lines = await readStoredSheet(form.file_path, form.file_name);
+          lines = (await readStoredSheet(form.file_path, form.file_name)).lines;
         } catch {
           lines = [];
         }

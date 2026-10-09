@@ -14,6 +14,11 @@ const TYPE_LABELS: Record<string, string> = {
 export default async function StockOutPage() {
   const { supabase, companyId, branch } = await requireBranch();
   const reports = await getStockOutReports(supabase, companyId, branch.id);
+  // Only the latest stock-out can be deleted; removing an earlier one would leave days no stock-out can cover.
+  const latestEnd = reports.reduce<string | null>(
+    (latest, report) => (!latest || report.entry_date > latest ? report.entry_date : latest),
+    null,
+  );
 
   return (
     <div className="space-y-6">
@@ -63,7 +68,7 @@ export default async function StockOutPage() {
                   <td className={cn(tdClass, "text-red-600")}>{formatQty(report.totalQuantity)}</td>
                   <td className={tdClass}>{report.keyed_in_by || "—"}</td>
                   <td className={tdClass}>
-                    <DeleteStockOutButton reportId={report.id} compact />
+                    {report.entry_date === latestEnd ? <DeleteStockOutButton reportId={report.id} compact /> : null}
                   </td>
                 </tr>
               ))

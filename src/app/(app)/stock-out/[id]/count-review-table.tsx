@@ -27,14 +27,18 @@ export function CountReviewTable({
   const [error, setError] = useState<string | null>(null);
 
   async function choose(row: StockOutCountReviewRow, covered: boolean) {
-    if (covered === row.coveredQuantity > 0) return;
+    if (covered === row.coveredQuantity > 0 || busyId) return;
     setBusyId(row.entryId);
     setError(null);
     try {
-      await setStockOutLineCovered(row.entryId, covered);
+      const result = await setStockOutLineCovered(row.entryId, covered);
+      if (!result.ok) {
+        setError(result.error);
+        return;
+      }
       router.refresh();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not update this line.");
+    } catch {
+      setError("Could not reach the server. Check your connection and try again.");
     } finally {
       setBusyId(null);
     }

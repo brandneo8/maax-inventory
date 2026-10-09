@@ -1,3 +1,4 @@
+import { cache } from "react";
 import type { createClient } from "@/lib/supabase/server";
 
 type Client = Awaited<ReturnType<typeof createClient>>;
@@ -32,6 +33,17 @@ export async function getStoreLocations(supabase: Client, companyId: string) {
   if (error) throwQuery(error, "Could not load data.");
   return (data ?? []).map(({ branches: _branches, ...location }) => location);
 }
+
+/**
+ * Ids of every storage location at a salon. Several loaders on one page need
+ * these, so it's cached per request (React cache() keys on the same client
+ * object and branch id) instead of re-read by each of them.
+ */
+export const getBranchLocationIds = cache(async (supabase: Client, branchId: string) => {
+  const { data, error } = await supabase.from("store_locations").select("id").eq("branch_id", branchId);
+  if (error) throwQuery(error, "Could not load storage locations.");
+  return (data ?? []).map((location) => location.id);
+});
 
 export async function getDefaultStoreLocationId(supabase: Client, branchId: string) {
   const { data, error } = await supabase

@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter, unstable_rethrow } from "next/navigation";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { removeGoodsReceipt, updateGoodsReceiptInvoice, updatePurchaseOrder, updatePurchaseOrderDate } from "../actions";
 import { formatDate, formatDateTime, formatMoney, formatQty } from "@/lib/format";
 import { classificationLabel, type PoStatus } from "@/lib/labels";
@@ -17,6 +17,7 @@ import { VoidOrderButton } from "./void-order-button";
 import { DeleteDraftOrderButton } from "./delete-draft-order-button";
 import { DuplicateOrderButton } from "./duplicate-order-button";
 import { AddFreeGoodsModal } from "./add-free-goods-modal";
+import { getFreeGoodsProductOptionsAction } from "./free-goods-actions";
 import type { Option, ProductOption } from "@/components/product-picker";
 
 type SupplierOption = Option & { gstRegistered: boolean };
@@ -364,6 +365,11 @@ export function OrderDetailPanel({
   const editableOrder = status === "draft";
   const [editing, setEditing] = useState(false);
   const [showAddFreeGoods, setShowAddFreeGoods] = useState(false);
+  // The free-goods picker's catalog, fetched the first time it's needed and
+  // kept for re-opens (it survives router.refresh(), which keeps this state).
+  const [freeGoodsProducts, setFreeGoodsProducts] = useState<ProductOption[] | null>(null);
+  const [freeGoodsProductsError, setFreeGoodsProductsError] = useState<string | null>(null);
+  const freeGoodsRequest = useRef<Promise<void> | null>(null);
   const [editSupplierId, setEditSupplierId] = useState(supplierId);
   const [editOrderDate, setEditOrderDate] = useState(orderDate);
   const [lines, setLines] = useState<EditableLine[]>(() => itemsToLines(items));
@@ -401,6 +407,26 @@ export function OrderDetailPanel({
       onlyReceipt.fxAdjustment,
     );
     router.refresh();
+  }
+
+  function loadFreeGoodsProducts() {
+    // Already loaded, or a request (e.g. from hovering the button) is in flight.
+    if (freeGoodsProducts || freeGoodsRequest.current) return;
+    setFreeGoodsProductsError(null);
+    freeGoodsRequest.current = getFreeGoodsProductOptionsAction()
+      .then((options) => setFreeGoodsProducts(options))
+      .catch((err: unknown) => {
+        unstable_rethrow(err);
+        setFreeGoodsProductsError(err instanceof Error ? err.message : "Could not load products.");
+      })
+      .finally(() => {
+        freeGoodsRequest.current = null;
+      });
+  }
+
+  function openAddFreeGoods() {
+    loadFreeGoodsProducts();
+    setShowAddFreeGoods(true);
   }
 
   function startEditing() {
@@ -516,7 +542,14 @@ export function OrderDetailPanel({
                   </Link>
                 ) : null}
                 {canAddFreeGoodsNow ? (
-                  <button className={btnSecondaryClass} type="button" onClick={() => setShowAddFreeGoods(true)}>
+                  <button
+                    className={btnSecondaryClass}
+                    type="button"
+                    onClick={openAddFreeGoods}
+                    // Start fetching the catalog on intent so it's usually ready by the click.
+                    onPointerEnter={loadFreeGoodsProducts}
+                    onFocus={loadFreeGoodsProducts}
+                  >
                     Add free goods
                   </button>
                 ) : null}
@@ -727,7 +760,9 @@ export function OrderDetailPanel({
       {showAddFreeGoods ? (
         <AddFreeGoodsModal
           purchaseOrderId={purchaseOrderId}
-          products={products}
+          products={freeGoodsProducts}
+          productsError={freeGoodsProductsError}
+          onRetryProducts={loadFreeGoodsProducts}
           onClose={() => setShowAddFreeGoods(false)}
           onSaved={() => {
             setShowAddFreeGoods(false);

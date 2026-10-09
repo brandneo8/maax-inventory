@@ -1851,8 +1851,10 @@ export type Database = {
           brand_id: string
           company_id: string
           content_type: string | null
+          currency: string | null
           file_name: string
           file_path: string
+          fx_rate: number | null
           id: string
           size_bytes: number | null
           supplier_id: string
@@ -1863,8 +1865,10 @@ export type Database = {
           brand_id: string
           company_id: string
           content_type?: string | null
+          currency?: string | null
           file_name: string
           file_path: string
+          fx_rate?: number | null
           id?: string
           size_bytes?: number | null
           supplier_id: string
@@ -1875,8 +1879,10 @@ export type Database = {
           brand_id?: string
           company_id?: string
           content_type?: string | null
+          currency?: string | null
           file_name?: string
           file_path?: string
+          fx_rate?: number | null
           id?: string
           size_bytes?: number | null
           supplier_id?: string
@@ -2266,6 +2272,10 @@ export type Database = {
         Args: { p_business_date: string }
         Returns: string
       }
+      fn_delete_stock_out: {
+        Args: { p_branch_id: string; p_company_id: string; p_report_id: string }
+        Returns: undefined
+      }
       fn_fill_uncounted_count_items: {
         Args: { p_count_id: string; p_mode: string }
         Returns: undefined
@@ -2292,6 +2302,41 @@ export type Database = {
         Args: { p_goods_receipt_id: string }
         Returns: undefined
       }
+      fn_save_stock_out: {
+        Args: {
+          p_branch_id: string
+          p_company_id: string
+          p_entries: Json
+          p_entry_date: string
+          p_is_new: boolean
+          p_keep_entry_ids: string[]
+          p_notes: string
+          p_report_id: string
+          p_store_location_id: string
+          p_txns: Json
+          p_user: string
+        }
+        Returns: string
+      }
+      fn_set_stock_out_line_link: {
+        Args: {
+          p_branch_id: string
+          p_company_id: string
+          p_entry_id: string
+          p_link_txn_id: string
+          p_quantity: number
+          p_store_location_id: string
+          p_txn_date: string
+          p_unit_cost: number
+          p_user: string
+        }
+        Returns: undefined
+      }
+      fn_stock_out_assert_no_active_count: {
+        Args: { p_branch_id: string; p_company_id: string }
+        Returns: undefined
+      }
+      fn_stock_out_lock: { Args: { p_branch_id: string }; Returns: undefined }
       fn_void_inventory_count: {
         Args: { p_count_id: string }
         Returns: undefined

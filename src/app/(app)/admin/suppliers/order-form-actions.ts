@@ -24,7 +24,7 @@ function revalidatePriceList(supplierId: string) {
   revalidatePath(`/admin/suppliers/${supplierId}/products`);
 }
 
-/** Drops the lines typed in from a photo form (when it's replaced by a spreadsheet, or removed). */
+/** Drops the lines typed in from a photo / PDF form (when it's replaced by a spreadsheet, or removed). */
 async function clearTypedLines(supplierId: string, brandId: string) {
   const admin = createAdminClient();
   const { error } = await admin
@@ -37,9 +37,9 @@ async function clearTypedLines(supplierId: string, brandId: string) {
 
 /**
  * Uploads a supplier's order form for one brand (CSV or Excel .xlsx, or a
- * JPG / PNG photo whose lines are typed in by hand; up to 10 MB), replacing
+ * JPG / PNG photo or PDF whose lines are typed in by hand; up to 10 MB), replacing
  * the brand's current form — there's only ever one. Lines typed in from a
- * photo are kept when it's replaced by another photo.
+ * photo or PDF are kept when it's replaced by another photo or PDF.
  */
 export async function uploadSupplierOrderForm(supplierId: string, brandId: string, formData: FormData) {
   const { companyId, user } = await checkSupplierBrand(supplierId, brandId);
@@ -47,7 +47,7 @@ export async function uploadSupplierOrderForm(supplierId: string, brandId: strin
   if (!(file instanceof File) || file.size === 0) throw new Error("Choose a CSV or Excel file.");
   const extension = file.name.split(".").pop()?.toLowerCase() ?? "";
   if (!ALLOWED_EXTENSIONS.includes(extension)) {
-    throw new Error("Order forms must be a .csv or .xlsx file, or a .jpg or .png photo.");
+    throw new Error("Order forms must be a .csv or .xlsx file, a .jpg or .png photo, or a .pdf.");
   }
   if (file.size > MAX_BYTES) throw new Error("Order forms must be smaller than 10 MB.");
 
@@ -77,6 +77,8 @@ export async function uploadSupplierOrderForm(supplierId: string, brandId: strin
       size_bytes: file.size,
       uploaded_at: new Date().toISOString(),
       uploaded_by: user.email ?? null,
+      // A new spreadsheet is asked for its exchange rate again; a photo / PDF keeps it with its typed lines.
+      ...(isImageFormName(file.name) ? {} : { currency: null, fx_rate: null }),
     },
     { onConflict: "supplier_id,brand_id" },
   );
@@ -173,7 +175,7 @@ export async function clearOrderFormMatches(supplierId: string, brandId: string,
   revalidatePriceList(supplierId);
 }
 
-/** A line typed in from a photo order form. Prices are text as typed ("" = none). */
+/** A line typed in from a photo / PDF order form. Prices are text as typed ("" = none). */
 export type TypedOrderFormLine = { sku: string; description: string; size: string; cost: string; rrp: string };
 
 function typedMoney(value: string, label: string, row: number) {
@@ -185,7 +187,7 @@ function typedMoney(value: string, label: string, row: number) {
 }
 
 /**
- * Saves the lines typed in from a brand's photo order form, replacing the
+ * Saves the lines typed in from a brand's photo / PDF order form, replacing the
  * ones saved before (in the order given). Blank lines are skipped.
  */
 export async function saveTypedOrderFormLines(supplierId: string, brandId: string, lines: TypedOrderFormLine[]) {
@@ -196,7 +198,7 @@ export async function saveTypedOrderFormLines(supplierId: string, brandId: strin
     .eq("supplier_id", supplierId)
     .eq("brand_id", brandId)
     .maybeSingle();
-  if (!form || !isImageFormName(form.file_name)) throw new Error("Upload a photo of the order form first.");
+  if (!form || !isImageFormName(form.file_name)) throw new Error("Upload a photo or PDF of the order form first.");
 
   const filled = lines.filter((line) => [line.sku, line.description, line.size, line.cost, line.rrp].some((value) => value.trim()));
   if (filled.length > MAX_TYPED_LINES) throw new Error(`An order form can have up to ${MAX_TYPED_LINES} lines.`);
@@ -224,5 +226,26 @@ export async function saveTypedOrderFormLines(supplierId: string, brandId: strin
     const { error } = await supabase.from("supplier_order_form_lines").insert(rows);
     if (error) throw new Error(error.message || "Could not save the lines.");
   }
+  revalidatePriceList(supplierId);
+}
+
+/**
+ * Sets the currency a brand's order form is priced in, and the rate that
+ * converts it to SGD (SGD per 1 unit). SGD clears the rate.
+ */
+export async function setOrderFormCurrency(supplierId: string, brandId: string, currency: string, fxRate: number | null) {
+  const { supabase, companyId } = await checkSupplierBrand(supplierId, brandId);
+  const code = currency.trim().toUpperCase();
+  if (!/^[A-Z]{3}$/.test(code)) throw new Error("Enter a 3-letter currency code, e.g. MYR or USD.");
+  if (code !== "SGD" && (fxRate == null || !Number.isFinite(fxRate) || fxRate <= 0 || fxRate > 10000)) {
+    throw new Error(`Enter how many SGD 1 ${code} is worth, e.g. 0.29.`);
+  }
+  const { error } = await supabase
+    .from("supplier_order_forms")
+    .update({ currency: code, fx_rate: code === "SGD" ? null : fxRate })
+    .eq("company_id", companyId)
+    .eq("supplier_id", supplierId)
+    .eq("brand_id", brandId);
+  if (error) throw new Error(error.message || "Could not save the exchange rate.");
   revalidatePriceList(supplierId);
 }

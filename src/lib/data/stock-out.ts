@@ -177,7 +177,7 @@ export async function getStockOutPeriodBounds(
 
   if (!reportId) {
     const latestEnd = reports.reduce<string | null>((latest, report) => (!latest || report.end > latest ? report.end : latest), null);
-    return { start: latestEnd ? addDays(latestEnd, 1) : SALON_OPENING_DATE, maxEnd: today };
+    return { start: latestEnd ? addDays(latestEnd, 1) : SALON_OPENING_DATE, maxEnd: today, hasLater: false };
   }
 
   const report = reports.find((candidate) => candidate.id === reportId);
@@ -191,5 +191,7 @@ export async function getStockOutPeriodBounds(
     .reduce<string | null>((earliest, candidate) => (!earliest || candidate.start < earliest ? candidate.start : earliest), null);
   const start = report.start ?? (previousEnd ? addDays(previousEnd, 1) : SALON_OPENING_DATE);
   const maxEnd = nextStart && addDays(nextStart, -1) < today ? addDays(nextStart, -1) : today;
-  return { start, maxEnd };
+  // With a later stock-out after it, its end date is fixed and it can't be
+  // deleted: either would leave days no stock-out can cover.
+  return { start, maxEnd, hasLater: nextStart != null };
 }

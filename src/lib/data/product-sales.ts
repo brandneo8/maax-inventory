@@ -1,3 +1,4 @@
+import { getBranchLocationIds } from "@/lib/data/lookups";
 import { productDisplayName, shiftMonth, singaporeToday } from "@/lib/format";
 import type { createClient } from "@/lib/supabase/server";
 
@@ -47,12 +48,7 @@ export async function getCountShortfalls(
 ): Promise<CountShortfall[]> {
   if ("txnIds" in filter && filter.txnIds.length === 0) return [];
 
-  const { data: locations, error: locationError } = await supabase
-    .from("store_locations")
-    .select("id")
-    .eq("branch_id", branchId);
-  if (locationError) throw locationError;
-  const locationIds = (locations ?? []).map((location) => location.id);
+  const locationIds = await getBranchLocationIds(supabase, branchId);
   if (locationIds.length === 0) return [];
 
   type ShortfallRow = {
@@ -67,37 +63,87 @@ export async function getCountShortfalls(
   };
   const rows: ShortfallRow[] = [];
   const idBatches = "txnIds" in filter ? chunk(filter.txnIds) : [null];
-  for (const ids of idBatches) {
-    for (let from = 0; ; from += PAGE_SIZE) {
-      let query = supabase
-        .from("inventory_transactions")
-        .select(
-          "id, product_id, quantity_change, unit_cost, txn_date, reference_id, store_location_id, products(sku, name, order_name)",
-        )
-        .eq("company_id", companyId)
-        .eq("txn_type", "count_adjustment")
-        .eq("notes", "Count variance")
-        .eq("reference_table", "inventory_count_items")
-        .lt("quantity_change", 0)
-        .in("store_location_id", locationIds);
-      if (ids) query = query.in("id", ids);
-      const { data, error } = await query.order("id").range(from, from + PAGE_SIZE - 1);
-      if (error) throw error;
-      rows.push(...((data ?? []) as ShortfallRow[]));
-      if (!data || data.length < PAGE_SIZE) break;
-    }
-  }
+  // Id batches are independent (fetched at once, kept in batch order); the
+  // pages within one still follow each other.
+  const batchRows = await Promise.all(
+    idBatches.map(async (ids) => {
+      const found: ShortfallRow[] = [];
+      for (let from = 0; ; from += PAGE_SIZE) {
+        let query = supabase
+          .from("inventory_transactions")
+          .select(
+            "id, product_id, quantity_change, unit_cost, txn_date, reference_id, store_location_id, products(sku, name, order_name)",
+          )
+          .eq("company_id", companyId)
+          .eq("txn_type", "count_adjustment")
+          .eq("notes", "Count variance")
+          .eq("reference_table", "inventory_count_items")
+          .lt("quantity_change", 0)
+          .in("store_location_id", locationIds);
+        if (ids) query = query.in("id", ids);
+        const { data, error } = await query.order("id").range(from, from + PAGE_SIZE - 1);
+        if (error) throw error;
+        found.push(...((data ?? []) as ShortfallRow[]));
+        if (!data || data.length < PAGE_SIZE) break;
+      }
+      return found;
+    }),
+  );
+  for (const found of batchRows) rows.push(...found);
   if (rows.length === 0) return [];
 
   const countItemIds = [...new Set(rows.map((row) => row.reference_id).filter(Boolean))] as string[];
+
+  // The count lookups, the sale/stock-out links and the removed-receipt
+  // give-backs below only depend on the rows above, so every batch of all
+  // three is fetched at once; each is then read back in batch order.
+  const [countBatches, linkBatches, givenBackBatches] = await Promise.all([
+    Promise.all(
+      chunk(countItemIds).map(async (ids) => {
+        const { data, error } = await supabase
+          .from("inventory_count_items")
+          .select("id, inventory_count_id, inventory_counts(count_date, status)")
+          .in("id", ids);
+        if (error) throw error;
+        return data ?? [];
+      }),
+    ),
+    // Only confirmed sales have cleared anything — a draft hasn't posted, so
+    // its links are re-checked against what's left when it's confirmed.
+    // Stock-out lines assigned to a shortfall claim it too (they post as soon
+    // as they're saved).
+    Promise.all(
+      chunk(rows.map((row) => row.id)).map(async (ids) => {
+        const [{ data, error }, { data: useLinks, error: useLinksError }] = await Promise.all([
+          supabase
+            .from("product_sale_items")
+            .select("linked_count_txn_id, linked_quantity, quantity, product_sales!inner(status)")
+            .eq("product_sales.status", "confirmed")
+            .in("linked_count_txn_id", ids),
+          supabase.from("retail_use_entries").select("linked_count_txn_id, linked_quantity").in("linked_count_txn_id", ids),
+        ]);
+        if (error) throw error;
+        if (useLinksError) throw useLinksError;
+        return { saleLinks: data ?? [], useLinks: useLinks ?? [] };
+      }),
+    ),
+    Promise.all(
+      chunk(countItemIds).map(async (ids) => {
+        const { data, error } = await supabase
+          .from("inventory_transactions")
+          .select("reference_id, quantity_change")
+          .eq("reference_table", "inventory_count_items")
+          .eq("notes", "Count true-up: removed receipt (offsets count shortfall)")
+          .in("reference_id", ids);
+        if (error) throw error;
+        return data ?? [];
+      }),
+    ),
+  ]);
+
   const countByItem = new Map<string, { countId: string; countDate: string | null; status: string | undefined }>();
-  for (const ids of chunk(countItemIds)) {
-    const { data, error } = await supabase
-      .from("inventory_count_items")
-      .select("id, inventory_count_id, inventory_counts(count_date, status)")
-      .in("id", ids);
-    if (error) throw error;
-    for (const item of data ?? []) {
+  for (const data of countBatches) {
+    for (const item of data) {
       const count = firstOf(item.inventory_counts as { count_date: string; status: string } | null);
       countByItem.set(item.id, {
         countId: item.inventory_count_id,
@@ -107,28 +153,14 @@ export async function getCountShortfalls(
     }
   }
 
-  // Only confirmed sales have cleared anything — a draft hasn't posted, so
-  // its links are re-checked against what's left when it's confirmed.
   const linkedByTxn = new Map<string, number>();
-  for (const ids of chunk(rows.map((row) => row.id))) {
-    const { data, error } = await supabase
-      .from("product_sale_items")
-      .select("linked_count_txn_id, linked_quantity, quantity, product_sales!inner(status)")
-      .eq("product_sales.status", "confirmed")
-      .in("linked_count_txn_id", ids);
-    if (error) throw error;
-    for (const link of data ?? []) {
+  for (const { saleLinks, useLinks } of linkBatches) {
+    for (const link of saleLinks) {
       if (!link.linked_count_txn_id) continue;
       const applied = Number(link.linked_quantity ?? link.quantity);
       linkedByTxn.set(link.linked_count_txn_id, (linkedByTxn.get(link.linked_count_txn_id) ?? 0) + applied);
     }
-    // Stock-out lines assigned to a shortfall claim it too (they post as soon as they're saved).
-    const { data: useLinks, error: useLinksError } = await supabase
-      .from("retail_use_entries")
-      .select("linked_count_txn_id, linked_quantity")
-      .in("linked_count_txn_id", ids);
-    if (useLinksError) throw useLinksError;
-    for (const link of useLinks ?? []) {
+    for (const link of useLinks) {
       if (!link.linked_count_txn_id) continue;
       linkedByTxn.set(
         link.linked_count_txn_id,
@@ -140,15 +172,8 @@ export async function getCountShortfalls(
   // Shortfall a removed receipt gave back (it was that receipt's units, not
   // usage) can't be claimed either — spread over that count item's rows.
   const givenBackByItem = new Map<string, number>();
-  for (const ids of chunk(countItemIds)) {
-    const { data, error } = await supabase
-      .from("inventory_transactions")
-      .select("reference_id, quantity_change")
-      .eq("reference_table", "inventory_count_items")
-      .eq("notes", "Count true-up: removed receipt (offsets count shortfall)")
-      .in("reference_id", ids);
-    if (error) throw error;
-    for (const row of data ?? []) {
+  for (const data of givenBackBatches) {
+    for (const row of data) {
       if (!row.reference_id) continue;
       givenBackByItem.set(row.reference_id, (givenBackByItem.get(row.reference_id) ?? 0) + Math.abs(Number(row.quantity_change)));
     }
@@ -254,17 +279,25 @@ export async function getProductSale(supabase: Client, companyId: string, branch
   // A bundle line has one row per component, so this sums them all. Only
   // the retail_use rows count — a linked line also has a reclassification
   // row, which cancels part of a count shortfall rather than costing the sale.
+  // The linked count shortfalls only need the lines too, so they're read alongside.
+  const linkedTxnIds = [...new Set(list.map((item) => item.linked_count_txn_id).filter(Boolean))] as string[];
+  const [ledgerResult, shortfalls] = await Promise.all([
+    list.length > 0
+      ? supabase
+          .from("inventory_transactions")
+          .select("reference_id, quantity_change, unit_cost")
+          .eq("reference_table", "product_sale_items")
+          .eq("txn_type", "retail_use")
+          .in(
+            "reference_id",
+            list.map((item) => item.id),
+          )
+      : null,
+    getCountShortfalls(supabase, companyId, branchId, { txnIds: linkedTxnIds }),
+  ]);
   const costByItem = new Map<string, number>();
-  if (list.length > 0) {
-    const { data: ledgerRows, error: ledgerError } = await supabase
-      .from("inventory_transactions")
-      .select("reference_id, quantity_change, unit_cost")
-      .eq("reference_table", "product_sale_items")
-      .eq("txn_type", "retail_use")
-      .in(
-        "reference_id",
-        list.map((item) => item.id),
-      );
+  if (ledgerResult) {
+    const { data: ledgerRows, error: ledgerError } = ledgerResult;
     if (ledgerError) throw ledgerError;
     for (const row of ledgerRows ?? []) {
       if (!row.reference_id) continue;
@@ -273,8 +306,6 @@ export async function getProductSale(supabase: Client, companyId: string, branch
     }
   }
 
-  const linkedTxnIds = [...new Set(list.map((item) => item.linked_count_txn_id).filter(Boolean))] as string[];
-  const shortfalls = await getCountShortfalls(supabase, companyId, branchId, { txnIds: linkedTxnIds });
   const shortfallByTxn = new Map(shortfalls.map((shortfall) => [shortfall.txnId, shortfall]));
 
   return {

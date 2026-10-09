@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { requireAdmin, requireAdminBranch } from "@/lib/auth";
+import { requireAdmin, requireBranch } from "@/lib/auth";
 import { catalogSize, normalizeOptionalText, parseMoney } from "@/lib/catalog-import";
 import { createBrandResolver, resolveBrandId } from "@/lib/data/brands";
 import { persistProductComponents, syncBundleTag } from "@/lib/data/product-components";
@@ -169,7 +169,8 @@ export async function quickCreateProduct(input: {
   unit_cost_price: number;
   classification: ProductClassification | "";
 }) {
-  const { supabase, companyId, branch } = await requireAdminBranch();
+  // Any staff member receiving an order can add a missing product from the receive screen.
+  const { supabase, companyId, branch } = await requireBranch();
   const name = input.order_name.trim();
   if (!name) throw new Error("Product name is required.");
 

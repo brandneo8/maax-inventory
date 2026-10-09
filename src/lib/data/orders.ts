@@ -5,13 +5,15 @@ type Client = Awaited<ReturnType<typeof createClient>>;
 
 /**
  * planningOnly picks the side: true for drafts saved on the /orders planning
- * page, false for everything Stock-in works with.
+ * page, false for everything Stock-in works with. statuses, when given, keeps
+ * only orders in those statuses (filtered in the query, not after).
  */
 export async function getPurchaseOrders(
   supabase: Client,
   companyId: string,
   branchId: string | undefined,
   planningOnly: boolean,
+  statuses?: PoStatus[],
 ) {
   let query = supabase
     .from("purchase_orders")
@@ -24,6 +26,9 @@ export async function getPurchaseOrders(
 
   if (branchId) {
     query = query.eq("branch_id", branchId);
+  }
+  if (statuses) {
+    query = query.in("status", statuses);
   }
 
   const { data, error } = await query;

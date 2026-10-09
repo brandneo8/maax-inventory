@@ -3,7 +3,7 @@ import { ArrowRight, PackageMinus, PackagePlus, ShoppingBag } from "lucide-react
 import { requireBranch } from "@/lib/auth";
 import { getOrderBalanceProducts } from "@/lib/data/products";
 import { getMonthToDateSalesByProduct } from "@/lib/data/product-sales";
-import { getMonthlyInventoryReport } from "@/lib/data/stock";
+import { getMonthlyPurchasesAndCogs } from "@/lib/data/stock";
 import {
   formatMoney,
   formatMonthLabel,
@@ -69,16 +69,16 @@ export default async function HomePage({
 }: {
   searchParams: Promise<{ from?: string; to?: string; pfrom?: string; pto?: string }>;
 }) {
-  const { supabase, companyId, branch, isAdmin } = await requireBranch();
+  const { supabase, companyId, branch } = await requireBranch();
   const currentMonth = singaporeToday().slice(0, 7);
   const params = await searchParams;
   const chart = monthRange(currentMonth, params.from, params.to, CHART_MONTHS);
   const productRange = monthRange(currentMonth, params.pfrom, params.pto, 1);
   const productMonths = { from: productRange.start, to: productRange.end };
   const [balanceProducts, salesByProduct, report] = await Promise.all([
-    getOrderBalanceProducts(supabase, companyId, branch.id, productMonths),
+    getOrderBalanceProducts(supabase, companyId, branch.id, productMonths, { skipPlanning: true }),
     getMonthToDateSalesByProduct(supabase, companyId, branch.id, productMonths),
-    getMonthlyInventoryReport(supabase, companyId, branch.id, chart.start, chart.end),
+    getMonthlyPurchasesAndCogs(supabase, companyId, branch.id, chart.start, chart.end),
   ]);
   const chartPurchases = report.ordered.reduce((sum, value) => sum + value, 0);
   const chartCogs = report.cogsTotal.reduce((sum, value) => sum + value, 0);
@@ -102,35 +102,33 @@ export default async function HomePage({
         <p className="mt-1 text-sm text-muted">{workingIn(branch.displayName)}</p>
       </div>
 
-      {/* Ordering, receiving and stock-outs are admin pages; stylists see Home and Reports only. */}
-      {isAdmin ? (
-        <section className="space-y-3">
-          <h2 className="text-xl font-semibold tracking-tight">Key actions</h2>
-          <div className="grid gap-4 sm:grid-cols-3">
-            {SHORTCUTS.map(({ href, title, description, icon: Icon }) => (
-              <Link
-                key={href}
-                href={href}
-                className="group flex flex-col gap-3 rounded-xl border border-border bg-card p-5 transition-colors hover:border-sky-300 hover:bg-sky-50/40 focus-visible:outline-2 focus-visible:outline-sky-500"
-              >
-                <div className="flex items-center justify-between">
-                  <span className="flex h-10 w-10 items-center justify-center rounded-lg bg-slate-100 text-slate-700 group-hover:bg-sky-100 group-hover:text-sky-700">
-                    <Icon className="h-5 w-5" aria-hidden />
-                  </span>
-                  <ArrowRight
-                    className="h-4 w-4 text-muted transition-transform group-hover:translate-x-0.5 group-hover:text-sky-700"
-                    aria-hidden
-                  />
-                </div>
-                <div>
-                  <h3 className="font-semibold">{title}</h3>
-                  <p className="mt-1 text-sm text-muted">{description}</p>
-                </div>
-              </Link>
-            ))}
-          </div>
-        </section>
-      ) : null}
+      {/* Every staff member orders, receives and records product usage from these cards. */}
+      <section className="space-y-3">
+        <h2 className="text-xl font-semibold tracking-tight">Key actions</h2>
+        <div className="grid gap-4 sm:grid-cols-3">
+          {SHORTCUTS.map(({ href, title, description, icon: Icon }) => (
+            <Link
+              key={href}
+              href={href}
+              className="group flex flex-col gap-3 rounded-xl border border-border bg-card p-5 transition-colors hover:border-sky-300 hover:bg-sky-50/40 focus-visible:outline-2 focus-visible:outline-sky-500"
+            >
+              <div className="flex items-center justify-between">
+                <span className="flex h-10 w-10 items-center justify-center rounded-lg bg-slate-100 text-slate-700 group-hover:bg-sky-100 group-hover:text-sky-700">
+                  <Icon className="h-5 w-5" aria-hidden />
+                </span>
+                <ArrowRight
+                  className="h-4 w-4 text-muted transition-transform group-hover:translate-x-0.5 group-hover:text-sky-700"
+                  aria-hidden
+                />
+              </div>
+              <div>
+                <h3 className="font-semibold">{title}</h3>
+                <p className="mt-1 text-sm text-muted">{description}</p>
+              </div>
+            </Link>
+          ))}
+        </div>
+      </section>
 
       <section className="space-y-4">
         <div className="flex flex-wrap items-end justify-between gap-2">

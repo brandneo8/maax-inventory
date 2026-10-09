@@ -181,6 +181,7 @@ export function OrderFormComparison({
   matches,
   onEditProduct,
   onAddProducts,
+  formCurrency = null,
   editDisabled = false,
 }: {
   supplierId: string;
@@ -195,9 +196,18 @@ export function OrderFormComparison({
   onEditProduct: (productId: string, line: OrderFormLine | null) => void;
   /** Saves new rows as products of this brand and supplier; throw an Error to show its message. */
   onAddProducts?: (rows: NewPriceListRow[]) => Promise<void>;
+  /** When the form is priced in another currency: its code (prices shown are converted to SGD). */
+  formCurrency?: string | null;
   editDisabled?: boolean;
 }) {
   const hasForm = lines != null;
+  /** The amount as written on the form, under its SGD conversion. */
+  const original = (value: number | null | undefined) =>
+    formCurrency && value != null ? (
+      <span className="block text-xs font-normal text-muted">
+        {formCurrency} {value.toFixed(2)}
+      </span>
+    ) : null;
   const canSwap = hasForm && Boolean(brandId);
   const [manual, setManual] = useState(
     () => new Map(matches.map((match) => [match.lineKey, match.productId])),
@@ -494,7 +504,9 @@ export function OrderFormComparison({
                   <th className={thClass}>SKU</th>
                   <th className={thClass}>Description</th>
                   <th className={thClass}>Size</th>
-                  <th className={cn(thClass, "text-right")}>Price</th>
+                  <th className={cn(thClass, "text-right")}>
+                    {formCurrency ? "Price (SGD)" : "Price"}
+                  </th>
                   <th className={cn(thClass, "text-right")}>RRP</th>
                   <th className="w-3 bg-card" aria-hidden />
                   <th className={cn(thClass, "text-center")}>Size</th>
@@ -664,6 +676,7 @@ export function OrderFormComparison({
                               )}
                             >
                               {row.form.cost == null ? "—" : formatMoney(row.form.cost)}
+                              {original(row.form.originalCost)}
                             </td>
                             <td
                               className={cn(
@@ -674,6 +687,7 @@ export function OrderFormComparison({
                               )}
                             >
                               {row.form.rrp == null ? "—" : formatMoney(row.form.rrp)}
+                              {original(row.form.originalRrp)}
                             </td>
                           </>
                         ) : (

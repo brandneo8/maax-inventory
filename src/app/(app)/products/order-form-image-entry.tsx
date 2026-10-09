@@ -46,7 +46,7 @@ const sameLines = (left: DraftLine[], right: DraftLine[]) =>
   );
 
 /**
- * A photo order form: the picture beside a table to type its lines into.
+ * A photo or PDF order form: the file beside a table to type its lines into.
  * Saved lines become the order form side of the comparison below, just as
  * a spreadsheet's rows would.
  */
@@ -73,6 +73,8 @@ export function OrderFormImageEntry({
   const [saved, setSaved] = useState(() => (lines.length > 0 ? lines.map(draftOf) : []));
   const [drafts, setDrafts] = useState<DraftLine[]>(() => (saved.length > 0 ? saved : [draftOf()]));
   const [zoomed, setZoomed] = useState(false);
+  const isPdf = fileName.toLowerCase().endsWith(".pdf");
+  const what = isPdf ? "PDF" : "photo";
   /** Starts open while no lines are saved, folded once there are some. */
   const [open, setOpen] = useState(lines.length === 0);
   const [pending, setPending] = useState(false);
@@ -96,7 +98,7 @@ export function OrderFormImageEntry({
     setFocusKey(line.key);
   }
 
-  /** Fills the table with this brand's Pulse products (by SKU), to correct against the photo before saving. */
+  /** Fills the table with this brand's Pulse products (by SKU), to correct against the photo / PDF before saving. */
   function copyFromPulse() {
     if (
       drafts.some((line) => !isBlank(line)) &&
@@ -156,8 +158,8 @@ export function OrderFormImageEntry({
           <span className="block text-base font-semibold">Type in the {brand} order form</span>
           <span className="block text-sm text-muted">
             {open
-              ? "This order form is a photo, so its lines are typed in: one row per product shown, with the supplier's price (excl. GST) and RRP. Saved lines are compared with Pulse below."
-              : `${saved.length} line${saved.length === 1 ? "" : "s"} saved${dirty ? " · unsaved changes" : ""}. Click to show the photo and the lines.`}
+              ? `This order form is a ${what}, so its lines are typed in: one row per product shown, with the supplier's price (excl. GST) and RRP. Saved lines are compared with Pulse below.`
+              : `${saved.length} line${saved.length === 1 ? "" : "s"} saved${dirty ? " · unsaved changes" : ""}. Click to show the ${what} and the lines.`}
           </span>
         </span>
         <ChevronDown
@@ -168,7 +170,9 @@ export function OrderFormImageEntry({
       <div className={cn("grid gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]", !open && "hidden")}>
         <div className="space-y-1">
           <div className="max-h-[70vh] overflow-auto rounded-lg border border-border bg-slate-50">
-            {imageUrl ? (
+            {imageUrl && isPdf ? (
+              <iframe src={imageUrl} title={`${brand} order form (${fileName})`} className="block h-[70vh] w-full" />
+            ) : imageUrl ? (
               // eslint-disable-next-line @next/next/no-img-element -- a short-lived signed link to a private file
               <img
                 src={imageUrl}
@@ -177,11 +181,11 @@ export function OrderFormImageEntry({
                 onClick={() => setZoomed((current) => !current)}
               />
             ) : (
-              <p className="p-4 text-sm text-muted">The photo couldn&apos;t be loaded. Reload the page to try again.</p>
+              <p className="p-4 text-sm text-muted">The {what} couldn&apos;t be loaded. Reload the page to try again.</p>
             )}
           </div>
           <p className="text-xs text-muted">
-            Click the photo to {zoomed ? "fit it to the box" : "see it full size"}
+            {isPdf ? "Scroll and zoom inside the PDF" : `Click the photo to ${zoomed ? "fit it to the box" : "see it full size"}`}
             {imageUrl ? (
               <>
                 {" "}
@@ -293,7 +297,7 @@ export function OrderFormImageEntry({
               className={btnSecondaryClass}
               disabled={pending || pulseProducts.length === 0}
               onClick={copyFromPulse}
-              title="Fill the table with this brand's Pulse products (SKU, order name, size, unit cost, RRP), then correct them against the photo"
+              title="Fill the table with this brand's Pulse products (SKU, order name, size, unit cost, RRP), then correct them against the order form"
             >
               Copy from Pulse ({pulseProducts.length})
             </button>

@@ -6,7 +6,12 @@ import { useRef, useState } from "react";
 import { updateStockOutReport } from "../actions";
 import { formatDate } from "@/lib/format";
 import { btnClass, btnSecondaryClass, fieldClass, tableClass, tdClass, thClass } from "@/lib/ui";
-import { StockOutLinesEditor, StockOutQuantityDisplay, type StockOutLine } from "../stock-out-lines-editor";
+import {
+  StockOutLinesEditor,
+  StockOutQuantityDisplay,
+  stockOutLinesProblem,
+  type StockOutLine,
+} from "../stock-out-lines-editor";
 import { DeleteStockOutButton } from "../delete-stock-out-button";
 import { CountReviewTable } from "./count-review-table";
 import { StockOutPeriod } from "../stock-out-period";
@@ -22,6 +27,7 @@ export function StockOutDetailPanel({
   entryDate: initialEntryDate,
   periodStart,
   maxEnd,
+  hasLater,
   notes: initialNotes,
   keyedInBy,
   createdAt,
@@ -37,6 +43,8 @@ export function StockOutDetailPanel({
   periodStart: string;
   /** Latest its end date can move to: today, or the day before the next stock-out starts. */
   maxEnd: string;
+  /** A later stock-out exists: this one's end date is fixed and it can't be deleted. */
+  hasLater: boolean;
   notes: string | null;
   keyedInBy: string | null;
   createdAt: string;
@@ -53,7 +61,11 @@ export function StockOutDetailPanel({
   const [editLines, setEditLines] = useState<StockOutLine[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
+  // Blocks a second save while the first is still running.
+  const savingRef = useRef(false);
   const attachmentInputRef = useRef<HTMLInputElement>(null);
+  const linesProblem = stockOutLinesProblem(editLines);
+  const savedLabels = new Map(lines.map((line) => [line.productId, line.label]));
 
   function startEditing() {
     setEntryDate(initialEntryDate);
@@ -61,6 +73,7 @@ export function StockOutDetailPanel({
     setEditLines(
       lines.map((line) => ({
         key: line.id,
+        id: line.id,
         product_id: line.productId,
         quantity_used: line.quantityUsed,
         entry_date: line.entryDate,
@@ -72,16 +85,19 @@ export function StockOutDetailPanel({
   }
 
   async function save() {
+    if (savingRef.current || linesProblem) return;
+    savingRef.current = true;
     setPending(true);
     setError(null);
     try {
       const attachmentFile = attachmentInputRef.current?.files?.[0];
-      await updateStockOutReport(
+      const result = await updateStockOutReport(
         {
           report_id: reportId,
           entry_date: entryDate,
           notes,
           lines: editLines.map((line) => ({
+            id: line.id,
             product_id: line.product_id,
             quantity_used: line.quantity_used,
             entry_date: line.entry_date,
@@ -89,11 +105,17 @@ export function StockOutDetailPanel({
         },
         attachmentFile && attachmentFile.size > 0 ? attachmentFile : null,
       );
+      if (!result.ok) {
+        setError(result.error);
+        return;
+      }
+      if (result.warning) window.alert(result.warning);
       setEditing(false);
       router.refresh();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not save changes.");
+    } catch {
+      setError("Could not reach the server. Check your connection and try again.");
     } finally {
+      savingRef.current = false;
       setPending(false);
     }
   }
@@ -128,7 +150,8 @@ export function StockOutDetailPanel({
                   className={btnClass}
                   type="button"
                   onClick={() => void save()}
-                  disabled={pending || editLines.length === 0}
+                  disabled={pending || Boolean(linesProblem)}
+                  title={linesProblem ?? undefined}
                 >
                   {pending ? "Saving…" : "Save changes"}
                 </button>
@@ -138,7 +161,7 @@ export function StockOutDetailPanel({
                 <button className={btnSecondaryClass} type="button" onClick={startEditing}>
                   Edit
                 </button>
-                <DeleteStockOutButton reportId={reportId} />
+                {hasLater ? null : <DeleteStockOutButton reportId={reportId} />}
               </>
             )}
           </div>
@@ -146,7 +169,11 @@ export function StockOutDetailPanel({
       </div>
 
       {error ? (
-        <p className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">{error}</p>
+        <p role="alert" className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
+          {error}
+        </p>
+      ) : editing && editLines.length > 0 && linesProblem ? (
+        <p className="text-sm text-amber-800">{linesProblem}</p>
       ) : null}
 
       {editing ? (
@@ -155,6 +182,7 @@ export function StockOutDetailPanel({
             start={periodStart}
             end={entryDate}
             maxEnd={maxEnd}
+            endLocked={hasLater}
             onEndChange={(next) => {
               setEntryDate(next);
               setEditLines((current) =>
@@ -187,6 +215,7 @@ export function StockOutDetailPanel({
               reportDate={entryDate}
               lines={editLines}
               onLinesChange={setEditLines}
+              savedLabels={savedLabels}
             />
           </div>
         </>
