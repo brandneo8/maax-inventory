@@ -4,12 +4,12 @@ import { getBranches } from "@/lib/data/lookups";
 import { salonName } from "@/lib/labels";
 import { btnClass, fieldClass, tableClass, tdClass, thClass } from "@/lib/ui";
 import { realEmail } from "@/lib/usernames";
-import { createUserAccount, saveBranchAccess } from "../actions";
+import { createUserAccount, saveBranchAccess, setUserPassword } from "../actions";
 
 export default async function AdminUsersPage({
   searchParams,
 }: {
-  searchParams: Promise<{ error?: string; created?: string; saved?: string }>;
+  searchParams: Promise<{ error?: string; created?: string; saved?: string; passwordSet?: string }>;
 }) {
   const { supabase, companyId, user } = await requireAdmin();
   const params = await searchParams;
@@ -58,6 +58,12 @@ export default async function AdminUsersPage({
       {params.saved ? (
         <p className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
           Users saved.
+        </p>
+      ) : null}
+      {params.passwordSet ? (
+        <p className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
+          New password set for <strong>{params.passwordSet}</strong>. Share it with them — they can sign in with it
+          straight away.
         </p>
       ) : null}
 
@@ -121,6 +127,48 @@ export default async function AdminUsersPage({
           </fieldset>
           <button className={btnClass} type="submit">
             Add user
+          </button>
+        </form>
+      </section>
+
+      <section className="space-y-3 rounded-xl border border-border bg-card p-4">
+        <div>
+          <h2 className="text-lg font-semibold">Set a password</h2>
+          <p className="text-sm text-muted">
+            For someone who forgot theirs — especially accounts without an email, which can&apos;t use Forgot password
+            on the sign-in page. Their old password stops working.
+          </p>
+        </div>
+        <form action={setUserPassword} className="flex flex-wrap items-end gap-3">
+          <label className="space-y-1 text-sm">
+            <span>User</span>
+            <select id="set-password-user" className={`${fieldClass} w-56`} name="user_id" required defaultValue="">
+              <option value="" disabled>
+                Pick a user…
+              </option>
+              {sortedMembers.map((member) => (
+                <option key={member.user_id} value={member.user_id}>
+                  {nameOf(member.user_id)}
+                  {member.user_id === user.id ? " (you)" : ""}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="space-y-1 text-sm">
+            <span>New password</span>
+            <input
+              id="set-password-value"
+              className={`${fieldClass} w-56`}
+              type="text"
+              name="password"
+              required
+              minLength={8}
+              placeholder="At least 8 characters"
+              autoComplete="new-password"
+            />
+          </label>
+          <button className={btnClass} type="submit">
+            Set password
           </button>
         </form>
       </section>

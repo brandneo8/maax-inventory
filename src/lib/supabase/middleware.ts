@@ -33,6 +33,9 @@ export async function updateSession(request: NextRequest) {
 
   const path = request.nextUrl.pathname;
   const isLogin = path.startsWith("/login");
+  // Password reset: the email link signs you in at /auth/callback, then /auth/reset
+  // sets the new password — both have to open whether or not you're signed in.
+  if (path.startsWith("/auth/")) return supabaseResponse;
 
   if (!user && !isLogin) {
     const url = request.nextUrl.clone();

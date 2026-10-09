@@ -197,3 +197,35 @@ export async function createUserAccount(formData: FormData) {
   revalidatePath("/admin/users");
   redirect(usersPage({ created: username }));
 }
+
+/**
+ * Sets a new password for someone in this company — for a forgotten password
+ * on an account without an email, or when the reset email can't be used.
+ * Share it with them; they can change it later through Forgot password.
+ */
+export async function setUserPassword(formData: FormData) {
+  const { supabase, companyId } = await requireAdmin();
+  const userId = String(formData.get("user_id") ?? "");
+  const password = String(formData.get("password") ?? "");
+  if (!userId) redirect(usersPage({ error: "Pick whose password to set." }));
+  if (password.length < 8) redirect(usersPage({ error: "The new password needs at least 8 characters." }));
+
+  const { data: member, error: memberError } = await supabase
+    .from("company_users")
+    .select("user_id")
+    .eq("company_id", companyId)
+    .eq("user_id", userId)
+    .maybeSingle();
+  if (memberError) throw memberError;
+  if (!member) redirect(usersPage({ error: "That user isn't in this company." }));
+
+  const admin = createAdminClient();
+  const { error } = await admin.auth.admin.updateUserById(userId, { password });
+  if (error) redirect(usersPage({ error: error.message || "Could not set the password." }));
+
+  const [{ data: profile }, { data: account }] = await Promise.all([
+    admin.from("user_profiles").select("username").eq("user_id", userId).maybeSingle(),
+    admin.auth.admin.getUserById(userId),
+  ]);
+  redirect(usersPage({ passwordSet: profile?.username || realEmail(account.user?.email) || "the user" }));
+}
