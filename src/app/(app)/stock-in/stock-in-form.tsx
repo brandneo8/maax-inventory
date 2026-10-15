@@ -125,13 +125,8 @@ export function StockInForm({
   const supplier = suppliers.find((option) => option.id === supplierId);
   const gstRegistered = supplier?.gstRegistered ?? false;
   const productById = useMemo(() => new Map(products.map((product) => [product.id, product])), [products]);
-  const pickable = useMemo(
-    () =>
-      supplierId
-        ? products.filter((product) => !product.supplierIds?.length || product.supplierIds.includes(supplierId))
-        : products,
-    [products, supplierId],
-  );
+  // Every product in the catalog can be received, whichever supplier or salon it's tagged to.
+  const offList = lines.filter((line) => productById.get(line.product_id)?.onSalonList === false).length;
   const rounding = Number(roundingText) || 0;
   const fx = Number(fxText) || 0;
   const totalQuantity =
@@ -300,7 +295,14 @@ export function StockInForm({
             return (
               <tr key={line.key}>
                 <td className={cn(tdClass, "text-muted")}>{product?.sku || "—"}</td>
-                <td className={tdClass}>{label}</td>
+                <td className={tdClass}>
+                  {label}
+                  {product?.onSalonList === false ? (
+                    <span className="ml-2 rounded-full bg-sky-100 px-2 py-0.5 text-xs text-sky-900">
+                      New to {branchName}
+                    </span>
+                  ) : null}
+                </td>
                 <td className={tdClass}>{product?.sizeLabel || "—"}</td>
                 <td className={tdClass}>
                   {mode === "quantity" ? (
@@ -458,12 +460,17 @@ export function StockInForm({
               </label>
             </div>
 
-            {supplierId ? (
-              <p className="text-xs text-muted">
-                Showing products tagged to {supplier?.label}, plus any product with no supplier tagged yet.
+            <p className="text-xs text-muted">
+              Search the whole catalog. A product that isn&apos;t on {branchName}&apos;s list yet is added to it (and to
+              its POS list) when you receive.
+            </p>
+            <AddOrderLine products={products} onAdd={(line) => setLines((current) => [...current, line])} />
+            {offList > 0 ? (
+              <p className="rounded-lg border border-sky-200 bg-sky-50 px-3 py-2 text-sm text-sky-900">
+                {offList} {offList === 1 ? "product isn't" : "products aren't"} on {branchName}&apos;s list yet —{" "}
+                {offList === 1 ? "it'll be" : "they'll be"} added when you receive.
               </p>
             ) : null}
-            <AddOrderLine products={pickable} onAdd={(line) => setLines((current) => [...current, line])} />
             {linesTable("quantity")}
 
             <div className="space-y-3 rounded-xl border border-border bg-card p-4">

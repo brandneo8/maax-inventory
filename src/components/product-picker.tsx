@@ -22,6 +22,8 @@ export type ProductOption = Option & {
   sku: string | null;
   sizeLabel: string | null;
   branchAvgCost: number | null;
+  /** On the current salon's product list (Min / Kin); others are added to it when received. */
+  onSalonList?: boolean;
 };
 
 const MAX_PRODUCT_MATCHES = 50;

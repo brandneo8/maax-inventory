@@ -59,6 +59,8 @@ export type OrderProductOption = {
   branchAvgCost: number | null;
   tagNames: string[];
   supplierIds: string[];
+  /** On this salon's product list (Min / Kin); receiving a product adds it. */
+  onSalonList?: boolean;
 };
 
 export type StockOutProductOption = {
@@ -203,7 +205,12 @@ async function loadPickerRows(
   return rows;
 }
 
-function toOrderOption(product: PickerRow, branchId: string, avgCost: number | null): OrderProductOption {
+function toOrderOption(
+  product: PickerRow,
+  branchId: string,
+  avgCost: number | null,
+  onSalonList?: boolean,
+): OrderProductOption {
   return {
     id: product.id,
     label: productDisplayName(product) || product.sku || product.id,
@@ -216,6 +223,7 @@ function toOrderOption(product: PickerRow, branchId: string, avgCost: number | n
     branchAvgCost: avgCost,
     tagNames: tagNamesFrom(product),
     supplierIds: (product.supplier_products ?? []).map((row) => row.supplier_id),
+    onSalonList,
   };
 }
 
@@ -416,12 +424,21 @@ export const getBranchAvgCosts = cache(async (supabase: Client, companyId: strin
   return byProduct;
 });
 
+/**
+ * The whole active catalog for ordering and receiving, each with this
+ * salon's average cost and whether it's on this salon's list yet (receiving
+ * a product puts it on the list).
+ */
 export async function getOrderProductOptions(supabase: Client, companyId: string, branchId: string) {
-  const [rows, avgCosts] = await Promise.all([
+  const [rows, avgCosts, assignedIds] = await Promise.all([
     loadPickerRows(supabase, companyId),
     getBranchAvgCosts(supabase, companyId, branchId),
+    getAssignedProductIds(supabase, branchId),
   ]);
-  return rows.map((product) => toOrderOption(product, branchId, avgCosts[product.id] ?? null));
+  const assigned = new Set(assignedIds);
+  return rows.map((product) =>
+    toOrderOption(product, branchId, avgCosts[product.id] ?? null, assigned.has(product.id)),
+  );
 }
 
 export async function getBranchStockOutProducts(supabase: Client, companyId: string, branchId: string) {

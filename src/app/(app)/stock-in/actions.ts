@@ -15,6 +15,7 @@ import {
   restoreReceiptTrueUps,
 } from "@/lib/data/receipt-trueups";
 import { businessTxnDate, formatDate, singaporeToday } from "@/lib/format";
+import { reconcilePosAllowedForProducts } from "@/lib/data/pos-rules";
 import { createAdminClient } from "@/lib/supabase/admin";
 import type { ProductClassification } from "@/lib/labels";
 
@@ -98,6 +99,24 @@ function checkReceivedDate(value: string) {
     );
   }
   return date;
+}
+
+/**
+ * Received products are on the salon's list now (fn_receive_goods adds them);
+ * this puts them on its POS list too, by re-applying the POS exclude rule —
+ * allowed unless one of their tags is excluded. A failure is a warning.
+ */
+async function addReceivedToPosList(
+  supabase: Awaited<ReturnType<typeof requireBranch>>["supabase"],
+  companyId: string,
+  productIds: string[],
+) {
+  try {
+    await reconcilePosAllowedForProducts(supabase, companyId, productIds);
+    return undefined;
+  } catch (err) {
+    return `Received, but the products' POS list status couldn't be updated (${errorMessage(err, "unknown error")}). Open Admin → POS allowlist and save the filter to refresh it.`;
+  }
 }
 
 /** Count true-ups after a receipt is booked; a failure is reported but doesn't undo the receipt. */
@@ -289,6 +308,11 @@ export async function saveStockIn(
         createdBy: user.email,
       });
       if (trueUpWarning) warnings.push(trueUpWarning);
+      const posWarning = await addReceivedToPosList(supabase, companyId, [
+        ...lines.map((line) => line.product_id),
+        ...freeLines.map((line) => line.product_id),
+      ]);
+      if (posWarning) warnings.push(posWarning);
       if (invoice) {
         try {
           const url = await uploadInvoiceAttachment(companyId, receiptId, invoice);
@@ -352,12 +376,22 @@ export async function addFreeGoodsReceipt(input: {
     });
     if (error) throw new Error(error.message || "Could not add the free goods.");
 
-    const warning = await trueUpNewReceipt(supabase, {
-      companyId,
-      branchId: branch.id,
-      receiptId,
-      createdBy: user.email,
-    });
+    const warning =
+      [
+        await trueUpNewReceipt(supabase, {
+          companyId,
+          branchId: branch.id,
+          receiptId,
+          createdBy: user.email,
+        }),
+        await addReceivedToPosList(
+          supabase,
+          companyId,
+          lines.map((line) => line.product_id),
+        ),
+      ]
+        .filter(Boolean)
+        .join(" ") || undefined;
     revalidatePurchaseOrderPaths(input.purchase_order_id);
     revalidatePath("/home");
     return { ok: true, warning };
