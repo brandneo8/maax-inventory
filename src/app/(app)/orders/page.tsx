@@ -4,6 +4,7 @@ import { getPurchaseOrders } from "@/lib/data/orders";
 import { getSuppliers, getTaxRates } from "@/lib/data/lookups";
 import { productDisplayName } from "@/lib/format";
 import { computeOrderTotals } from "../stock-in/order-totals-calc";
+import { discountedPrice } from "./discount";
 import { OrdersWorkspace, type DraftOrderRow } from "./orders-workspace";
 
 export default async function OrdersPage() {
@@ -23,9 +24,10 @@ export default async function OrdersPage() {
       const supplier = Array.isArray(order.suppliers) ? order.suppliers[0] : order.suppliers;
       const items = order.purchase_order_items ?? [];
       const { subtotal, grandTotal } = computeOrderTotals(
+        // Each line at its discounted price.
         items.map((item) => ({
           quantity_ordered: Number(item.quantity_ordered),
-          unit_price: Number(item.unit_price),
+          unit_price: discountedPrice(Number(item.unit_price), Number(item.discount_percent ?? 0)),
         })),
         supplier?.gst_registered ?? false,
         gstRate,
@@ -33,7 +35,9 @@ export default async function OrdersPage() {
       return {
         id: order.id,
         poNumber: order.po_number,
+        supplierId: order.supplier_id,
         supplierName: supplier?.supplier_name ?? "",
+        gstRegistered: supplier?.gst_registered ?? false,
         orderDate: order.order_date,
         sent: order.status === "sent",
         sentDate: order.sent_date,
@@ -53,6 +57,8 @@ export default async function OrdersPage() {
               sku: product?.sku ?? null,
               quantity: Number(item.quantity_ordered),
               unitPrice: Number(item.unit_price),
+              discountPercent: Number(item.discount_percent ?? 0),
+              classification: item.classification,
             };
           }),
         totalAmount: grandTotal,

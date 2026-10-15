@@ -28,7 +28,7 @@ function tagSortKey(product: OrderBalanceProduct) {
   return [...product.tagNames].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" })).join(", ");
 }
 
-function defaultClassification(classifications: ProductClassification[]): ProductClassification {
+export function defaultClassification(classifications: ProductClassification[]): ProductClassification {
   for (const candidate of CLASSIFICATION_PRIORITY) {
     if (classifications.includes(candidate)) return candidate;
   }

@@ -10,7 +10,7 @@ export type Database = {
   // Allows to automatically instantiate createClient with right options
   // instead of createClient<Database, { PostgrestVersion: 'XX' }>(URL, KEY)
   __InternalSupabase: {
-    PostgrestVersion: "14.5"
+    PostgrestVersion: "14.17"
   }
   graphql_public: {
     Tables: {
@@ -1308,6 +1308,7 @@ export type Database = {
       purchase_order_items: {
         Row: {
           classification: Database["public"]["Enums"]["product_classification"]
+          discount_percent: number
           id: string
           line_total: number | null
           product_id: string
@@ -1320,6 +1321,7 @@ export type Database = {
         }
         Insert: {
           classification: Database["public"]["Enums"]["product_classification"]
+          discount_percent?: number
           id?: string
           line_total?: number | null
           product_id: string
@@ -1332,6 +1334,7 @@ export type Database = {
         }
         Update: {
           classification?: Database["public"]["Enums"]["product_classification"]
+          discount_percent?: number
           id?: string
           line_total?: number | null
           product_id?: string
@@ -2330,6 +2333,37 @@ export type Database = {
       fn_reverse_goods_receipt: {
         Args: { p_goods_receipt_id: string }
         Returns: undefined
+      }
+      fn_save_planning_order_lines: {
+        Args: {
+          p_branch_id: string
+          p_company_id: string
+          p_lines: Json
+          p_order_id: string
+        }
+        Returns: undefined
+      }
+      fn_save_stock_in: {
+        Args: {
+          p_branch_id: string
+          p_company_id: string
+          p_free_lines: Json
+          p_fx_adjustment: number
+          p_invoice_reference: string
+          p_lines: Json
+          p_notes: string
+          p_order_date: string
+          p_order_id: string
+          p_po_number: string
+          p_receipt_id: string
+          p_receive: boolean
+          p_received_date: string
+          p_rounding_adjustment: number
+          p_store_location_id: string
+          p_supplier_id: string
+          p_user: string
+        }
+        Returns: string
       }
       fn_save_stock_out: {
         Args: {

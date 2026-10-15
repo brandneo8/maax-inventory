@@ -125,3 +125,52 @@ export async function deletePlanningOrder(orderId: string) {
 
   revalidatePath("/orders");
 }
+
+/** A line of a draft order being edited in its pop-up. */
+export type PlanningOrderLineInput = {
+  product_id: string;
+  classification: OrderLineInput["classification"];
+  quantity_ordered: number;
+  unit_price: number;
+  /** Percent off unit_price (0–100). */
+  discount_percent: number;
+};
+
+/**
+ * Saves a draft's edited lines (products, quantities, discounts) in one
+ * transaction (fn_save_planning_order_lines). Errors come back as values so
+ * the message stays readable in production.
+ */
+export async function savePlanningOrderLines(
+  orderId: string,
+  lines: PlanningOrderLineInput[],
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  try {
+    const { supabase, companyId, branch } = await requireBranch();
+    if (lines.length === 0) throw new Error("A draft order needs at least one product. Delete the draft instead.");
+    for (const line of lines) {
+      if (!line.product_id) throw new Error("Each line needs a product.");
+      if (!(line.quantity_ordered > 0)) throw new Error("Each line needs a quantity above zero.");
+      if (!(line.discount_percent >= 0 && line.discount_percent <= 100)) {
+        throw new Error("Discounts have to be between 0% and 100%.");
+      }
+    }
+    const { error } = await supabase.rpc("fn_save_planning_order_lines", {
+      p_company_id: companyId,
+      p_branch_id: branch.id,
+      p_order_id: orderId,
+      p_lines: lines.map((line) => ({
+        product_id: line.product_id,
+        classification: line.classification,
+        quantity_ordered: line.quantity_ordered,
+        unit_price: line.unit_price,
+        discount_percent: Math.round(line.discount_percent * 100) / 100,
+      })),
+    });
+    if (error) throw new Error(error.message || "Could not save this draft.");
+    revalidatePath("/orders");
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error && err.message ? err.message : "Could not save this draft." };
+  }
+}

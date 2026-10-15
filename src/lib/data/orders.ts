@@ -19,7 +19,7 @@ export async function getPurchaseOrders(
   let query = supabase
     .from("purchase_orders")
     .select(
-      "id, po_number, status, order_date, sent_date, sent_by, requested_by, expected_delivery_date, notes, branches(name), suppliers(supplier_name, gst_registered), purchase_order_items(id, product_id, quantity_ordered, unit_price, sort_order, products(sku, name, order_name, size_label, brands(name))), goods_receipts(invoice_reference, invoice_attachment_url, voided_at)",
+      "id, po_number, status, order_date, sent_date, sent_by, requested_by, expected_delivery_date, notes, supplier_id, branches(name), suppliers(supplier_name, gst_registered), purchase_order_items(id, product_id, classification, quantity_ordered, unit_price, discount_percent, sort_order, products(sku, name, order_name, size_label, brands(name))), goods_receipts(invoice_reference, invoice_attachment_url, voided_at)",
     )
     .eq("company_id", companyId)
     .eq("planning_only", planningOnly)
@@ -168,10 +168,6 @@ async function highestOrderSequence(supabase: Client, companyId: string, plannin
     if (!data || data.length < 1000) break;
   }
   return highest;
-}
-
-export function canReceive(status: PoStatus) {
-  return status === "draft" || status === "sent" || status === "confirmed" || status === "partially_received";
 }
 
 export function canVoid(status: PoStatus) {

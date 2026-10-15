@@ -5,7 +5,7 @@ import { ChevronLeft, Package, RefreshCw, X } from "lucide-react";
 import { getProductBalancesAction } from "@/app/(app)/product-panel-actions";
 import { ProductLedgerDialog } from "@/components/product-ledger-dialog";
 import type { ProductBalance } from "@/lib/data/products";
-import { formatQty } from "@/lib/format";
+import { formatMoney, formatQty } from "@/lib/format";
 import { searchFieldsMatch } from "@/lib/search";
 import { btnSecondaryClass, fieldClass } from "@/lib/ui";
 import { cn } from "@/lib/utils";
@@ -168,6 +168,15 @@ export function ProductsPanel({ branchName }: { branchName: string }) {
                         </span>
                         <span className="block truncate text-xs text-muted">
                           {[product.brand, product.sku, product.barcode].filter(Boolean).join(" · ") || "—"}
+                        </span>
+                        <span className="block text-xs text-muted tabular-nums">
+                          <span title="This salon's average cost, from its receipts and stock counts">
+                            Avg cost {product.avgCost == null ? "—" : formatMoney(product.avgCost)}
+                          </span>
+                          <span aria-hidden> · </span>
+                          <span title="The unit cost on the product catalog">
+                            Catalog {formatMoney(product.catalogCost)}
+                          </span>
                         </span>
                       </span>
                       <span

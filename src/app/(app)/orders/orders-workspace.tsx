@@ -7,8 +7,12 @@ import { cn } from "@/lib/utils";
 import type { OrderBalanceProduct } from "@/lib/data/products";
 import { formatDate, formatDateTime, formatMoney, formatQty, singaporeToday } from "@/lib/format";
 import { btnClass, btnSecondaryClass, fieldClass, tableClass, tdClass, thClass } from "@/lib/ui";
-import { InventoryBalancePane } from "./inventory-balance-pane";
-import { deletePlanningOrder, markPlanningOrderSent, markPlanningOrderUnsent } from "./actions";
+import { InventoryBalancePane, defaultClassification } from "./inventory-balance-pane";
+import { deletePlanningOrder, markPlanningOrderSent, markPlanningOrderUnsent, savePlanningOrderLines } from "./actions";
+import { discountedPrice } from "./discount";
+import { computeOrderTotals } from "../stock-in/order-totals-calc";
+import { ProductPicker } from "@/components/product-picker";
+import type { ProductClassification } from "@/lib/labels";
 
 type SupplierOption = { id: string; label: string; gstRegistered: boolean };
 type Tab = "balance" | "orders";
@@ -16,7 +20,9 @@ type Tab = "balance" | "orders";
 export type DraftOrderRow = {
   id: string;
   poNumber: string;
+  supplierId: string | null;
   supplierName: string;
+  gstRegistered: boolean;
   orderDate: string | null;
   sent: boolean;
   sentDate: string | null;
@@ -32,7 +38,10 @@ export type DraftOrderRow = {
     label: string;
     sku: string | null;
     quantity: number;
+    /** List price; the line costs unitPrice × (1 − discountPercent / 100). */
     unitPrice: number;
+    discountPercent: number;
+    classification: ProductClassification;
   }[];
 };
 
@@ -84,7 +93,7 @@ export function OrdersWorkspace({
           onSaved={onSaved}
         />
       ) : (
-        <DraftOrdersTable orders={orders} savedPoNumbers={savedPoNumbers} products={products} />
+        <DraftOrdersTable orders={orders} savedPoNumbers={savedPoNumbers} products={products} gstRate={gstRate} />
       )}
     </div>
   );
@@ -95,10 +104,12 @@ function DraftOrdersTable({
   orders,
   savedPoNumbers,
   products,
+  gstRate,
 }: {
   orders: DraftOrderRow[];
   savedPoNumbers: string[];
   products: OrderBalanceProduct[];
+  gstRate: number;
 }) {
   const router = useRouter();
   const [openOrderId, setOpenOrderId] = useState<string | null>(null);
@@ -215,7 +226,13 @@ function DraftOrdersTable({
       />
 
       {openOrder ? (
-        <DraftOrderPopup order={openOrder} products={products} onClose={() => setOpenOrderId(null)} />
+        <DraftOrderPopup
+          key={openOrder.id}
+          order={openOrder}
+          products={products}
+          gstRate={gstRate}
+          onClose={() => setOpenOrderId(null)}
+        />
       ) : null}
       {sendingOrder ? (
         <MarkSentDialog
@@ -490,28 +507,130 @@ function MarkSentDialog({
 
 const NO_BRAND = "No brand";
 
-/** One draft's lines, grouped by brand, with each product's monthly use to sense-check quantities. */
+/** A line in the draft pop-up while it's being edited. */
+type EditLine = {
+  key: string;
+  productId: string;
+  brand: string;
+  label: string;
+  sku: string | null;
+  classification: ProductClassification;
+  quantity: number;
+  unitPrice: number;
+  discountPercent: number;
+};
+
+function linesFromOrder(order: DraftOrderRow): EditLine[] {
+  return order.lines.map((line) => ({
+    key: line.id,
+    productId: line.productId,
+    brand: line.brand,
+    label: line.label,
+    sku: line.sku,
+    classification: line.classification,
+    quantity: line.quantity,
+    unitPrice: line.unitPrice,
+    discountPercent: line.discountPercent,
+  }));
+}
+
+/** Groups lines by brand (no brand last), with each group's discounted total. */
+function groupByBrand(lines: EditLine[]) {
+  const byBrand = new Map<string, EditLine[]>();
+  for (const line of lines) {
+    const brand = line.brand || NO_BRAND;
+    byBrand.set(brand, [...(byBrand.get(brand) ?? []), line]);
+  }
+  return [...byBrand.entries()]
+    .sort(([left], [right]) => {
+      if (left === NO_BRAND) return 1;
+      if (right === NO_BRAND) return -1;
+      return left.localeCompare(right, undefined, { sensitivity: "base" });
+    })
+    .map(([brand, groupLines]) => ({
+      brand,
+      lines: groupLines,
+      total: groupLines.reduce((sum, line) => sum + line.quantity * discountedPrice(line.unitPrice, line.discountPercent), 0),
+    }));
+}
+
+/** A number box that can be cleared while typing (an empty box reads as 0). */
+function NumberCell({
+  value,
+  onChange,
+  step,
+  min,
+  max,
+  ariaLabel,
+  invalid,
+}: {
+  value: number;
+  onChange: (value: number) => void;
+  step: string;
+  min: string;
+  max?: string;
+  ariaLabel: string;
+  invalid?: boolean;
+}) {
+  const [draft, setDraft] = useState<string | null>(null);
+  return (
+    <input
+      className={cn(fieldClass, "w-24 py-1 text-right tabular-nums", invalid && "border-red-400 bg-red-50")}
+      type="number"
+      inputMode="decimal"
+      step={step}
+      min={min}
+      max={max}
+      value={draft ?? String(value)}
+      aria-label={ariaLabel}
+      aria-invalid={invalid || undefined}
+      onChange={(event) => {
+        const raw = event.target.value;
+        setDraft(raw);
+        const parsed = Number(raw);
+        onChange(raw.trim() === "" || !Number.isFinite(parsed) ? 0 : parsed);
+      }}
+      onBlur={() => setDraft(null)}
+      onKeyDown={(event) => {
+        if (event.key === "Enter") event.preventDefault();
+      }}
+    />
+  );
+}
+
+/**
+ * One draft's lines, grouped by brand, with each product's monthly use to
+ * sense-check quantities. Edit lets you add the supplier's products, change
+ * quantities and set a discount % per line; nothing changes until Save.
+ */
 function DraftOrderPopup({
   order,
   products,
+  gstRate,
   onClose,
 }: {
   order: DraftOrderRow;
   products: OrderBalanceProduct[];
+  gstRate: number;
   onClose: () => void;
 }) {
-  useEffect(() => {
-    function onKey(event: KeyboardEvent) {
-      if (event.key === "Escape") onClose();
-    }
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
-
   const router = useRouter();
   const [refreshing, startRefresh] = useTransition();
   // When the balances shown were loaded — reset by each refresh.
   const [checkedAt, setCheckedAt] = useState(() => new Date().toISOString());
+  const [editing, setEditing] = useState(false);
+  const [editLines, setEditLines] = useState<EditLine[]>(() => linesFromOrder(order));
+  const [pickedProductId, setPickedProductId] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    function onKey(event: KeyboardEvent) {
+      if (event.key === "Escape" && !editing) onClose();
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose, editing]);
 
   function refresh() {
     startRefresh(() => {
@@ -521,64 +640,202 @@ function DraftOrderPopup({
   }
 
   const productById = useMemo(() => new Map(products.map((product) => [product.id, product])), [products]);
+  // Only this draft's supplier's products can be added (a draft has one supplier).
+  const pickable = useMemo(
+    () =>
+      products
+        .filter((product) => !order.supplierId || product.supplierIds.includes(order.supplierId))
+        .map((product) => ({
+          id: product.id,
+          label: product.orderName || product.name || product.sku || "—",
+          orderName: product.orderName,
+          sku: product.sku,
+          barcode: product.barcode,
+          sizeLabel: product.sizeLabel,
+        })),
+    [products, order.supplierId],
+  );
 
-  const groups = useMemo(() => {
-    const byBrand = new Map<string, DraftOrderRow["lines"]>();
-    for (const line of order.lines) {
-      const brand = line.brand || NO_BRAND;
-      byBrand.set(brand, [...(byBrand.get(brand) ?? []), line]);
+  const shownLines = editing ? editLines : linesFromOrder(order);
+  const groups = useMemo(() => groupByBrand(shownLines), [shownLines]);
+  const totals = computeOrderTotals(
+    shownLines.map((line) => ({
+      quantity_ordered: line.quantity,
+      unit_price: discountedPrice(line.unitPrice, line.discountPercent),
+    })),
+    order.gstRegistered,
+    gstRate,
+  );
+  const problem = editing
+    ? editLines.length === 0
+      ? "Add at least one product (or close and delete the draft)."
+      : editLines.some((line) => !(line.quantity > 0))
+        ? "Every line needs a quantity above zero."
+        : editLines.some((line) => line.discountPercent < 0 || line.discountPercent > 100)
+          ? "Discounts have to be between 0% and 100%."
+          : null
+    : null;
+
+  function startEditing() {
+    setEditLines(linesFromOrder(order));
+    setPickedProductId("");
+    setError(null);
+    setEditing(true);
+  }
+
+  function addProduct(productId: string) {
+    const product = productById.get(productId);
+    if (!product) return;
+    setEditLines((current) => {
+      const existing = current.find((line) => line.productId === productId);
+      if (existing) {
+        return current.map((line) => (line === existing ? { ...line, quantity: line.quantity + 1 } : line));
+      }
+      return [
+        ...current,
+        {
+          key: crypto.randomUUID(),
+          productId,
+          brand: product.brand,
+          label: product.orderName || product.name || product.sku || "—",
+          sku: product.sku,
+          classification: defaultClassification(product.classifications),
+          quantity: 1,
+          unitPrice: product.unitCost,
+          discountPercent: 0,
+        },
+      ];
+    });
+    setPickedProductId("");
+  }
+
+  function updateLine(key: string, patch: Partial<EditLine>) {
+    setEditLines((current) => current.map((line) => (line.key === key ? { ...line, ...patch } : line)));
+  }
+
+  async function save() {
+    if (saving || problem) return;
+    setSaving(true);
+    setError(null);
+    try {
+      const result = await savePlanningOrderLines(
+        order.id,
+        editLines.map((line) => ({
+          product_id: line.productId,
+          classification: line.classification,
+          quantity_ordered: line.quantity,
+          unit_price: line.unitPrice,
+          discount_percent: line.discountPercent,
+        })),
+      );
+      if (!result.ok) {
+        setError(result.error);
+        return;
+      }
+      setEditing(false);
+      router.refresh();
+    } catch {
+      setError("Could not reach the server. Check your connection and try again.");
+    } finally {
+      setSaving(false);
     }
-    return [...byBrand.entries()]
-      .sort(([left], [right]) => {
-        if (left === NO_BRAND) return 1;
-        if (right === NO_BRAND) return -1;
-        return left.localeCompare(right, undefined, { sensitivity: "base" });
-      })
-      .map(([brand, lines]) => ({
-        brand,
-        lines,
-        total: lines.reduce((sum, line) => sum + line.quantity * line.unitPrice, 0),
-      }));
-  }, [order.lines]);
+  }
+
+  const columnCount = editing ? 9 : 8;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={onClose}>
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+      onClick={() => {
+        if (!editing) onClose();
+      }}
+    >
       <div
         role="dialog"
         aria-modal="true"
         aria-labelledby="draft-order-title"
-        className="flex max-h-[90vh] w-full max-w-4xl flex-col rounded-xl border border-border bg-white p-4 shadow-lg"
+        className="flex max-h-[90vh] w-full max-w-5xl flex-col rounded-xl border border-border bg-white p-4 shadow-lg"
         onClick={(event) => event.stopPropagation()}
       >
         <div className="flex items-start justify-between gap-3">
           <div>
             <h2 id="draft-order-title" className="text-lg font-semibold">
-              {order.poNumber}
+              {editing ? `Edit ${order.poNumber}` : order.poNumber}
             </h2>
             <p className="text-sm text-muted">
               {order.supplierName || "No supplier"} · Requested by {order.requestedBy || "—"} · Saved for{" "}
-              {formatDate(order.orderDate)} · {order.lineCount}{" "}
-              {order.lineCount === 1 ? "product" : "products"}
+              {formatDate(order.orderDate)} · {shownLines.length} {shownLines.length === 1 ? "product" : "products"}
             </p>
           </div>
           <div className="flex gap-2">
-            <button
-              className={btnSecondaryClass}
-              type="button"
-              onClick={refresh}
-              disabled={refreshing}
-              title="Reload on-hand balances and monthly use, including anything recorded since this draft was saved."
-            >
-              {refreshing ? "Refreshing…" : "Refresh"}
-            </button>
-            <button className={btnSecondaryClass} type="button" onClick={onClose}>
-              Close
-            </button>
+            {editing ? (
+              <>
+                <button
+                  className={btnSecondaryClass}
+                  type="button"
+                  disabled={saving}
+                  onClick={() => {
+                    setEditing(false);
+                    setError(null);
+                  }}
+                >
+                  Cancel
+                </button>
+                <button
+                  className={btnClass}
+                  type="button"
+                  disabled={saving || Boolean(problem)}
+                  title={problem ?? undefined}
+                  onClick={() => void save()}
+                >
+                  {saving ? "Saving…" : "Save"}
+                </button>
+              </>
+            ) : (
+              <>
+                <button
+                  className={btnSecondaryClass}
+                  type="button"
+                  onClick={refresh}
+                  disabled={refreshing}
+                  title="Reload on-hand balances and monthly use, including anything recorded since this draft was saved."
+                >
+                  {refreshing ? "Refreshing…" : "Refresh"}
+                </button>
+                <button className={btnSecondaryClass} type="button" onClick={startEditing}>
+                  Edit
+                </button>
+                <button className={btnSecondaryClass} type="button" onClick={onClose}>
+                  Close
+                </button>
+              </>
+            )}
           </div>
         </div>
         <p className="mt-2 text-xs text-muted">
           On hand and monthly use as of {formatDateTime(checkedAt)}. Refresh to include stock movements recorded since.
         </p>
+
+        {error ? (
+          <p role="alert" className="mt-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
+            {error}
+          </p>
+        ) : problem ? (
+          <p className="mt-2 text-sm text-amber-800">{problem}</p>
+        ) : null}
+
+        {editing ? (
+          <div className="mt-3 flex flex-wrap items-end gap-2">
+            <label className="min-w-72 flex-1 space-y-1 text-sm">
+              <span>Add a product from {order.supplierName || "this supplier"}</span>
+              <ProductPicker
+                products={pickable}
+                value={pickedProductId}
+                onSelect={(product) => addProduct(product.id)}
+              />
+            </label>
+          </div>
+        ) : null}
 
         <div className="mt-3 min-h-0 overflow-auto rounded-lg border border-border">
           <table className={tableClass}>
@@ -590,24 +847,42 @@ function DraftOrderPopup({
                 <th className={cn(thClass, "text-right")}>Monthly use</th>
                 <th className={cn(thClass, "text-right")}>Quantity</th>
                 <th className={cn(thClass, "text-right")}>Unit price</th>
+                <th className={cn(thClass, "text-right")}>Discount</th>
+                <th className={cn(thClass, "text-right")}>Discounted price</th>
                 <th className={cn(thClass, "text-right")}>Line total</th>
+                {editing ? (
+                  <th className={thClass}>
+                    <span className="sr-only">Remove</span>
+                  </th>
+                ) : null}
               </tr>
             </thead>
+            {groups.length === 0 ? (
+              <tbody>
+                <tr>
+                  <td className={cn(tdClass, "text-muted")} colSpan={columnCount + 1}>
+                    No products yet — add one above.
+                  </td>
+                </tr>
+              </tbody>
+            ) : null}
             {groups.map((group) => (
               <tbody key={group.brand}>
                 <tr className="border-t-2 border-sky-300 bg-sky-100 text-sky-950">
-                  <td className={cn(tdClass, "text-sm font-bold uppercase tracking-wide")} colSpan={6}>
+                  <td className={cn(tdClass, "text-sm font-bold uppercase tracking-wide")} colSpan={columnCount}>
                     {group.brand}
                     <span className="ml-2 text-xs font-medium normal-case tracking-normal text-sky-800">
                       {group.lines.length} {group.lines.length === 1 ? "product" : "products"}
                     </span>
                   </td>
                   <td className={cn(tdClass, "text-right font-bold tabular-nums")}>{formatMoney(group.total)}</td>
+                  {editing ? <td className={tdClass} /> : null}
                 </tr>
                 {group.lines.map((line) => {
                   const product = productById.get(line.productId);
+                  const price = discountedPrice(line.unitPrice, line.discountPercent);
                   return (
-                    <tr key={line.id}>
+                    <tr key={line.key}>
                       <td className={tdClass}>{line.label}</td>
                       <td className={cn(tdClass, "text-muted")}>{line.sku || "—"}</td>
                       <td className={cn(tdClass, "text-right font-medium tabular-nums", refreshing && "opacity-50")}>
@@ -616,11 +891,58 @@ function DraftOrderPopup({
                       <td className={cn(tdClass, "text-right tabular-nums", refreshing && "opacity-50")}>
                         {product && !product.isBundle ? formatQty(product.monthlyUse) : "—"}
                       </td>
-                      <td className={cn(tdClass, "text-right tabular-nums")}>{formatQty(line.quantity)}</td>
+                      <td className={cn(tdClass, "text-right tabular-nums")}>
+                        {editing ? (
+                          <NumberCell
+                            value={line.quantity}
+                            step="1"
+                            min="1"
+                            invalid={!(line.quantity > 0)}
+                            ariaLabel={`Quantity of ${line.label}`}
+                            onChange={(quantity) => updateLine(line.key, { quantity })}
+                          />
+                        ) : (
+                          formatQty(line.quantity)
+                        )}
+                      </td>
                       <td className={cn(tdClass, "text-right tabular-nums")}>{formatMoney(line.unitPrice)}</td>
                       <td className={cn(tdClass, "text-right tabular-nums")}>
-                        {formatMoney(line.quantity * line.unitPrice)}
+                        {editing ? (
+                          <span className="inline-flex items-center gap-1">
+                            <NumberCell
+                              value={line.discountPercent}
+                              step="0.01"
+                              min="0"
+                              max="100"
+                              invalid={line.discountPercent < 0 || line.discountPercent > 100}
+                              ariaLabel={`Discount % for ${line.label}`}
+                              onChange={(discountPercent) => updateLine(line.key, { discountPercent })}
+                            />
+                            %
+                          </span>
+                        ) : line.discountPercent > 0 ? (
+                          `${formatQty(line.discountPercent)}%`
+                        ) : (
+                          "—"
+                        )}
                       </td>
+                      <td className={cn(tdClass, "text-right tabular-nums")}>{formatMoney(price)}</td>
+                      <td className={cn(tdClass, "text-right tabular-nums")}>{formatMoney(line.quantity * price)}</td>
+                      {editing ? (
+                        <td className={tdClass}>
+                          <button
+                            type="button"
+                            className="rounded-md p-1.5 text-red-600 hover:bg-red-50 hover:text-red-800"
+                            onClick={() =>
+                              setEditLines((current) => current.filter((item) => item.key !== line.key))
+                            }
+                            aria-label={`Remove ${line.label}`}
+                            title="Remove"
+                          >
+                            <Trash2 className="h-4 w-4" aria-hidden />
+                          </button>
+                        </td>
+                      ) : null}
                     </tr>
                   );
                 })}
@@ -628,16 +950,18 @@ function DraftOrderPopup({
             ))}
             <tfoot>
               <tr className="font-semibold">
-                <td className={tdClass} colSpan={6}>
+                <td className={tdClass} colSpan={columnCount}>
                   Total (w/o tax)
                 </td>
-                <td className={cn(tdClass, "text-right tabular-nums")}>{formatMoney(order.subtotalAmount)}</td>
+                <td className={cn(tdClass, "text-right tabular-nums")}>{formatMoney(totals.subtotal)}</td>
+                {editing ? <td className={tdClass} /> : null}
               </tr>
               <tr className="font-semibold">
-                <td className={tdClass} colSpan={6}>
+                <td className={tdClass} colSpan={columnCount}>
                   Total (w/ tax)
                 </td>
-                <td className={cn(tdClass, "text-right tabular-nums")}>{formatMoney(order.totalAmount)}</td>
+                <td className={cn(tdClass, "text-right tabular-nums")}>{formatMoney(totals.grandTotal)}</td>
+                {editing ? <td className={tdClass} /> : null}
               </tr>
             </tfoot>
           </table>

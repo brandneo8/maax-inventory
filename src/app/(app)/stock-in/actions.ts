@@ -188,174 +188,128 @@ export async function createPurchaseOrder(input: {
   redirect(`/stock-in/${order.id}`);
 }
 
-export async function updatePurchaseOrder(input: {
-  purchase_order_id: string;
-  supplier_id: string;
-  order_date: string;
-  /** FX clearing amount planned on the draft; pre-fills the receipt's amount when it's received. */
-  fx_adjustment?: number;
-  lines: OrderLineInput[];
-}): Promise<StockInResult> {
-  try {
-    const { supabase, companyId, branch } = await requireBranch();
-    const lines = input.lines.filter((line) => line.product_id && line.quantity_ordered > 0);
+/** A product line on the stock-in form: what arrived and its price. */
+export type StockInLineInput = {
+  product_id: string;
+  classification: ProductClassification;
+  quantity: number;
+  unit_price: number;
+};
 
-    if (lines.length === 0) throw new Error("Add at least one order line.");
-    if (!input.supplier_id) throw new Error("Select a supplier.");
+/** A product that arrived at no charge (tester, GWP). */
+export type StockInFreeLineInput = {
+  product_id: string;
+  classification: ProductClassification;
+  quantity: number;
+};
 
-    const { data: order, error: orderError } = await supabase
-      .from("purchase_orders")
-      .select("id, status")
-      .eq("id", input.purchase_order_id)
-      .eq("company_id", companyId)
-      .eq("branch_id", branch.id)
-      .maybeSingle();
-    if (orderError) throw orderError;
-    if (!order) throw new Error("Purchase order not found.");
-    if (order.status !== "draft") {
-      throw new Error("This order has already been sent and can no longer be edited.");
-    }
-
-    // A draft that had a receipt removed still has that receipt's lines tied
-    // to its order lines, so they can't be replaced — check before changing anything.
-    const { count: receiptCount, error: receiptError } = await supabase
-      .from("goods_receipts")
-      .select("id", { count: "exact", head: true })
-      .eq("purchase_order_id", order.id);
-    if (receiptError) throw receiptError;
-    if ((receiptCount ?? 0) > 0) {
-      throw new Error(
-        "This order had stock received on it (since removed), so its lines can't be changed. Duplicate it into a new order instead.",
-      );
-    }
-
-    const { error: deleteError } = await supabase
-      .from("purchase_order_items")
-      .delete()
-      .eq("purchase_order_id", order.id);
-    if (deleteError) throw deleteError;
-
-    const { error: insertError } = await supabase.from("purchase_order_items").insert(
-      lines.map((line, index) => ({
-        purchase_order_id: order.id,
-        product_id: line.product_id,
-        classification: line.classification,
-        quantity_ordered: line.quantity_ordered,
-        unit_price: line.unit_price,
-        sort_order: index,
-      })),
-    );
-    if (insertError) throw insertError;
-
-    const { error: updateError } = await supabase
-      .from("purchase_orders")
-      .update({
-        supplier_id: input.supplier_id,
-        order_date: input.order_date || null,
-        fx_adjustment: Number.isFinite(input.fx_adjustment) ? Number(input.fx_adjustment) : 0,
-      })
-      .eq("id", order.id);
-    if (updateError) throw updateError;
-
-    revalidatePurchaseOrderPaths(order.id);
-    return { ok: true };
-  } catch (err) {
-    return { ok: false, error: errorMessage(err, "Could not save this order.") };
-  }
-}
-
-export async function receivePurchaseOrder(
+/**
+ * The stock-in form's save: one workflow — product lines, quantities,
+ * prices and FX. "draft" keeps it as a Draft (creating it, or updating the
+ * draft); "receive" saves it and receives exactly those quantities at those
+ * prices, in one transaction (fn_save_stock_in → fn_receive_goods). Count
+ * true-ups and the invoice upload follow; if either fails it's reported as a
+ * warning, not a lost receipt.
+ */
+export async function saveStockIn(
   input: {
-    purchase_order_id: string;
-    received_date: string;
+    mode: "draft" | "receive";
+    /** The draft being continued, or null for a new order. */
+    order_id: string | null;
+    supplier_id: string;
+    order_date: string;
     notes: string;
+    fx_adjustment: number;
+    lines: StockInLineInput[];
+    free_lines: StockInFreeLineInput[];
+    /** Receiving only. */
+    received_date: string;
     invoice_reference: string;
     rounding_adjustment: number;
-    /** Currency exchange clearing amount to match the PDF invoice — stored on the receipt, not the ledger. */
-    fx_adjustment: number;
-    /** The person confirmed receiving more than is still to come on some lines. */
-    allow_over_receipt?: boolean;
-    lines: {
-      purchase_order_item_id: string | null;
-      product_id: string;
-      store_location_id: string;
-      quantity_received: number;
-      unit_cost: number;
-      classification: ProductClassification | null;
-    }[];
   },
   invoiceFile?: File | null,
 ): Promise<StockInResult<{ orderId: string }>> {
   try {
     const { supabase, companyId, user, branch } = await requireBranch();
-    const lines = input.lines.filter(
-      (line) => line.quantity_received > 0 && line.store_location_id,
-    );
-    if (lines.length === 0) throw new Error("Enter a received quantity for at least one line.");
+    const receiving = input.mode === "receive";
+    if (!input.supplier_id) throw new Error("Select a supplier.");
+    const lines = input.lines.filter((line) => line.product_id);
+    if (lines.length === 0) throw new Error("Add at least one product.");
     for (const line of lines) {
-      if (!line.purchase_order_item_id && !line.classification)
-        throw new Error("Select a type for each free/GWP item.");
+      if (!(line.quantity > 0)) throw new Error("Every line needs a quantity above zero.");
+      if (!(line.unit_price >= 0)) throw new Error("Prices can't be negative.");
     }
-    const receivedDate = checkReceivedDate(input.received_date);
-    const invoice = checkInvoiceFile(invoiceFile);
-    await assertNoActiveCount(supabase, companyId, branch.id, "receive stock");
+    const freeLines = input.free_lines.filter((line) => line.product_id && line.quantity > 0);
+    const receivedDate = receiving ? checkReceivedDate(input.received_date) : null;
+    const invoice = receiving ? checkInvoiceFile(invoiceFile) : null;
+    if (receiving) await assertNoActiveCount(supabase, companyId, branch.id, "receive stock");
 
-    // Header, lines, stock and order status in one transaction (fn_receive_goods).
-    const receiptId = randomUUID();
-    const { error } = await supabase.rpc("fn_receive_goods", {
+    const [poNumber, storeLocationId] = await Promise.all([
+      input.order_id ? Promise.resolve(null) : nextPoNumber(supabase, companyId),
+      receiving ? getDefaultStoreLocationId(supabase, branch.id) : Promise.resolve(null),
+    ]);
+    const receiptId = receiving ? randomUUID() : null;
+    const { data: orderId, error } = await supabase.rpc("fn_save_stock_in", {
       p_company_id: companyId,
       p_branch_id: branch.id,
-      p_purchase_order_id: input.purchase_order_id,
-      p_receipt_id: receiptId,
-      p_received_date: receivedDate,
+      p_order_id: nullable(input.order_id),
+      p_po_number: nullable(poNumber),
+      p_supplier_id: input.supplier_id,
+      p_order_date: nullable(input.order_date || singaporeToday()),
       p_notes: nullable(input.notes.trim() || null),
-      p_invoice_reference: nullable(input.invoice_reference.trim() || null),
-      p_rounding_adjustment: Number.isFinite(input.rounding_adjustment)
-        ? input.rounding_adjustment
-        : 0,
       p_fx_adjustment: Number.isFinite(input.fx_adjustment) ? input.fx_adjustment : 0,
       p_user: nullable(user.email),
-      p_items: lines.map((line) => ({
-        purchase_order_item_id: line.purchase_order_item_id,
+      p_lines: lines.map((line) => ({
         product_id: line.product_id,
-        store_location_id: line.store_location_id,
-        quantity_received: line.quantity_received,
-        unit_cost: line.purchase_order_item_id ? line.unit_cost : 0,
-        classification: line.purchase_order_item_id ? null : line.classification,
+        classification: line.classification,
+        quantity: line.quantity,
+        unit_price: line.unit_price,
       })),
-      p_free_goods_only: false,
-      p_allow_over_receipt: Boolean(input.allow_over_receipt),
+      p_receive: receiving,
+      p_receipt_id: nullable(receiptId),
+      p_received_date: nullable(receivedDate),
+      p_invoice_reference: nullable(receiving ? input.invoice_reference.trim() || null : null),
+      p_rounding_adjustment:
+        receiving && Number.isFinite(input.rounding_adjustment) ? input.rounding_adjustment : 0,
+      p_store_location_id: nullable(storeLocationId),
+      p_free_lines: freeLines.map((line) => ({
+        product_id: line.product_id,
+        classification: line.classification,
+        quantity: line.quantity,
+      })),
     });
-    if (error) throw new Error(error.message || "Could not receive this order.");
+    if (error || !orderId) throw new Error(error?.message || "Could not save this order.");
 
     const warnings: string[] = [];
-    const trueUpWarning = await trueUpNewReceipt(supabase, {
-      companyId,
-      branchId: branch.id,
-      receiptId,
-      createdBy: user.email,
-    });
-    if (trueUpWarning) warnings.push(trueUpWarning);
-    if (invoice) {
-      try {
-        const url = await uploadInvoiceAttachment(companyId, receiptId, invoice);
-        const { error: patchError } = await supabase
-          .from("goods_receipts")
-          .update({ invoice_attachment_url: url })
-          .eq("id", receiptId);
-        if (patchError) throw patchError;
-      } catch (err) {
-        warnings.push(
-          `Received, but the invoice file couldn't be uploaded (${errorMessage(err, "upload failed")}). Edit the receipt to attach it again.`,
-        );
+    if (receiving && receiptId) {
+      const trueUpWarning = await trueUpNewReceipt(supabase, {
+        companyId,
+        branchId: branch.id,
+        receiptId,
+        createdBy: user.email,
+      });
+      if (trueUpWarning) warnings.push(trueUpWarning);
+      if (invoice) {
+        try {
+          const url = await uploadInvoiceAttachment(companyId, receiptId, invoice);
+          const { error: patchError } = await supabase
+            .from("goods_receipts")
+            .update({ invoice_attachment_url: url })
+            .eq("id", receiptId);
+          if (patchError) throw patchError;
+        } catch (err) {
+          warnings.push(
+            `Received, but the invoice file couldn't be uploaded (${errorMessage(err, "upload failed")}). Edit the receipt to attach it again.`,
+          );
+        }
       }
     }
 
-    revalidatePurchaseOrderPaths(input.purchase_order_id);
-    revalidatePath("/home");
-    return { ok: true, orderId: input.purchase_order_id, warning: warnings.join(" ") || undefined };
+    revalidatePurchaseOrderPaths(orderId);
+    if (receiving) revalidatePath("/home");
+    return { ok: true, orderId, warning: warnings.join(" ") || undefined };
   } catch (err) {
-    return { ok: false, error: errorMessage(err, "Could not receive this order.") };
+    return { ok: false, error: errorMessage(err, "Could not save this order.") };
   }
 }
 

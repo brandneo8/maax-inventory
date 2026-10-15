@@ -447,18 +447,26 @@ export type ProductBalance = {
   brand: string;
   sizeLabel: string | null;
   onHand: number;
+  /**
+   * This salon's running average cost (from its receipts and count
+   * adjustments), or null when nothing has given it a cost here yet.
+   */
+  avgCost: number | null;
+  /** The catalog unit cost, shown alongside for comparison. */
+  catalogCost: number;
 };
 
-/** Every product assigned to this salon with its current on-hand quantity — the right-hand Products panel. */
+/** Every product assigned to this salon with its on-hand quantity and costs — the right-hand Products panel. */
 export async function getBranchProductBalances(
   supabase: Client,
   companyId: string,
   branchId: string,
 ): Promise<ProductBalance[]> {
   const assignedIds = await getAssignedProductIds(supabase, branchId);
-  const [rows, onHand] = await Promise.all([
+  const [rows, onHand, avgCosts] = await Promise.all([
     loadPickerRows(supabase, companyId, assignedIds),
     getBranchOnHand(supabase, companyId, branchId, assignedIds),
+    getBranchAvgCosts(supabase, companyId, branchId),
   ]);
   return rows
     .map((product) => ({
@@ -470,6 +478,8 @@ export async function getBranchProductBalances(
       brand: nestedName(product.brands),
       sizeLabel: product.size_label,
       onHand: onHand.get(product.id) ?? 0,
+      avgCost: avgCosts[product.id] ?? null,
+      catalogCost: Number(product.unit_cost_price ?? 0),
     }))
     .sort((left, right) => left.label.localeCompare(right.label, undefined, { sensitivity: "base" }));
 }

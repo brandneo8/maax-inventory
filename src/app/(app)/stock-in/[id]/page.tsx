@@ -1,11 +1,14 @@
+import Link from "next/link";
 import { notFound } from "next/navigation";
 import { requireBranch } from "@/lib/auth";
-import { canAddFreeGoods, canReceive, canVoid, getPurchaseOrder } from "@/lib/data/orders";
+import { getLatestPostedCountDate } from "@/lib/data/counts";
+import { canAddFreeGoods, canVoid, getPurchaseOrder } from "@/lib/data/orders";
 import { getSuppliers, getTaxRates } from "@/lib/data/lookups";
 import { getOrderProductOptions } from "@/lib/data/products";
 import { productDisplayName, productLabel } from "@/lib/format";
 import type { ProductClassification } from "@/lib/labels";
 import { OrderDetailPanel } from "./order-detail-panel";
+import { StockInForm } from "../stock-in-form";
 
 export default async function OrderDetailPage({
   params,
@@ -22,17 +25,60 @@ export default async function OrderDetailPage({
 
   const supplier = Array.isArray(order.suppliers) ? order.suppliers[0] : order.suppliers;
   const orderBranch = Array.isArray(order.branches) ? order.branches[0] : order.branches;
-  const editableOrder = order.status === "draft";
   const addFreeGoodsNow = canAddFreeGoods(order.status);
   const gstRate = Number(taxRates.find((rate) => rate.is_default)?.rate_percentage ?? 9);
 
-  // Only the draft editor needs the catalog up front. "Add free goods" fetches
-  // it when its modal opens (free-goods-actions.ts), so received orders don't
-  // pay for the full product list on every view.
-  const [suppliers, products] = await Promise.all([
-    editableOrder ? getSuppliers(supabase, companyId) : Promise.resolve([]),
-    editableOrder ? getOrderProductOptions(supabase, companyId, branch.id) : Promise.resolve([]),
-  ]);
+  // A draft opens in the stock-in form (products and quantities, prices,
+  // invoice and FX, then receive). Received and voided orders show below.
+  // "Add free goods" fetches the catalog when its modal opens
+  // (free-goods-actions.ts), so received orders don't load it on every view.
+  if (order.status === "draft") {
+    const [suppliers, products, latestCountDate] = await Promise.all([
+      getSuppliers(supabase, companyId),
+      getOrderProductOptions(supabase, companyId, branch.id),
+      getLatestPostedCountDate(supabase, companyId, branch.id),
+    ]);
+    return (
+      <div className="space-y-6">
+        <div>
+          <Link href="/stock-in" className="text-sm text-muted underline">
+            Back to stock-in
+          </Link>
+          <h1 className="mt-2 text-2xl font-semibold tracking-tight">{order.po_number}</h1>
+          <p className="mt-1 text-sm text-muted">
+            Draft at {branch.displayName}. Confirm the quantities, then the prices, invoice and FX, and receive it into
+            stock.
+          </p>
+        </div>
+        <StockInForm
+          key={order.id}
+          branchName={branch.displayName}
+          gstRate={gstRate}
+          latestCountDate={latestCountDate}
+          suppliers={suppliers
+            // Inactive suppliers stay listed for a draft that already uses one.
+            .filter((item) => item.is_active || item.id === order.supplier_id)
+            .map((item) => ({ id: item.id, label: item.supplier_name, gstRegistered: item.gst_registered }))}
+          products={products}
+          draft={{
+            id: order.id,
+            poNumber: order.po_number,
+            supplierId: order.supplier_id,
+            orderDate: order.order_date ?? "",
+            notes: order.notes ?? "",
+            fxAdjustment: Number(order.fx_adjustment ?? 0),
+            lines: order.items.map((item) => ({
+              key: item.id,
+              product_id: item.product_id,
+              classification: item.classification,
+              quantity_ordered: Number(item.quantity_ordered),
+              unit_price: Number(item.unit_price),
+            })),
+          }}
+        />
+      </div>
+    );
+  }
 
   const items = order.items.map((item) => {
     const product = Array.isArray(item.products) ? item.products[0] : item.products;
@@ -93,19 +139,15 @@ export default async function OrderDetailPage({
       purchaseOrderId={order.id}
       status={order.status}
       branchName={orderBranch?.name ?? ""}
-      supplierId={order.supplier_id}
       supplierName={supplier?.supplier_name ?? ""}
       gstRegistered={supplier?.gst_registered ?? false}
       gstRate={gstRate}
       orderDate={order.order_date ?? ""}
       expectedDeliveryDate={order.expected_delivery_date}
       notes={order.notes}
-      suppliers={suppliers.map((item) => ({ id: item.id, label: item.supplier_name, gstRegistered: item.gst_registered }))}
-      canReceiveNow={canReceive(order.status)}
       canVoidNow={canVoid(order.status)}
       canAddFreeGoodsNow={addFreeGoodsNow}
       items={items}
-      products={products}
       receipts={receipts}
       plannedFxAdjustment={Number(order.fx_adjustment ?? 0)}
       freeGoodsSummary={freeGoodsSummary}

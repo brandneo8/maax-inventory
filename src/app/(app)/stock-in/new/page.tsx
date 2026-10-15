@@ -1,15 +1,17 @@
 import Link from "next/link";
 import { requireBranch } from "@/lib/auth";
+import { getLatestPostedCountDate } from "@/lib/data/counts";
 import { getSuppliers, getTaxRates } from "@/lib/data/lookups";
 import { getOrderProductOptions } from "@/lib/data/products";
-import { OrderForm } from "./order-form";
+import { StockInForm } from "../stock-in-form";
 
-export default async function NewOrderPage() {
+export default async function NewStockInPage() {
   const { supabase, companyId, branch } = await requireBranch();
-  const [suppliers, products, taxRates] = await Promise.all([
+  const [suppliers, products, taxRates, latestCountDate] = await Promise.all([
     getSuppliers(supabase, companyId),
     getOrderProductOptions(supabase, companyId, branch.id),
     getTaxRates(supabase, companyId),
+    getLatestPostedCountDate(supabase, companyId, branch.id),
   ]);
   const gstRate = Number(taxRates.find((rate) => rate.is_default)?.rate_percentage ?? 9);
 
@@ -21,33 +23,36 @@ export default async function NewOrderPage() {
         </Link>
         <h1 className="mt-2 text-2xl font-semibold tracking-tight">New stock-in</h1>
         <p className="mt-1 text-sm text-muted">
-          Working in {branch.displayName}. Classification is set on each line. Stock is not added
-          until the order is received.
+          Working in {branch.displayName}. Add what arrived, confirm the quantities, then the prices, invoice and FX,
+          and receive it into stock. Save it as a draft to finish later.
         </p>
       </div>
 
       {suppliers.length === 0 || products.length === 0 ? (
         <p className="rounded-xl border border-border bg-card p-4 text-sm text-muted">
           Add at least one{" "}
-          <Link href="/admin" className="underline">
+          <Link href="/admin/suppliers" className="underline">
             supplier
           </Link>{" "}
           and one{" "}
           <Link href="/admin/products" className="underline">
             product
           </Link>{" "}
-          before creating an order.
+          before receiving stock.
         </p>
       ) : (
-        <OrderForm
+        <StockInForm
           key={branch.id}
-          branchId={branch.id}
+          branchName={branch.displayName}
           gstRate={gstRate}
-          suppliers={suppliers.map((supplier) => ({
-            id: supplier.id,
-            label: supplier.supplier_name,
-            gstRegistered: supplier.gst_registered,
-          }))}
+          latestCountDate={latestCountDate}
+          suppliers={suppliers
+            .filter((supplier) => supplier.is_active)
+            .map((supplier) => ({
+              id: supplier.id,
+              label: supplier.supplier_name,
+              gstRegistered: supplier.gst_registered,
+            }))}
           products={products}
         />
       )}

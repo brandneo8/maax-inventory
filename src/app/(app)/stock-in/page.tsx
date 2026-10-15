@@ -20,8 +20,8 @@ export default async function OrdersPage() {
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Stock-in</h1>
           <p className="mt-1 text-sm text-muted">
-            Working in {branch.displayName}. Draft a stock-in, mark it sent, then receive stock into
-            this salon.
+            Working in {branch.displayName}. Add what arrived, confirm the quantities, prices and FX, and receive it
+            into stock. Drafts keep your progress until they&apos;re received.
           </p>
         </div>
         <Link className={btnClass} href="/stock-in/new">
