@@ -8,6 +8,7 @@ import { cn } from "@/lib/utils";
 import { formatQty, singaporeToday } from "@/lib/format";
 import { classificationLabel, type ProductClassification } from "@/lib/labels";
 import { ProductPicker, type ProductOption } from "@/components/product-picker";
+import { QuickCreateProductModal } from "../quick-create-product-modal";
 
 type StagedLine = {
   key: string;
@@ -41,8 +42,12 @@ export function AddFreeGoodsModal({
   const [staged, setStaged] = useState<StagedLine[]>([]);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [createdProducts, setCreatedProducts] = useState<ProductOption[]>([]);
+  const [creatingProduct, setCreatingProduct] = useState(false);
+  const [createName, setCreateName] = useState("");
+  const catalog = products ? [...products, ...createdProducts] : null;
 
-  const selected = products?.find((product) => product.id === productId);
+  const selected = catalog?.find((product) => product.id === productId);
   const canAdd = Boolean(selected) && quantity > 0;
 
   function addLine() {
@@ -130,8 +135,16 @@ export function AddFreeGoodsModal({
         <div className="mt-3 flex flex-wrap items-end gap-2 rounded-xl border border-border bg-card p-3">
           <label className="min-w-64 flex-1 space-y-1 text-sm">
             <span>Search product</span>
-            {products ? (
-              <ProductPicker products={products} value={productId} onSelect={(product) => setProductId(product.id)} />
+            {catalog ? (
+              <ProductPicker
+                products={catalog}
+                value={productId}
+                onSelect={(product) => setProductId(product.id)}
+                onAddNewProduct={(query) => {
+                  setCreateName(query);
+                  setCreatingProduct(true);
+                }}
+              />
             ) : productsError ? (
               <span className="flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-red-800">
                 <span className="flex-1">{productsError}</span>
@@ -217,6 +230,30 @@ export function AddFreeGoodsModal({
           </button>
         </div>
       </div>
+      {creatingProduct ? (
+        <QuickCreateProductModal
+          defaultClassification="gwp"
+          initialName={createName}
+          onClose={() => setCreatingProduct(false)}
+          onCreated={(product, classification) => {
+            setCreatedProducts((current) => [
+              ...current,
+              {
+                id: product.id,
+                label: product.label,
+                sku: product.sku ?? null,
+                sizeLabel: product.sizeLabel ?? null,
+                defaultClassification: classification,
+                unitCost: product.unitCost,
+                branchAvgCost: null,
+                onSalonList: true,
+              },
+            ]);
+            setProductId(product.id);
+            setCreatingProduct(false);
+          }}
+        />
+      ) : null}
     </div>
   );
 }

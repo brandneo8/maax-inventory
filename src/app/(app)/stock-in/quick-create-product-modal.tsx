@@ -7,17 +7,21 @@ import { blurOnWheel, btnClass, btnSecondaryClass, fieldClass, numberFieldClass 
 import { cn } from "@/lib/utils";
 import type { Option } from "@/components/product-picker";
 
+export type QuickCreatedProduct = Option & { unitCost: number; sizeLabel: string | null };
+
 export function QuickCreateProductModal({
   defaultClassification,
+  initialName = "",
   onClose,
   onCreated,
 }: {
   defaultClassification: ProductClassification;
+  initialName?: string;
   onClose: () => void;
   /** The new product and the type picked for it. */
-  onCreated: (product: Option, classification: ProductClassification) => void;
+  onCreated: (product: QuickCreatedProduct, classification: ProductClassification) => void;
 }) {
-  const [orderName, setOrderName] = useState("");
+  const [orderName, setOrderName] = useState(initialName);
   const [sku, setSku] = useState("");
   const [brand, setBrand] = useState("");
   const [size, setSize] = useState("");
@@ -51,7 +55,7 @@ export function QuickCreateProductModal({
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-4">
       <div className="w-full max-w-md rounded-xl border border-border bg-white p-4 shadow-lg">
         <h2 className="text-lg font-semibold">Create product</h2>
         <p className="mt-1 text-sm text-muted">Add a new product to the catalog, then use it on this receipt.</p>

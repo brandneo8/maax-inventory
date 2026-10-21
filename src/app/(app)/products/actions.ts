@@ -227,6 +227,7 @@ export async function quickCreateProduct(input: {
     id: created.id,
     label: productLabel(created),
     sku: created.sku,
+    sizeLabel: parsedSize?.label ?? null,
     unitCost,
   };
 }

@@ -28,17 +28,13 @@ export default async function NewStockInPage() {
         </p>
       </div>
 
-      {suppliers.length === 0 || products.length === 0 ? (
+      {suppliers.length === 0 ? (
         <p className="rounded-xl border border-border bg-card p-4 text-sm text-muted">
           Add at least one{" "}
           <Link href="/admin/suppliers" className="underline">
             supplier
           </Link>{" "}
-          and one{" "}
-          <Link href="/admin/products" className="underline">
-            product
-          </Link>{" "}
-          before receiving stock.
+          before receiving stock. Missing products can be created from the search bar.
         </p>
       ) : (
         <StockInForm

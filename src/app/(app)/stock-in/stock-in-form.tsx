@@ -116,7 +116,9 @@ export function StockInForm({
   const [fxText, setFxText] = useState(draft?.fxAdjustment ? String(draft.fxAdjustment) : "");
   const [freeProductId, setFreeProductId] = useState("");
   const [freeQuantity, setFreeQuantity] = useState(1);
-  const [creatingProduct, setCreatingProduct] = useState(false);
+  const [creatingProduct, setCreatingProduct] = useState<"line" | "free" | null>(null);
+  const [createName, setCreateName] = useState("");
+  const [selectLineProductId, setSelectLineProductId] = useState("");
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState<"draft" | "receive" | null>(null);
   const busyRef = useRef(false);
@@ -464,7 +466,15 @@ export function StockInForm({
               Search the whole catalog. A product that isn&apos;t on {branchName}&apos;s list yet is added to it (and to
               its POS list) when you receive.
             </p>
-            <AddOrderLine products={products} onAdd={(line) => setLines((current) => [...current, line])} />
+            <AddOrderLine
+              products={products}
+              onAdd={(line) => setLines((current) => [...current, line])}
+              selectProductId={selectLineProductId}
+              onAddNewProduct={(query) => {
+                setCreateName(query);
+                setCreatingProduct("line");
+              }}
+            />
             {offList > 0 ? (
               <p className="rounded-lg border border-sky-200 bg-sky-50 px-3 py-2 text-sm text-sky-900">
                 {offList} {offList === 1 ? "product isn't" : "products aren't"} on {branchName}&apos;s list yet —{" "}
@@ -487,6 +497,10 @@ export function StockInForm({
                     products={products}
                     value={freeProductId}
                     onSelect={(product) => setFreeProductId(product.id)}
+                    onAddNewProduct={(query) => {
+                      setCreateName(query);
+                      setCreatingProduct("free");
+                    }}
                   />
                 </label>
                 <label className="w-28 space-y-1 text-sm">
@@ -506,9 +520,6 @@ export function StockInForm({
                   disabled={!freeProductId || !(freeQuantity > 0)}
                 >
                   Add
-                </button>
-                <button className={btnSecondaryClass} type="button" onClick={() => setCreatingProduct(true)}>
-                  Create product
                 </button>
               </div>
               {freeLines.length > 0 ? (
@@ -682,22 +693,26 @@ export function StockInForm({
 
       {creatingProduct ? (
         <QuickCreateProductModal
-          defaultClassification="gwp"
-          onClose={() => setCreatingProduct(false)}
+          defaultClassification={creatingProduct === "free" ? "gwp" : "retail"}
+          initialName={createName}
+          onClose={() => setCreatingProduct(null)}
           onCreated={(product, classification) => {
             setProducts((current) => [
               ...current,
               {
-                ...product,
-                defaultClassification: classification,
-                unitCost: 0,
+                id: product.id,
+                label: product.label,
                 sku: product.sku ?? null,
                 sizeLabel: product.sizeLabel ?? null,
+                defaultClassification: classification,
+                unitCost: product.unitCost,
                 branchAvgCost: null,
+                onSalonList: true,
               },
             ]);
-            setFreeProductId(product.id);
-            setCreatingProduct(false);
+            if (creatingProduct === "free") setFreeProductId(product.id);
+            else setSelectLineProductId(product.id);
+            setCreatingProduct(null);
           }}
         />
       ) : null}

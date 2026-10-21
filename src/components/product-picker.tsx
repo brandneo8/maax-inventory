@@ -51,10 +51,13 @@ export function ProductPicker<T extends Option>({
   products,
   value,
   onSelect,
+  onAddNewProduct,
 }: {
   products: T[];
   value: string;
   onSelect: (product: T) => void;
+  /** Opens the shared create-product form. Receives the current search text. */
+  onAddNewProduct?: (query: string) => void;
 }) {
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState(false);
@@ -130,6 +133,19 @@ export function ProductPicker<T extends Option>({
               <p className="border-t border-border px-3 py-1.5 text-xs text-muted">
                 Showing the first {MAX_PRODUCT_MATCHES} matches — keep typing to narrow it down.
               </p>
+            ) : null}
+            {onAddNewProduct ? (
+              <button
+                type="button"
+                className="block w-full border-t border-border px-3 py-2 text-left text-sm font-medium text-sky-800 hover:bg-sky-50"
+                onMouseDown={(event) => {
+                  event.preventDefault();
+                  setOpen(false);
+                  onAddNewProduct(query.trim());
+                }}
+              >
+                Add new product
+              </button>
             ) : null}
           </div>
         </>

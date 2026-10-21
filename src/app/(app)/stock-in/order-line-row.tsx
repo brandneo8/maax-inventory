@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { type ProductClassification } from "@/lib/labels";
 import { blurOnWheel, btnClass, fieldClass, numberFieldClass } from "@/lib/ui";
 import { ProductPicker, type ProductOption } from "@/components/product-picker";
@@ -27,12 +27,20 @@ export function emptyLine(product?: ProductOption): EditableLine {
 export function AddOrderLine({
   products,
   onAdd,
+  onAddNewProduct,
+  selectProductId = "",
 }: {
   products: ProductOption[];
   onAdd: (line: EditableLine) => void;
+  onAddNewProduct?: (query: string) => void;
+  selectProductId?: string;
 }) {
   const [productId, setProductId] = useState("");
   const [quantity, setQuantity] = useState(1);
+
+  useEffect(() => {
+    if (selectProductId) setProductId(selectProductId);
+  }, [selectProductId]);
 
   const selected = products.find((product) => product.id === productId);
   const canAdd = Boolean(selected) && quantity > 0;
@@ -48,7 +56,12 @@ export function AddOrderLine({
     <div className="flex flex-wrap items-end gap-2 rounded-xl border border-border bg-card p-3">
       <label className="min-w-64 flex-1 space-y-1 text-sm">
         <span>Search product</span>
-        <ProductPicker products={products} value={productId} onSelect={(product) => setProductId(product.id)} />
+        <ProductPicker
+          products={products}
+          value={productId}
+          onSelect={(product) => setProductId(product.id)}
+          onAddNewProduct={onAddNewProduct}
+        />
       </label>
       <div className="w-20 space-y-1 text-sm">
         <span className="text-muted">Size</span>
