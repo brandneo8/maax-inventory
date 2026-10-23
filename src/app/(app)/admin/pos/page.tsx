@@ -3,7 +3,7 @@ import { confirmedRetailPrice } from "@/lib/catalog-pricing";
 import { getBranches, getTags } from "@/lib/data/lookups";
 import { getCatalogProducts } from "@/lib/data/products";
 import { getPosTagRules } from "@/lib/data/pos-rules";
-import { classificationTagsLabel, salonName } from "@/lib/labels";
+import { salonName } from "@/lib/labels";
 import { PosTable } from "./pos-table";
 
 export default async function PosPage() {
@@ -33,7 +33,7 @@ export default async function PosPage() {
           sku: product.sku,
           barcode: product.barcode,
           brand: product.brand,
-          typeLabel: classificationTagsLabel([...new Set(Object.values(product.classificationsByBranch).flat())]),
+          classificationsByBranch: product.classificationsByBranch,
           sizeLabel: product.sizeLabel,
           rrp: product.rrp,
           crp: confirmedRetailPrice(product.unitCost, product.rrp),

@@ -6,6 +6,7 @@ import { isOnSalonPosList, type PosTagRule } from "@/lib/data/pos-rules";
 import { downloadCsv } from "@/lib/csv";
 import { formatMoney, productDisplayName } from "@/lib/format";
 import { btnClass, btnSecondaryClass, fieldClass, tableClass, tdClass, thClass } from "@/lib/ui";
+import { CLASSIFICATIONS, classificationTagsLabel, type ProductClassification } from "@/lib/labels";
 import { cn } from "@/lib/utils";
 
 type PosProduct = {
@@ -15,7 +16,8 @@ type PosProduct = {
   sku: string | null;
   barcode: string | null;
   brand: string;
-  typeLabel: string;
+  /** The product's types at each salon (a product can be e.g. In-house and Retail at once). */
+  classificationsByBranch: Record<string, ProductClassification[]>;
   sizeLabel: string | null;
   rrp: number | null;
   /** Confirmed retail price: the RRP, or twice the unit cost when there's none. */
@@ -61,6 +63,9 @@ export function PosTable({
   const salonLabel = branches.find((branch) => branch.id === salonId)?.label ?? "this salon";
   /** Brand filter ("" = every brand). */
   const [brandFilter, setBrandFilter] = useState("");
+  /** Type filter ("" = every type). A product matches if it has this type among its types at the salon. */
+  const [typeFilter, setTypeFilter] = useState<ProductClassification | "">("");
+  const typesAt = (product: PosProduct) => product.classificationsByBranch[salonId] ?? [];
   const [error, setError] = useState<string | null>(null);
   const [downloadingBranchId, setDownloadingBranchId] = useState<string | null>(null);
 
@@ -128,12 +133,20 @@ export function PosTable({
       return left.localeCompare(right, undefined, { sensitivity: "base" });
     });
   }, [salonProducts, brandFilter]);
+  // Types some product has at this salon (plus the one picked, so it stays selectable).
+  const typeOptions = useMemo(() => {
+    const present = new Set(salonProducts.flatMap((product) => product.classificationsByBranch[salonId] ?? []));
+    if (typeFilter) present.add(typeFilter);
+    return CLASSIFICATIONS.filter((option) => present.has(option.value));
+  }, [salonProducts, salonId, typeFilter]);
   const listed = useMemo(
     () =>
-      brandFilter
-        ? salonProducts.filter((product) => (product.brand || UNBRANDED_LABEL) === brandFilter)
-        : salonProducts,
-    [salonProducts, brandFilter],
+      salonProducts.filter(
+        (product) =>
+          (!brandFilter || (product.brand || UNBRANDED_LABEL) === brandFilter) &&
+          (!typeFilter || (product.classificationsByBranch[salonId] ?? []).includes(typeFilter)),
+      ),
+    [salonProducts, brandFilter, typeFilter, salonId],
   );
   const allowed = useMemo(() => listed.filter((product) => product.posAllowed), [listed]);
   const notAllowed = useMemo(() => listed.filter((product) => !product.posAllowed), [listed]);
@@ -302,9 +315,29 @@ export function PosTable({
               ))}
             </select>
           </label>
+          <label className="space-y-2" htmlFor="pos-type-filter">
+            <span className="block text-lg font-semibold">Type</span>
+            <select
+              id="pos-type-filter"
+              className={cn(fieldClass, "min-w-40")}
+              value={typeFilter}
+              onChange={(event) => setTypeFilter(event.target.value as ProductClassification | "")}
+            >
+              <option value="">All types</option>
+              {typeOptions.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
         </div>
         <p className="text-sm text-muted">
-          The list below shows the {brandFilter ? `${brandFilter} ` : ""}products assigned to {salonLabel}.
+          The list below shows the {brandFilter ? `${brandFilter} ` : ""}products assigned to {salonLabel}
+          {typeFilter
+            ? ` that include the ${CLASSIFICATIONS.find((option) => option.value === typeFilter)?.label ?? typeFilter} type there (alongside any other types)`
+            : ""}
+          . Types shown are each product&apos;s types at {salonLabel}.
         </p>
       </div>
 
@@ -376,7 +409,7 @@ export function PosTable({
                       <td className={cn(tdClass, "text-right tabular-nums")}>{formatMoney(product.crp)}</td>
                       <td className={tdClass}>{product.sku || "—"}</td>
                       <td className={tdClass}>{product.brand || "—"}</td>
-                      <td className={tdClass}>{product.typeLabel || "—"}</td>
+                      <td className={tdClass}>{classificationTagsLabel(typesAt(product)) || "—"}</td>
                       <td className={tdClass}>{product.tagNames.join(", ") || "—"}</td>
                     </tr>
                   ))}
