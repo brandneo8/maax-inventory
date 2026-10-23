@@ -1310,6 +1310,7 @@ export type Database = {
           classification: Database["public"]["Enums"]["product_classification"]
           discount_percent: number
           id: string
+          is_free: boolean
           line_total: number | null
           product_id: string
           purchase_order_id: string
@@ -1323,6 +1324,7 @@ export type Database = {
           classification: Database["public"]["Enums"]["product_classification"]
           discount_percent?: number
           id?: string
+          is_free?: boolean
           line_total?: number | null
           product_id: string
           purchase_order_id: string
@@ -1336,6 +1338,7 @@ export type Database = {
           classification?: Database["public"]["Enums"]["product_classification"]
           discount_percent?: number
           id?: string
+          is_free?: boolean
           line_total?: number | null
           product_id?: string
           purchase_order_id?: string

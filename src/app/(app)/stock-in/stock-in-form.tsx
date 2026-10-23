@@ -18,7 +18,7 @@ import { cn } from "@/lib/utils";
 
 type SupplierOption = { id: string; label: string; gstRegistered: boolean };
 
-type FreeLine = { key: string; product_id: string; classification: ProductClassification; quantity: number };
+export type FreeLine = { key: string; product_id: string; classification: ProductClassification; quantity: number };
 
 /** A draft being continued. */
 export type StockInDraft = {
@@ -29,6 +29,8 @@ export type StockInDraft = {
   notes: string;
   fxAdjustment: number;
   lines: EditableLine[];
+  /** Free goods saved on the draft. */
+  freeLines: FreeLine[];
 };
 
 const STEPS = [
@@ -108,7 +110,7 @@ export function StockInForm({
   const [orderDate, setOrderDate] = useState(draft?.orderDate || today);
   const [notes, setNotes] = useState(draft?.notes ?? "");
   const [lines, setLines] = useState<EditableLine[]>(draft?.lines ?? []);
-  const [freeLines, setFreeLines] = useState<FreeLine[]>([]);
+  const [freeLines, setFreeLines] = useState<FreeLine[]>(draft?.freeLines ?? []);
   const [receivedDate, setReceivedDate] = useState(today);
   const [invoiceReference, setInvoiceReference] = useState("");
   const [invoiceFile, setInvoiceFile] = useState<File | null>(null);
@@ -145,6 +147,34 @@ export function StockInForm({
   }, [previewUrl]);
 
   /** What stops each step from going on, if anything. */
+  // Unsaved changes: anything differs from what was loaded. Refreshing or
+  // closing the tab then asks first, since nothing here is kept until it's saved.
+  const snapshot = JSON.stringify({
+    supplierId,
+    orderDate,
+    notes,
+    lines,
+    freeLines,
+    receivedDate,
+    invoiceReference,
+    roundingText,
+    fxText,
+    invoice: invoiceFile?.name ?? null,
+  });
+  const [savedSnapshot] = useState(snapshot);
+  const unsaved = snapshot !== savedSnapshot;
+  useEffect(() => {
+    if (!unsaved) return;
+    function onBeforeUnload(event: BeforeUnloadEvent) {
+      // Saving or receiving moves on to the order; don't ask then.
+      if (busyRef.current) return;
+      event.preventDefault();
+      event.returnValue = "";
+    }
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => window.removeEventListener("beforeunload", onBeforeUnload);
+  }, [unsaved]);
+
   const stepProblems = [
     !supplierId
       ? "Select a supplier."
@@ -152,7 +182,9 @@ export function StockInForm({
         ? "Add at least one product."
         : lines.some((line) => !(line.quantity_ordered > 0))
           ? "Every line needs a quantity above zero."
-          : null,
+          : freeLines.some((line) => !(line.quantity > 0))
+            ? "Every free product needs a quantity above zero (or remove it)."
+            : null,
     lines.some((line) => !(line.unit_price >= 0)) ? "Prices can't be negative." : null,
     !receivedDate
       ? "Enter the received date."
@@ -230,7 +262,8 @@ export function StockInForm({
             quantity: line.quantity_ordered,
             unit_price: line.unit_price,
           })),
-          free_lines: mode === "receive" ? freeLines.map(({ product_id, classification, quantity }) => ({ product_id, classification, quantity })) : [],
+          // A draft keeps its free goods too; receiving books them at $0.
+          free_lines: freeLines.map(({ product_id, classification, quantity }) => ({ product_id, classification, quantity })),
           received_date: receivedDate,
           invoice_reference: invoiceReference,
           rounding_adjustment: rounding,
@@ -526,10 +559,23 @@ export function StockInForm({
                 <ul className="divide-y divide-border rounded-lg border border-border">
                   {freeLines.map((line) => (
                     <li key={line.key} className="flex flex-wrap items-center justify-between gap-2 px-3 py-2 text-sm">
-                      <span>
+                      <span className="min-w-0 flex-1">
                         {productById.get(line.product_id)?.label ?? "Unknown product"} ·{" "}
-                        {classificationLabel(line.classification)} · {formatQty(line.quantity)} at $0.00
+                        {classificationLabel(line.classification)} · at $0.00
                       </span>
+                      <NumberInput
+                        className="w-24"
+                        value={line.quantity}
+                        step="1"
+                        min="1"
+                        invalid={!(line.quantity > 0)}
+                        ariaLabel={`Quantity of free ${productById.get(line.product_id)?.label ?? "product"}`}
+                        onChange={(quantity) =>
+                          setFreeLines((current) =>
+                            current.map((item) => (item.key === line.key ? { ...item, quantity: Math.round(quantity) } : item)),
+                          )
+                        }
+                      />
                       <button
                         type="button"
                         className="rounded-md p-1.5 text-red-600 hover:bg-red-50 hover:text-red-800"

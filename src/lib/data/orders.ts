@@ -100,7 +100,7 @@ export async function getPurchaseOrder(
     supabase
       .from("purchase_order_items")
       .select(
-        "id, product_id, classification, quantity_ordered, quantity_received, unit_price, line_total, sort_order, products(sku, name, order_name, size_label)",
+        "id, product_id, classification, quantity_ordered, quantity_received, unit_price, line_total, sort_order, is_free, products(sku, name, order_name, size_label)",
       )
       .eq("purchase_order_id", id)
       .order("sort_order")

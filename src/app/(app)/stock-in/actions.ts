@@ -810,3 +810,62 @@ export async function updateGoodsReceiptInvoice(
     return { ok: false, error: errorMessage(err, "Could not save this receipt.") };
   }
 }
+
+/**
+ * Changes the supplier of a received order — e.g. when it was keyed under the
+ * wrong one. Stock and costs don't change (they're on the receipt lines);
+ * the change is recorded in the order's audit trail.
+ */
+export async function updatePurchaseOrderSupplier(
+  purchaseOrderId: string,
+  supplierId: string,
+): Promise<StockInResult> {
+  try {
+    const { supabase, companyId, branch, user } = await requireBranch();
+    if (!supplierId) throw new Error("Select a supplier.");
+
+    const [{ data: order, error: orderError }, { data: supplier, error: supplierError }] = await Promise.all([
+      supabase
+        .from("purchase_orders")
+        .select("id, status, supplier_id, suppliers(supplier_name)")
+        .eq("id", purchaseOrderId)
+        .eq("company_id", companyId)
+        .eq("branch_id", branch.id)
+        .eq("planning_only", false)
+        .maybeSingle(),
+      supabase
+        .from("suppliers")
+        .select("id, supplier_name")
+        .eq("id", supplierId)
+        .eq("company_id", companyId)
+        .maybeSingle(),
+    ]);
+    if (orderError) throw orderError;
+    if (supplierError) throw supplierError;
+    if (!order) throw new Error("Order not found.");
+    if (!supplier) throw new Error("That supplier wasn't found.");
+    if (order.status === "cancelled") throw new Error("This order is voided, so its supplier can't be changed.");
+    if (order.supplier_id === supplierId) return { ok: true };
+
+    const { error: updateError } = await supabase
+      .from("purchase_orders")
+      .update({ supplier_id: supplierId })
+      .eq("id", order.id);
+    if (updateError) throw updateError;
+
+    const previous = Array.isArray(order.suppliers) ? order.suppliers[0] : order.suppliers;
+    const { error: auditError } = await supabase.from("purchase_order_audit_events").insert({
+      company_id: companyId,
+      purchase_order_id: order.id,
+      event_type: "supplier_changed",
+      actor_name: user.email ?? "Unknown",
+      remarks: `Supplier changed from ${previous?.supplier_name ?? "none"} to ${supplier.supplier_name}.`,
+    });
+    if (auditError) throw auditError;
+
+    revalidatePurchaseOrderPaths(order.id);
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: errorMessage(err, "Could not change the supplier.") };
+  }
+}

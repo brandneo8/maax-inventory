@@ -3,7 +3,12 @@
 import Link from "next/link";
 import { useRouter, unstable_rethrow } from "next/navigation";
 import { useRef, useState } from "react";
-import { removeGoodsReceipt, updateGoodsReceiptInvoice, updatePurchaseOrderDate } from "../actions";
+import {
+  removeGoodsReceipt,
+  updateGoodsReceiptInvoice,
+  updatePurchaseOrderDate,
+  updatePurchaseOrderSupplier,
+} from "../actions";
 import { formatDate, formatDateTime, formatMoney, formatQty } from "@/lib/format";
 import { classificationLabel, type PoStatus, type ProductClassification } from "@/lib/labels";
 import {
@@ -68,7 +73,101 @@ type ReceiptSummary = {
 function auditEventLabel(eventType: string) {
   if (eventType === "receipt_date_changed") return "Receipt date changed";
   if (eventType === "order_date_changed") return "Order date changed";
+  if (eventType === "supplier_changed") return "Supplier changed";
   return eventType.replaceAll("_", " ");
+}
+
+/**
+ * The supplier of a received order, changeable if it was keyed under the
+ * wrong one. Stock and costs are on the receipt lines, so they don't change.
+ */
+function SupplierEditor({
+  purchaseOrderId,
+  supplierId,
+  supplierName,
+  suppliers,
+}: {
+  purchaseOrderId: string;
+  supplierId: string;
+  supplierName: string;
+  suppliers: { id: string; label: string }[];
+}) {
+  const router = useRouter();
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState(supplierId);
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function save() {
+    if (pending) return;
+    setPending(true);
+    setError(null);
+    try {
+      const result = await updatePurchaseOrderSupplier(purchaseOrderId, value);
+      if (!result.ok) {
+        setError(result.error);
+        return;
+      }
+      setEditing(false);
+      router.refresh();
+    } catch {
+      setError("Could not reach the server. Check your connection and try again.");
+    } finally {
+      setPending(false);
+    }
+  }
+
+  if (!editing) {
+    return (
+      <dd className="flex items-center gap-2">
+        {supplierName || "—"}
+        <button
+          type="button"
+          className="text-muted underline"
+          onClick={() => {
+            setValue(supplierId);
+            setError(null);
+            setEditing(true);
+          }}
+        >
+          Change
+        </button>
+      </dd>
+    );
+  }
+
+  return (
+    <dd className="space-y-1">
+      <select
+        className={fieldClass}
+        value={value}
+        onChange={(event) => setValue(event.target.value)}
+        disabled={pending}
+        aria-label="Supplier"
+      >
+        {suppliers.map((option) => (
+          <option key={option.id} value={option.id}>
+            {option.label}
+          </option>
+        ))}
+      </select>
+      <div className="flex gap-3">
+        <button type="button" className="text-muted underline" onClick={() => setEditing(false)} disabled={pending}>
+          Cancel
+        </button>
+        <button
+          type="button"
+          className="font-medium underline"
+          onClick={() => void save()}
+          disabled={pending || value === supplierId}
+        >
+          {pending ? "Saving…" : "Save"}
+        </button>
+      </div>
+      {error ? <p className="text-sm text-red-700">{error}</p> : null}
+      <p className="text-xs text-muted">Stock and costs don&apos;t change. The change is noted in the audit trail.</p>
+    </dd>
+  );
 }
 
 /** Order date on a sent/received order: reference only, so it stays editable. */
@@ -375,7 +474,9 @@ export function OrderDetailPanel({
   purchaseOrderId,
   status,
   branchName,
+  supplierId,
   supplierName,
+  suppliers,
   gstRegistered,
   gstRate,
   orderDate,
@@ -393,7 +494,10 @@ export function OrderDetailPanel({
   purchaseOrderId: string;
   status: PoStatus;
   branchName: string;
+  supplierId: string;
   supplierName: string;
+  /** Suppliers it can be changed to (active ones, plus its current one). */
+  suppliers: { id: string; label: string }[];
   gstRegistered: boolean;
   gstRate: number;
   orderDate: string;
@@ -506,7 +610,16 @@ export function OrderDetailPanel({
       <dl className="grid gap-3 rounded-xl border border-border bg-card p-4 text-sm sm:grid-cols-4">
         <div>
           <dt className="text-muted">Supplier</dt>
-          <dd>{supplierName || "—"}</dd>
+          {status === "cancelled" ? (
+            <dd>{supplierName || "—"}</dd>
+          ) : (
+            <SupplierEditor
+              purchaseOrderId={purchaseOrderId}
+              supplierId={supplierId}
+              supplierName={supplierName}
+              suppliers={suppliers}
+            />
+          )}
         </div>
         <div>
           <dt className="text-muted">Order date</dt>

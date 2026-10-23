@@ -26,6 +26,9 @@ export default async function OrderDetailPage({
   const supplier = Array.isArray(order.suppliers) ? order.suppliers[0] : order.suppliers;
   const orderBranch = Array.isArray(order.branches) ? order.branches[0] : order.branches;
   const addFreeGoodsNow = canAddFreeGoods(order.status);
+  // A received order's supplier can be changed (OrderDetailPanel's SupplierEditor).
+  const supplierOptionsPromise =
+    order.status === "draft" || order.status === "cancelled" ? Promise.resolve([]) : getSuppliers(supabase, companyId);
   const gstRate = Number(taxRates.find((rate) => rate.is_default)?.rate_percentage ?? 9);
 
   // A draft opens in the stock-in form (products and quantities, prices,
@@ -67,13 +70,24 @@ export default async function OrderDetailPage({
             orderDate: order.order_date ?? "",
             notes: order.notes ?? "",
             fxAdjustment: Number(order.fx_adjustment ?? 0),
-            lines: order.items.map((item) => ({
-              key: item.id,
-              product_id: item.product_id,
-              classification: item.classification,
-              quantity_ordered: Number(item.quantity_ordered),
-              unit_price: Number(item.unit_price),
-            })),
+            lines: order.items
+              .filter((item) => !item.is_free)
+              .map((item) => ({
+                key: item.id,
+                product_id: item.product_id,
+                classification: item.classification,
+                quantity_ordered: Number(item.quantity_ordered),
+                unit_price: Number(item.unit_price),
+              })),
+            // Free goods saved on the draft ($0 lines marked is_free).
+            freeLines: order.items
+              .filter((item) => item.is_free)
+              .map((item) => ({
+                key: item.id,
+                product_id: item.product_id,
+                classification: item.classification,
+                quantity: Number(item.quantity_ordered),
+              })),
           }}
         />
       </div>
@@ -139,7 +153,11 @@ export default async function OrderDetailPage({
       purchaseOrderId={order.id}
       status={order.status}
       branchName={orderBranch?.name ?? ""}
+      supplierId={order.supplier_id}
       supplierName={supplier?.supplier_name ?? ""}
+      suppliers={(await supplierOptionsPromise)
+        .filter((item) => item.is_active || item.id === order.supplier_id)
+        .map((item) => ({ id: item.id, label: item.supplier_name }))}
       gstRegistered={supplier?.gst_registered ?? false}
       gstRate={gstRate}
       orderDate={order.order_date ?? ""}
