@@ -1,3 +1,14 @@
+/** British/American spelling so "colour remover" finds "COLOR REMOVER". */
+const SPELLING_ALIASES: Record<string, string> = {
+  colour: "color",
+  colours: "colors",
+  grey: "gray",
+  greys: "grays",
+  aluminium: "aluminum",
+  favourite: "favorite",
+  favourites: "favorites",
+};
+
 /** Collapse punctuation so "hydrate me" matches "hydrate-me rinse". */
 export function normalizeSearchText(value: string) {
   return value
@@ -6,7 +17,10 @@ export function normalizeSearchText(value: string) {
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, " ")
     .trim()
-    .replace(/\s+/g, " ");
+    .replace(/\s+/g, " ")
+    .split(" ")
+    .map((token) => SPELLING_ALIASES[token] ?? token)
+    .join(" ");
 }
 
 export function searchTextMatches(haystack: string, needle: string) {

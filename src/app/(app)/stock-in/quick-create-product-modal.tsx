@@ -29,6 +29,7 @@ export function QuickCreateProductModal({
   const [classification, setClassification] = useState<ProductClassification>(defaultClassification);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [existing, setExisting] = useState<QuickCreatedProduct | null>(null);
 
   async function submit() {
     if (!orderName.trim()) {
@@ -37,8 +38,9 @@ export function QuickCreateProductModal({
     }
     setPending(true);
     setError(null);
+    setExisting(null);
     try {
-      const product = await quickCreateProduct({
+      const result = await quickCreateProduct({
         order_name: orderName,
         sku,
         brand,
@@ -46,7 +48,20 @@ export function QuickCreateProductModal({
         unit_cost_price: unitCost,
         classification,
       });
-      onCreated(product, classification);
+      if (!result.ok) {
+        setError(result.error);
+        if (result.existing) {
+          setExisting({
+            id: result.existing.id,
+            label: result.existing.label,
+            sku: result.existing.sku,
+            sizeLabel: result.existing.sizeLabel,
+            unitCost: result.existing.unitCost,
+          });
+        }
+        return;
+      }
+      onCreated(result.product, classification);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not create the product.");
     } finally {
@@ -61,7 +76,19 @@ export function QuickCreateProductModal({
         <p className="mt-1 text-sm text-muted">Add a new product to the catalog, then use it on this receipt.</p>
 
         {error ? (
-          <p className="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">{error}</p>
+          <div className="mt-3 space-y-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
+            <p>{error}</p>
+            {existing ? (
+              <button
+                className="font-medium underline"
+                type="button"
+                disabled={pending}
+                onClick={() => onCreated(existing, classification)}
+              >
+                Use {existing.label}
+              </button>
+            ) : null}
+          </div>
         ) : null}
 
         <div className="mt-3 space-y-3">

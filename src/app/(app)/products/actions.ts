@@ -7,7 +7,9 @@ import { createBrandResolver, resolveBrandId } from "@/lib/data/brands";
 import { persistProductComponents, syncBundleTag } from "@/lib/data/product-components";
 import { reconcilePosAllowedForProducts } from "@/lib/data/pos-rules";
 import { formatDate, productLabel } from "@/lib/format";
-import { countStatusLabel, salonName, type ProductClassification } from "@/lib/labels";
+import { CLASSIFICATIONS, countStatusLabel, salonName, type ProductClassification } from "@/lib/labels";
+
+const CLASSIFICATION_VALUES = new Set(CLASSIFICATIONS.map((item) => item.value));
 import { parseSize } from "@/lib/product-size";
 import { createAdminClient } from "@/lib/supabase/admin";
 import type { createClient } from "@/lib/supabase/server";
@@ -161,6 +163,30 @@ async function stampCatalogSaved(companyId: string, email: string | undefined) {
   if (error) throw new Error(error.message);
 }
 
+export type QuickCreateProductResult =
+  | {
+      ok: true;
+      product: {
+        id: string;
+        label: string;
+        sku: string | null;
+        sizeLabel: string | null;
+        unitCost: number;
+      };
+    }
+  | {
+      ok: false;
+      error: string;
+      /** Existing catalog row when the SKU (or matching name) is already taken. */
+      existing?: {
+        id: string;
+        label: string;
+        sku: string | null;
+        sizeLabel: string | null;
+        unitCost: number;
+      };
+    };
+
 export async function quickCreateProduct(input: {
   order_name: string;
   sku: string;
@@ -168,68 +194,139 @@ export async function quickCreateProduct(input: {
   size: string;
   unit_cost_price: number;
   classification: ProductClassification | "";
-}) {
+}): Promise<QuickCreateProductResult> {
   // Any staff member receiving an order can add a missing product from the receive screen.
-  const { supabase, companyId, branch } = await requireBranch();
-  const name = input.order_name.trim();
-  if (!name) throw new Error("Product name is required.");
+  // Return values instead of throwing so production does not redact the message as React #441.
+  try {
+    const { supabase, companyId, branch } = await requireBranch();
+    const name = input.order_name.trim();
+    if (!name) return { ok: false, error: "Product name is required." };
 
-  const sku = normalizeOptionalText(input.sku);
-  const brandId = await resolveBrandId(supabase, companyId, input.brand);
+    const sku = normalizeOptionalText(input.sku);
+    const sizeRaw = input.size.trim();
+    const parsedSize = parseSize(sizeRaw);
+    if (sizeRaw && !parsedSize) {
+      return { ok: false, error: "Size must look like 175ml, 175 ml, 1L, or 175g." };
+    }
 
-  const sizeRaw = input.size.trim();
-  const parsedSize = parseSize(sizeRaw);
-  if (sizeRaw && !parsedSize) {
-    throw new Error("Size must look like 175ml, 175 ml, 1L, or 175g.");
+    const unitCost = Number.isFinite(input.unit_cost_price) ? input.unit_cost_price : 0;
+    const classification =
+      input.classification && CLASSIFICATION_VALUES.has(input.classification) ? input.classification : null;
+
+    if (sku) {
+      const { data: bySku, error: skuLookupError } = await supabase
+        .from("products")
+        .select("id, sku, order_name, name, size_label, unit_cost_price")
+        .eq("company_id", companyId)
+        .eq("sku", sku)
+        .maybeSingle();
+      if (skuLookupError) return { ok: false, error: skuLookupError.message };
+      if (bySku) {
+        return {
+          ok: false,
+          error: `SKU ${sku} is already used by ${catalogConflictLabel(bySku)}. Use that product instead of creating a duplicate.`,
+          existing: {
+            id: bySku.id,
+            label: productLabel(bySku),
+            sku: bySku.sku,
+            sizeLabel: bySku.size_label,
+            unitCost: Number(bySku.unit_cost_price) || 0,
+          },
+        };
+      }
+    }
+
+    const brandId = await resolveBrandId(supabase, companyId, input.brand);
+
+    const { data: defaultTax } = await supabase
+      .from("tax_rates")
+      .select("id")
+      .eq("company_id", companyId)
+      .eq("is_default", true)
+      .maybeSingle();
+
+    const { data: created, error } = await supabase
+      .from("products")
+      .insert({
+        company_id: companyId,
+        sku,
+        order_name: name,
+        brand_id: brandId,
+        unit_cost_price: unitCost,
+        default_classification: classification,
+        tax_rate_id: defaultTax?.id ?? null,
+        size_label: parsedSize?.label ?? null,
+        size_ml: parsedSize?.ml ?? null,
+        // No tags exist yet at quick-create time, so the POS exclude-by-tag
+        // rule can't match anything — it starts allowed, and if it's tagged
+        // with an excluded tag afterward on /admin/branches, that tagging
+        // action corrects pos_allowed itself (see reconcilePosAllowedForProducts).
+        pos_allowed: true,
+      })
+      .select("id, sku, order_name, name")
+      .single();
+
+    if (error) {
+      if (error.code === "23505" && sku) {
+        const { data: bySku } = await supabase
+          .from("products")
+          .select("id, sku, order_name, name, size_label, unit_cost_price")
+          .eq("company_id", companyId)
+          .eq("sku", sku)
+          .maybeSingle();
+        if (bySku) {
+          return {
+            ok: false,
+            error: `SKU ${sku} is already used by ${catalogConflictLabel(bySku)}. Use that product instead of creating a duplicate.`,
+            existing: {
+              id: bySku.id,
+              label: productLabel(bySku),
+              sku: bySku.sku,
+              sizeLabel: bySku.size_label,
+              unitCost: Number(bySku.unit_cost_price) || 0,
+            },
+          };
+        }
+      }
+      return { ok: false, error: catalogWriteError(error) };
+    }
+    if (!created) return { ok: false, error: "Could not create the product." };
+
+    const { error: branchError } = await supabase
+      .from("product_branches")
+      .insert({ product_id: created.id, branch_id: branch.id });
+    if (branchError) return { ok: false, error: branchError.message };
+
+    if (classification) {
+      const { error: typeError } = await supabase.from("product_branch_classifications").upsert(
+        {
+          product_id: created.id,
+          branch_id: branch.id,
+          classification,
+        },
+        { onConflict: "product_id,branch_id,classification", ignoreDuplicates: true },
+      );
+      if (typeError) return { ok: false, error: typeError.message };
+    }
+
+    revalidateCatalog();
+
+    return {
+      ok: true,
+      product: {
+        id: created.id,
+        label: productLabel(created),
+        sku: created.sku,
+        sizeLabel: parsedSize?.label ?? null,
+        unitCost,
+      },
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      error: err instanceof Error ? err.message : "Could not create the product.",
+    };
   }
-
-  const unitCost = Number.isFinite(input.unit_cost_price) ? input.unit_cost_price : 0;
-
-  const { data: defaultTax } = await supabase
-    .from("tax_rates")
-    .select("id")
-    .eq("company_id", companyId)
-    .eq("is_default", true)
-    .maybeSingle();
-
-  const { data: created, error } = await supabase
-    .from("products")
-    .insert({
-      company_id: companyId,
-      sku,
-      order_name: name,
-      brand_id: brandId,
-      unit_cost_price: unitCost,
-      default_classification: input.classification || null,
-      tax_rate_id: defaultTax?.id ?? null,
-      size_label: parsedSize?.label ?? null,
-      size_ml: parsedSize?.ml ?? null,
-      // No tags exist yet at quick-create time, so the POS exclude-by-tag
-      // rule can't match anything — it starts allowed, and if it's tagged
-      // with an excluded tag afterward on /admin/branches, that tagging
-      // action corrects pos_allowed itself (see reconcilePosAllowedForProducts).
-      pos_allowed: true,
-    })
-    .select("id, sku, order_name, name")
-    .single();
-
-  if (error) throw new Error(catalogWriteError(error));
-  if (!created) throw new Error("Could not create the product.");
-
-  const { error: branchError } = await supabase
-    .from("product_branches")
-    .insert({ product_id: created.id, branch_id: branch.id });
-  if (branchError) throw branchError;
-
-  revalidateCatalog();
-
-  return {
-    id: created.id,
-    label: productLabel(created),
-    sku: created.sku,
-    sizeLabel: parsedSize?.label ?? null,
-    unitCost,
-  };
 }
 
 export type ProductDraft = {
