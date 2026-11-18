@@ -526,8 +526,8 @@ declare
   v_current_status po_status;
 begin
   select status into v_current_status from purchase_orders where id = p_po_id;
-  if v_current_status in ('draft', 'cancelled') then
-    return;  -- don't auto-transition orders that haven't been sent, or are cancelled
+  if v_current_status = 'cancelled' then
+    return;  -- never auto-transition a voided order
   end if;
 
   select coalesce(sum(quantity_ordered), 0), coalesce(sum(quantity_received), 0)
@@ -535,7 +535,10 @@ begin
     from purchase_order_items where purchase_order_id = p_po_id;
 
   if v_total_received <= 0 then
-    return;
+    -- Fully reversed receive → cancelled (not draft). Redo via Duplicate.
+    if v_current_status in ('sent', 'partially_received', 'received') then
+      update purchase_orders set status = 'cancelled' where id = p_po_id;
+    end if;
   elsif v_total_received >= v_total_ordered then
     update purchase_orders set status = 'received' where id = p_po_id;
   else

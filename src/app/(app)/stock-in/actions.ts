@@ -497,7 +497,10 @@ export async function updatePurchaseOrderDate(purchaseOrderId: string, orderDate
   revalidatePurchaseOrderPaths(order.id);
 }
 
-/** Deletes a draft order outright — nothing has been received or sent on it yet. */
+/**
+ * Removes a never-received draft, or marks a stuck "draft" that only has
+ * voided receipts as cancelled (receipt history stays; it shows under Voided).
+ */
 export async function deleteDraftPurchaseOrder(id: string): Promise<StockInResult> {
   try {
     const { supabase, companyId, branch } = await requireBranch();
@@ -514,21 +517,33 @@ export async function deleteDraftPurchaseOrder(id: string): Promise<StockInResul
     if (order.status !== "draft")
       throw new Error("Only draft orders can be deleted. Void this order instead.");
 
-    const { count: receiptCount, error: receiptError } = await supabase
+    const { data: receipts, error: receiptError } = await supabase
       .from("goods_receipts")
-      .select("id", { count: "exact", head: true })
+      .select("id, voided_at")
       .eq("purchase_order_id", order.id);
     if (receiptError) throw receiptError;
-    if ((receiptCount ?? 0) > 0)
+    const liveReceipts = (receipts ?? []).filter((receipt) => !receipt.voided_at);
+    if (liveReceipts.length > 0) {
       throw new Error("This order has stock received on it, so it can't be deleted.");
+    }
 
-    // Lines and audit events go with it (on delete cascade).
-    const { error: deleteError } = await supabase
-      .from("purchase_orders")
-      .delete()
-      .eq("id", order.id)
-      .eq("status", "draft");
-    if (deleteError) throw new Error(deleteError.message || "Could not delete this draft.");
+    if ((receipts ?? []).length > 0) {
+      // Previously received, then reversed — keep history, leave Voided tab.
+      const { error: cancelError } = await supabase
+        .from("purchase_orders")
+        .update({ status: "cancelled" })
+        .eq("id", order.id)
+        .eq("status", "draft");
+      if (cancelError) throw new Error(cancelError.message || "Could not void this draft.");
+    } else {
+      // Lines and audit events go with it (on delete cascade).
+      const { error: deleteError } = await supabase
+        .from("purchase_orders")
+        .delete()
+        .eq("id", order.id)
+        .eq("status", "draft");
+      if (deleteError) throw new Error(deleteError.message || "Could not delete this draft.");
+    }
 
     revalidatePurchaseOrderPaths();
     revalidatePath("/");

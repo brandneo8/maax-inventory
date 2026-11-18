@@ -13,7 +13,9 @@ export function DeleteDraftOrderButton({ purchaseOrderId, poNumber }: { purchase
 
   async function run() {
     if (busyRef.current) return;
-    const ok = window.confirm(`Delete draft ${poNumber}? This removes it completely and can't be undone.`);
+    const ok = window.confirm(
+      `Delete draft ${poNumber}? If it was never received, it is removed completely. If it was previously received and reversed, it is moved to Voided instead.`,
+    );
     if (!ok) return;
     busyRef.current = true;
     setPending(true);

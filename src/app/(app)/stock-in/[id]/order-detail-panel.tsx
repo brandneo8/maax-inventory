@@ -307,7 +307,7 @@ function ReceiptInvoiceRow({ receipt }: { receipt: ReceiptSummary }) {
   async function remove() {
     if (pending) return;
     const ok = window.confirm(
-      "Remove this receipt? This reverses its stock and cost impact, as long as none of it has been used/sold and nothing newer has been received for the same products — otherwise it'll be blocked and tell you why.",
+      "Remove this receipt? This reverses its stock and cost impact, as long as none of it has been used/sold and nothing newer has been received for the same products — otherwise it'll be blocked and tell you why. If this is the only receipt, the order is voided — duplicate it into a new draft to redo.",
     );
     if (!ok) return;
     setPending(true);
